@@ -3,6 +3,8 @@ version: 2
 before:
   hooks:
     - go mod tidy
+    - mkdir -p cmd/server/panelassets
+    - sh -c 'echo "<html></html>" > cmd/server/panelassets/index.html'
 
 builds:
   - id: aura-power
