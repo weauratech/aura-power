@@ -1,16 +1,14 @@
 <p align="center">
-  <h1 align="center">Aura Power</h1>
-  <p align="center">
-    <strong>Kubernetes workload energy governance</strong><br>
-    Power down and restore workloads on schedule. Reduce cloud costs without manual intervention.
-  </p>
-  <p align="center">
-    <a href="https://github.com/weauratech/aura-power/actions/workflows/ci.yaml"><img src="https://github.com/weauratech/aura-power/actions/workflows/ci.yaml/badge.svg" alt="CI"></a>
-    <a href="https://github.com/weauratech/aura-power/releases"><img src="https://img.shields.io/github/v/release/weauratech/aura-power?style=flat-square" alt="Release"></a>
-    <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square" alt="License"></a>
-    <a href="https://goreportcard.com/report/github.com/weauratech/aura-power"><img src="https://goreportcard.com/badge/github.com/weauratech/aura-power?style=flat-square" alt="Go Report Card"></a>
-    <a href="https://github.com/weauratech/aura-power/releases"><img src="https://img.shields.io/github/downloads/weauratech/aura-power/total?style=flat-square&color=green" alt="Downloads"></a>
-  </p>
+  <img src="assets/lockup.svg" alt="Aura Power" height="64">
+  <br><br>
+  <strong>Kubernetes workload energy governance</strong><br>
+  Power down and restore workloads on schedule. Reduce cloud costs without manual intervention.
+  <br><br>
+  <a href="https://github.com/weauratech/aura-power/actions/workflows/ci.yaml"><img src="https://github.com/weauratech/aura-power/actions/workflows/ci.yaml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/weauratech/aura-power/releases"><img src="https://img.shields.io/github/v/release/weauratech/aura-power?style=flat-square" alt="Release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square" alt="License"></a>
+  <a href="https://goreportcard.com/report/github.com/weauratech/aura-power"><img src="https://goreportcard.com/badge/github.com/weauratech/aura-power?style=flat-square" alt="Go Report Card"></a>
+  <a href="https://github.com/weauratech/aura-power/releases"><img src="https://img.shields.io/github/downloads/weauratech/aura-power/total?style=flat-square&color=green" alt="Downloads"></a>
 </p>
 
 ---
