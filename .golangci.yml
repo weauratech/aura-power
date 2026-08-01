@@ -1,28 +1,23 @@
+version: "2"
+
 run:
   timeout: 5m
-  modules-download-mode: readonly
 
 linters:
+  default: standard
   enable:
-    - errcheck
-    - gosimple
-    - govet
-    - ineffassign
-    - staticcheck
-    - unused
-    - gofmt
-    - goimports
     - misspell
     - unconvert
     - bodyclose
-    - noctx
     - prealloc
 
-linters-settings:
-  goimports:
-    local-prefixes: github.com/weauratech/aura-power
-  misspell:
-    locale: US
+formatters:
+  enable:
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/weauratech/aura-power
 
 issues:
   exclude-dirs:
