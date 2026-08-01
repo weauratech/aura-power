@@ -19,7 +19,7 @@ jobs:
           go-version-file: go.mod
       - uses: golangci/golangci-lint-action@v6
         with:
-          version: latest
+          version: v2.1
 
   test:
     runs-on: ubuntu-latest
@@ -28,6 +28,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: Create panelassets placeholder
+        run: mkdir -p cmd/server/panelassets && echo '<html><body>placeholder</body></html>' > cmd/server/panelassets/index.html
       - name: Run tests
         run: go test ./... -race -coverprofile=coverage.out -count=1
       - name: Upload coverage
@@ -43,6 +45,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: Create panelassets placeholder
+        run: mkdir -p cmd/server/panelassets && echo '<html><body>placeholder</body></html>' > cmd/server/panelassets/index.html
       - name: Build server
         run: CGO_ENABLED=0 go build -ldflags="-s -w" -o bin/aura-power-server ./cmd/server/
       - name: Build controller

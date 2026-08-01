@@ -72,16 +72,29 @@ helm install aura-power oci://ghcr.io/weauratech/charts/aura-power \
   --namespace aura-system --create-namespace \
   --set server.auth.jwtSecret=$(openssl rand -hex 32) \
   --set server.auth.initialAdmin.password=changeme \
-  --set server.prometheus.url=http://prometheus.monitoring.svc:9090
+  --set server.prometheus.url=http://prometheus.monitoring.svc:9090 \
+  --set server.gateway.enabled=true \
+  --set server.gateway.gatewayRef.name=my-gateway \
+  --set server.gateway.gatewayRef.namespace=gateway-ns \
+  --set server.gateway.gatewayRef.sectionName=https \
+  --set "server.gateway.hostnames[0]=power.int.example.com"
 ```
 
 ### Access the Panel
+
+If you configured an Ingress or Gateway API HTTPRoute, access the panel at the hostname you defined:
+
+```
+https://power.int.example.com
+```
+
+For local testing without Ingress:
 
 ```bash
 kubectl port-forward -n aura-system statefulset/aura-power-server 8080:8080
 ```
 
-Open http://localhost:8080 and login with the admin credentials.
+Login with the admin credentials you set during installation.
 
 ### Create Your First Policy
 
