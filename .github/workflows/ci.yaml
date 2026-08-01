@@ -17,6 +17,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: Create panelassets placeholder
+        run: mkdir -p cmd/server/panelassets && echo '<html></html>' > cmd/server/panelassets/index.html
       - uses: golangci/golangci-lint-action@v7
         with:
           version: v2.1
