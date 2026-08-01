@@ -2,12 +2,10 @@ version: "2"
 
 run:
   timeout: 5m
-
-linters:
-  default: standard
-
-issues:
   exclude-dirs:
     - vendor
     - web
     - aidlc-docs
+
+linters:
+  default: standard
