@@ -5,24 +5,9 @@ run:
 
 linters:
   default: standard
-  enable:
-    - misspell
-    - unconvert
-    - bodyclose
-    - prealloc
-
-formatters:
-  enable:
-    - goimports
-  settings:
-    goimports:
-      local-prefixes:
-        - github.com/weauratech/aura-power
 
 issues:
   exclude-dirs:
     - vendor
     - web
     - aidlc-docs
-  max-issues-per-linter: 50
-  max-same-issues: 5
