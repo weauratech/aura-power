@@ -66,23 +66,41 @@ func (r *TargetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		if decision.DesiredState == domain.PowerStateOff && observedState == domain.PowerStateOn {
 			if err := r.executePowerDown(ctx, &target, domainTarget.Ref); err != nil {
 				logger.Error(err, "power-down failed")
+				target.Status.ConsecutiveFailures++
 				r.Metrics.RecordAction(ports.ActionPowerDown, req.String(), false)
 				r.recordAudit(ctx, domainTarget.Ref, ports.AuditExecutionError, "error", err.Error(), "")
+				r.Status().Update(ctx, &target)
 				return ctrl.Result{RequeueAfter: errorRequeueAfter}, nil
 			}
+			target.Status.ConsecutiveFailures = 0
 			r.Metrics.RecordAction(ports.ActionPowerDown, req.String(), true)
 			r.recordAudit(ctx, domainTarget.Ref, ports.AuditWorkloadPoweredDown, "success", "Powered down by policy", ruleNameFromDecision(decision))
+			// Requeue faster to confirm pods terminated
+			updateTargetStatus(&target, decision, time.Now())
+			if err := r.Status().Update(ctx, &target); err != nil {
+				logger.Error(err, "failed to update target status after power-down")
+			}
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
 
 		if decision.DesiredState == domain.PowerStateOn && observedState == domain.PowerStateOff {
 			if err := r.executeRestore(ctx, &target, domainTarget.Ref); err != nil {
 				logger.Error(err, "restore failed")
+				target.Status.ConsecutiveFailures++
 				r.Metrics.RecordAction(ports.ActionRestore, req.String(), false)
 				r.recordAudit(ctx, domainTarget.Ref, ports.AuditExecutionError, "error", err.Error(), "")
+				r.Status().Update(ctx, &target)
 				return ctrl.Result{RequeueAfter: errorRequeueAfter}, nil
 			}
+			target.Status.ConsecutiveFailures = 0
 			r.Metrics.RecordAction(ports.ActionRestore, req.String(), true)
 			r.recordAudit(ctx, domainTarget.Ref, ports.AuditWorkloadRestored, "success", "Restored from snapshot", ruleNameFromDecision(decision))
+			// Requeue faster to confirm pods started
+			updateTargetStatus(&target, decision, time.Now())
+			if err := r.Status().Update(ctx, &target); err != nil {
+				logger.Error(err, "failed to update target status after restore")
+			}
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
 	}
 
@@ -111,10 +129,12 @@ func (r *TargetReconciler) executePowerDown(ctx context.Context, target *v1alpha
 		return err
 	}
 	// Store snapshot on target status
+	now := metav1.Now()
 	target.Status.Snapshot = &v1alpha1.SnapshotSpec{
 		Available:    true,
 		ReplicaCount: snapshot.ReplicaCount,
 		Suspended:    snapshot.Suspended,
+		CapturedAt:   &now,
 		Resources: v1alpha1.ResourceSpec{
 			CPUMillicores: snapshot.Resources.CPUMillicores,
 			MemoryMiB:     snapshot.Resources.MemoryMiB,
@@ -245,6 +265,31 @@ func updateTargetStatus(t *v1alpha1.PowerTarget, d domain.Decision, _ time.Time)
 
 	// Update last reconciliation time
 	now := metav1.Now()
+
+	// Accumulate savings when target is powered off
+	if newDesired == "off" && t.Status.ObservedState.PowerState == "off" && t.Status.LastReconciliation != nil {
+		elapsed := now.Time.Sub(t.Status.LastReconciliation.Time)
+		hours := elapsed.Hours()
+		if hours > 0 && hours < 1 { // sanity: only accumulate within reasonable interval
+			cpuCores := float64(0)
+			memGiB := float64(0)
+			if t.Status.Snapshot != nil && t.Status.Snapshot.Resources.CPUMillicores > 0 {
+				cpuCores = float64(t.Status.Snapshot.Resources.CPUMillicores) / 1000.0
+				memGiB = float64(t.Status.Snapshot.Resources.MemoryMiB) / 1024.0
+			} else {
+				// Default estimate if no resources captured
+				cpuCores = 0.25
+				memGiB = 0.5
+			}
+			if t.Status.Savings == nil {
+				t.Status.Savings = &v1alpha1.SavingsSpec{}
+			}
+			t.Status.Savings.CPUHoursSaved += cpuCores * hours
+			t.Status.Savings.MemoryGiBHours += memGiB * hours
+			t.Status.Savings.EstimatedCost += (cpuCores*0.032 + memGiB*0.004) * hours
+		}
+	}
+
 	t.Status.LastReconciliation = &now
 
 	if d.WinningRule != nil {

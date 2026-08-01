@@ -61,6 +61,7 @@ func (s *Server) FinalizeRoutes() {
 func (s *Server) setupMiddleware() {
 	s.router.Use(gin.Recovery())
 	s.router.Use(securityHeaders())
+	s.router.Use(prometheusMiddleware())
 	s.router.Use(requestLogger())
 }
 
@@ -68,6 +69,7 @@ func (s *Server) setupRoutes() {
 	// Health endpoints (no auth)
 	s.router.GET("/healthz", s.handleHealthz)
 	s.router.GET("/readyz", s.handleReadyz)
+	s.router.GET("/metrics", metricsHandler())
 
 	// API v1 group
 	api := s.router.Group("/api/v1")

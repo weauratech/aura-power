@@ -70,6 +70,12 @@ func (s *SQLiteStore) Close() error {
 	return s.db.Close()
 }
 
+// Ping checks if the database is accessible.
+func (s *SQLiteStore) Ping() error {
+	_, err := s.db.Exec("SELECT 1")
+	return err
+}
+
 // --- Users ---
 
 func (s *SQLiteStore) CreateUser(username, password string, role Role) (*User, error) {

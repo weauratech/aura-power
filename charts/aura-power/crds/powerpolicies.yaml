@@ -1,0 +1,99 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: powerpolicies.power.aura.sh
+spec:
+  conversion:
+    strategy: None
+  group: power.aura.sh
+  names:
+    kind: PowerPolicy
+    listKind: PowerPolicyList
+    plural: powerpolicies
+    shortNames:
+    - pp
+    singular: powerpolicy
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        type: object
+        required: [spec]
+        properties:
+          spec:
+            type: object
+            required: [scope, schedule]
+            properties:
+              description:
+                type: string
+                maxLength: 256
+              priority:
+                type: integer
+                default: 0
+                minimum: 0
+                maximum: 1000
+              schedule:
+                type: object
+                required: [desiredState]
+                properties:
+                  desiredState:
+                    type: string
+                    enum: ["on", "off"]
+                  windows:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        start:
+                          type: string
+                          pattern: '^\d{2}:\d{2}$'
+                        end:
+                          type: string
+                          pattern: '^\d{2}:\d{2}$'
+                        days:
+                          type: array
+                          items:
+                            type: integer
+                            minimum: 0
+                            maximum: 6
+                        timezone:
+                          type: string
+              scope:
+                type: object
+                properties:
+                  namespaces:
+                    type: array
+                    items:
+                      type: string
+                  workloadNames:
+                    type: array
+                    items:
+                      type: string
+                  namespaceLabels:
+                    type: object
+                    additionalProperties:
+                      type: string
+                  workloadLabels:
+                    type: object
+                    additionalProperties:
+                      type: string
+          status:
+            type: object
+            properties:
+              activeWindow:
+                type: boolean
+              affectedTargets:
+                type: integer
+              nextTransition:
+                type: string
+                format: date-time
+              conditions:
+                type: array
+                items:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+    served: true
+    storage: true
+    subresources:
+      status: {}

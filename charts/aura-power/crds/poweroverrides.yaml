@@ -1,0 +1,83 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: poweroverrides.power.aura.sh
+spec:
+  conversion:
+    strategy: None
+  group: power.aura.sh
+  names:
+    kind: PowerOverride
+    listKind: PowerOverrideList
+    plural: poweroverrides
+    shortNames:
+    - po
+    singular: poweroverride
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        type: object
+        required: [spec]
+        properties:
+          spec:
+            type: object
+            required: [scope, state, expiresAt, reason]
+            properties:
+              state:
+                type: string
+                enum: ["on", "off"]
+              expiresAt:
+                type: string
+                format: date-time
+              reason:
+                type: string
+                minLength: 3
+                maxLength: 256
+              reference:
+                type: string
+                maxLength: 128
+              priority:
+                type: integer
+                default: 100
+                minimum: 0
+                maximum: 1000
+              scope:
+                type: object
+                properties:
+                  namespaces:
+                    type: array
+                    items:
+                      type: string
+                  workloadNames:
+                    type: array
+                    items:
+                      type: string
+                  namespaceLabels:
+                    type: object
+                    additionalProperties:
+                      type: string
+                  workloadLabels:
+                    type: object
+                    additionalProperties:
+                      type: string
+          status:
+            type: object
+            properties:
+              phase:
+                type: string
+                enum: ["Active", "Expired"]
+              expiresIn:
+                type: string
+              affectedTargets:
+                type: integer
+              conditions:
+                type: array
+                items:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+    served: true
+    storage: true
+    subresources:
+      status: {}

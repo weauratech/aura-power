@@ -44,6 +44,9 @@ type PendingChange struct {
 
 // Store defines the interface for user/auth storage.
 type Store interface {
+	// Health
+	Ping() error
+
 	// Users
 	CreateUser(username, password string, role Role) (*User, error)
 	GetUserByUsername(username string) (*User, error)

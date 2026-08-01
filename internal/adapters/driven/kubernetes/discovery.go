@@ -128,9 +128,13 @@ func computeCronJobResources(cj *batchv1.CronJob) domain.ResourceSummary {
 func computePodResources(containers []corev1.Container, replicas int32) domain.ResourceSummary {
 	var cpuMillis, memMiB int64
 	for _, c := range containers {
+		// Prefer requests, fallback to limits
 		if req := c.Resources.Requests; req != nil {
 			cpuMillis += req.Cpu().MilliValue()
 			memMiB += req.Memory().Value() / (1024 * 1024)
+		} else if lim := c.Resources.Limits; lim != nil {
+			cpuMillis += lim.Cpu().MilliValue()
+			memMiB += lim.Memory().Value() / (1024 * 1024)
 		}
 	}
 	return domain.ResourceSummary{

@@ -1,0 +1,45 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: powertargets.power.aura.sh
+spec:
+  conversion:
+    strategy: None
+  group: power.aura.sh
+  names:
+    kind: PowerTarget
+    listKind: PowerTargetList
+    plural: powertargets
+    shortNames:
+    - pt
+    singular: powertarget
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        properties:
+          spec:
+            properties:
+              targetRef:
+                properties:
+                  kind:
+                    enum:
+                    - Deployment
+                    - StatefulSet
+                    - CronJob
+                    type: string
+                  name:
+                    type: string
+                  namespace:
+                    type: string
+                type: object
+            type: object
+          status:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

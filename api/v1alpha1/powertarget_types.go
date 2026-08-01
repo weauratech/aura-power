@@ -73,6 +73,10 @@ type PowerTargetStatus struct {
 	// +optional
 	LastReconciliation *metav1.Time `json:"lastReconciliation,omitempty"`
 
+	// ConsecutiveFailures tracks how many reconcile cycles have failed in a row.
+	// +optional
+	ConsecutiveFailures int `json:"consecutiveFailures,omitempty"`
+
 	// Conditions represent the latest available observations.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`

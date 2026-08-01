@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	corev1 "k8s.io/api/core/v1"
@@ -18,11 +17,18 @@ func (s *Server) handleHealthz(c *gin.Context) {
 }
 
 func (s *Server) handleReadyz(c *gin.Context) {
-	// Check if we can reach the K8s API
+	// Check K8s API
 	var list v1alpha1.PowerTargetList
 	if err := s.client.List(c.Request.Context(), &list, client.Limit(1)); err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"status": "not ready", "error": err.Error()})
+		c.JSON(http.StatusServiceUnavailable, gin.H{"status": "not ready", "component": "kubernetes", "error": err.Error()})
 		return
+	}
+	// Check SQLite (auth store)
+	if s.authStore != nil {
+		if err := s.authStore.Ping(); err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "not ready", "component": "database", "error": err.Error()})
+			return
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "ready"})
 }
@@ -280,54 +286,12 @@ func (s *Server) handleSavings(c *gin.Context) {
 		return
 	}
 
-	now := time.Now()
 	var totalCPU, totalMem, totalCost float64
-
 	for _, t := range targets.Items {
-		// Use persisted savings if available
-		if t.Status.Savings != nil && t.Status.Savings.EstimatedCost > 0 {
+		if t.Status.Savings != nil {
 			totalCPU += t.Status.Savings.CPUHoursSaved
 			totalMem += t.Status.Savings.MemoryGiBHours
 			totalCost += t.Status.Savings.EstimatedCost
-			continue
-		}
-
-		// Fallback: calculate from off-time + snapshot resources
-		if t.Status.DesiredState == "off" && t.Status.ObservedState.PowerState == "off" {
-			// Determine how long it's been off
-			var offDuration time.Duration
-			if t.Status.LastTransition != nil && !t.Status.LastTransition.IsZero() {
-				// Best case: we know exactly when the state transitioned to off
-				offDuration = now.Sub(t.Status.LastTransition.Time)
-			} else {
-				// No lastTransition set yet — skip until controller sets it on next reconcile
-				continue
-			}
-			if offDuration <= 0 {
-				continue
-			}
-
-			hours := offDuration.Hours()
-
-			// Use snapshot resources if available, otherwise estimate
-			cpuCores := float64(0)
-			memGiB := float64(0)
-			if t.Status.Snapshot != nil && t.Status.Snapshot.Resources.CPUMillicores > 0 {
-				cpuCores = float64(t.Status.Snapshot.Resources.CPUMillicores) / 1000.0
-				memGiB = float64(t.Status.Snapshot.Resources.MemoryMiB) / 1024.0
-			} else {
-				// Default estimate: 0.25 vCPU, 0.5 GiB per workload
-				cpuCores = 0.25
-				memGiB = 0.5
-			}
-
-			cpuHours := cpuCores * hours
-			memHours := memGiB * hours
-			cost := (cpuCores * 0.032 * hours) + (memGiB * 0.004 * hours)
-
-			totalCPU += cpuHours
-			totalMem += memHours
-			totalCost += cost
 		}
 	}
 
@@ -359,53 +323,19 @@ func (s *Server) handleSavingsBreakdown(c *gin.Context) {
 
 	var items []workloadSavings
 	namespaceTotals := map[string]float64{}
-	now := time.Now()
 
 	for _, t := range targets.Items {
-		var cpuH, memH, cost float64
-
-		// Use persisted savings if available
-		if t.Status.Savings != nil && t.Status.Savings.EstimatedCost > 0 {
-			cpuH = t.Status.Savings.CPUHoursSaved
-			memH = t.Status.Savings.MemoryGiBHours
-			cost = t.Status.Savings.EstimatedCost
-		} else if t.Status.DesiredState == "off" && t.Status.ObservedState.PowerState == "off" {
-			// Calculate from off-time
-			var offDuration time.Duration
-			if t.Status.LastTransition != nil && !t.Status.LastTransition.IsZero() {
-				offDuration = now.Sub(t.Status.LastTransition.Time)
-			} else {
-				// No lastTransition set yet — skip until controller sets it
-				continue
-			}
-			if offDuration <= 0 {
-				continue
-			}
-			hours := offDuration.Hours()
-			cpuCores := float64(0.25) // default
-			memGiB := float64(0.5)    // default
-			if t.Status.Snapshot != nil && t.Status.Snapshot.Resources.CPUMillicores > 0 {
-				cpuCores = float64(t.Status.Snapshot.Resources.CPUMillicores) / 1000.0
-				memGiB = float64(t.Status.Snapshot.Resources.MemoryMiB) / 1024.0
-			}
-			cpuH = cpuCores * hours
-			memH = memGiB * hours
-			cost = (cpuCores * 0.032 * hours) + (memGiB * 0.004 * hours)
-		} else {
-			continue
-		}
-
-		if cpuH > 0 || memH > 0 {
+		if t.Status.Savings != nil && (t.Status.Savings.CPUHoursSaved > 0 || t.Status.Savings.MemoryGiBHours > 0 || t.Status.Savings.EstimatedCost > 0) {
 			items = append(items, workloadSavings{
 				Namespace:    t.Spec.TargetRef.Namespace,
 				Name:         t.Spec.TargetRef.Name,
 				Kind:         t.Spec.TargetRef.Kind,
-				CPUHours:     cpuH,
-				MemoryGiBH:   memH,
-				EstCost:      cost,
+				CPUHours:     t.Status.Savings.CPUHoursSaved,
+				MemoryGiBH:   t.Status.Savings.MemoryGiBHours,
+				EstCost:      t.Status.Savings.EstimatedCost,
 				DesiredState: t.Status.DesiredState,
 			})
-			namespaceTotals[t.Spec.TargetRef.Namespace] += cost
+			namespaceTotals[t.Spec.TargetRef.Namespace] += t.Status.Savings.EstimatedCost
 		}
 	}
 
