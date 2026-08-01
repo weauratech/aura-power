@@ -40,27 +40,23 @@ Most development workloads run 24/7 even though teams only use them 8-10 hours a
 
 ## Architecture
 
-```
-                          Users (Browser / CLI)
-                                  |
-                    ┌─────────────v──────────────┐
-                    |    aura-power-server        |
-                    |    (API + Panel + Auth)     |
-                    |    StatefulSet, port 8080   |
-                    └─────────────┬──────────────┘
-                                  |
-                         Kubernetes API (CRDs)
-                                  |
-                    ┌─────────────v──────────────┐
-                    |  aura-power-controller     |
-                    |  (Reconciler + Discovery)  |
-                    |  Deployment, leader elect  |
-                    └────────────────────────────┘
-                                  |
-                    ┌─────────────v──────────────┐
-                    |  Your Workloads            |
-                    |  (Deployments, STS, CJ)    |
-                    └────────────────────────────┘
+```mermaid
+flowchart TD
+    Users["Users (Browser / CLI)"]
+    Server["aura-power-server\n(API + Panel + Auth)\nStatefulSet"]
+    K8s["Kubernetes API\n(CRDs as message bus)"]
+    Controller["aura-power-controller\n(Reconciler + Discovery)\nDeployment with leader election"]
+    Workloads["Your Workloads\n(Deployments, StatefulSets, CronJobs)"]
+
+    Users --> Server
+    Server <-->|"read/write CRDs"| K8s
+    K8s <-->|"watch + reconcile"| Controller
+    Controller -->|"scale 0 / restore"| Workloads
+
+    style Server fill:#3B82F6,color:#fff,stroke:#1D4ED8
+    style Controller fill:#10B981,color:#fff,stroke:#059669
+    style K8s fill:#F59E0B,color:#000,stroke:#D97706
+    style Workloads fill:#6366F1,color:#fff,stroke:#4338CA
 ```
 
 The server handles user interactions and serves the web panel. The controller runs reconciliation loops and executes power-down/restore actions. They communicate exclusively through CRDs.
