@@ -1,5 +1,9 @@
 <p align="center">
-  <img src="assets/lockup.svg" alt="Aura Power" height="64">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/lockup-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="assets/lockup.svg">
+    <img src="assets/lockup.svg" alt="Aura Power" height="64">
+  </picture>
   <br><br>
   <strong>Kubernetes workload energy governance</strong><br>
   Power down and restore workloads on schedule. Reduce cloud costs without manual intervention.
