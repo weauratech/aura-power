@@ -1,0 +1,15 @@
+FROM golang:1.26-alpine AS backend
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /aura-power-controller ./cmd/controller/
+
+FROM gcr.io/distroless/static-debian12:nonroot
+LABEL org.opencontainers.image.source="https://github.com/weauratech/aura-power"
+LABEL org.opencontainers.image.description="Aura Power Controller - Kubernetes workload reconciler and discovery engine"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
+COPY --from=backend /aura-power-controller /aura-power-controller
+USER 65534:65534
+EXPOSE 8081
+ENTRYPOINT ["/aura-power-controller"]

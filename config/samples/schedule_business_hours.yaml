@@ -1,0 +1,13 @@
+apiVersion: power.aura.sh/v1alpha1
+kind: PowerSchedule
+metadata:
+  name: business-hours-weekdays
+  namespace: aura-system
+spec:
+  windows:
+    - start: "08:00"
+      end: "18:00"
+      days: [1, 2, 3, 4, 5]
+      timezone: "America/Sao_Paulo"
+  desiredState: "on"
+  description: "Standard business hours Mon-Fri 08:00-18:00 BRT. Use via namespace annotation: aura.sh/default-schedule=business-hours-weekdays"

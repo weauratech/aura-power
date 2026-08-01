@@ -1,0 +1,29 @@
+{{- if and .Values.server.enabled .Values.server.gateway.enabled }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ include "aura-power.server.fullname" . }}
+  labels:
+    {{- include "aura-power.server.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - name: {{ .Values.server.gateway.gatewayRef.name }}
+      {{- if .Values.server.gateway.gatewayRef.namespace }}
+      namespace: {{ .Values.server.gateway.gatewayRef.namespace }}
+      {{- end }}
+      {{- if .Values.server.gateway.gatewayRef.sectionName }}
+      sectionName: {{ .Values.server.gateway.gatewayRef.sectionName }}
+      {{- end }}
+  {{- if .Values.server.gateway.hostnames }}
+  hostnames:
+    {{- toYaml .Values.server.gateway.hostnames | nindent 4 }}
+  {{- end }}
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: {{ include "aura-power.server.fullname" . }}
+          port: {{ .Values.server.port }}
+{{- end }}

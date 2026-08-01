@@ -1,0 +1,27 @@
+apiVersion: v2
+name: aura-power
+description: Kubernetes workload energy governance - safely power down and restore workloads on schedule
+type: application
+version: 2.0.0
+appVersion: "2.0.0"
+kubeVersion: ">=1.28.0"
+home: https://github.com/weauratech/aura-power
+sources:
+  - https://github.com/weauratech/aura-power
+maintainers:
+  - name: Aura Tech
+    url: https://github.com/weauratech
+keywords:
+  - kubernetes
+  - cost-optimization
+  - power-management
+  - scheduling
+  - finops
+  - energy-governance
+  - workload-scaling
+annotations:
+  artifacthub.io/license: Apache-2.0
+  artifacthub.io/operator: "true"
+  artifacthub.io/operatorCapabilities: Seamless Upgrades
+  artifacthub.io/category: cost-optimization
+  artifacthub.io/signKey: ""

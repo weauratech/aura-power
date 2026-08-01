@@ -1,0 +1,127 @@
+# Aura Power v2.0 Helm Values
+# Architecture: Server (API+Panel) + Controller (Reconciler/Worker)
+
+# -- Global settings
+global:
+  namespace: ""  # defaults to release namespace
+
+nameOverride: ""
+fullnameOverride: ""
+imagePullSecrets: []
+
+# -- Server component (API + Frontend + Auth)
+server:
+  enabled: true
+  image:
+    repository: ghcr.io/weauratech/aura-power-server
+    tag: ""  # defaults to Chart.appVersion
+    pullPolicy: IfNotPresent
+  replicas: 1
+  port: 8080
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  # Auth (mandatory in v2.0)
+  auth:
+    jwtSecret: ""  # Required. Set via --set or Helm Secret
+    initialAdmin:
+      username: "admin"
+      password: ""  # Required on first install
+    accessTokenTTL: "1h"
+    refreshTokenTTL: "7d"
+  # Persistence for SQLite
+  persistence:
+    enabled: true
+    storageClass: ""  # cluster default
+    size: "1Gi"
+    accessModes:
+      - ReadWriteOnce
+  # Ingress
+  ingress:
+    enabled: false
+    className: ""
+    host: ""
+    tls: false
+    tlsSecretName: ""
+    annotations: {}
+  # Gateway API
+  gateway:
+    enabled: false
+    gatewayRef:
+      name: ""
+      namespace: ""
+    hostnames: []
+  # Metrics providers
+  prometheus:
+    url: ""  # e.g., http://prometheus.monitoring.svc:9090
+  opencost:
+    url: ""  # e.g., http://opencost.opencost.svc:9003
+  # Extra
+  extraEnv: []
+  podLabels: {}
+  podAnnotations: {}
+  nodeSelector: {}
+  affinity: {}
+  tolerations: []
+  serviceAccount:
+    create: true
+    name: ""
+    annotations: {}
+
+# -- Controller component (Reconciler/Worker)
+controller:
+  enabled: true
+  image:
+    repository: ghcr.io/weauratech/aura-power-controller
+    tag: ""  # defaults to Chart.appVersion
+    pullPolicy: IfNotPresent
+  replicas: 1  # singleton with leader election
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  leaderElection:
+    enabled: true
+    id: "aura-power-controller-leader.power.aura.sh"
+  config:
+    reconciliationInterval: "30s"
+    discoveryInterval: "60s"
+    auditRetentionDays: 7
+    systemNamespaceBlocklist:
+      - kube-system
+      - kube-public
+      - kube-node-lease
+      - aura-system
+  extraEnv: []
+  podLabels: {}
+  podAnnotations: {}
+  nodeSelector: {}
+  affinity: {}
+  tolerations: []
+  serviceAccount:
+    create: true
+    name: ""
+    annotations: {}
+
+# -- RBAC
+rbac:
+  create: true
+
+# -- Service Monitor (Prometheus Operator)
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  namespace: ""
+
+# -- NetworkPolicies
+networkPolicy:
+  enabled: false
+  # server allows ingress from anywhere on port 8080
+  # controller allows ingress only from monitoring namespace on port 8080

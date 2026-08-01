@@ -1,0 +1,16 @@
+apiVersion: power.aura.sh/v1alpha1
+kind: PowerOverride
+metadata:
+  name: demo-staging-on
+  namespace: aura-system
+spec:
+  scope:
+    namespaces:
+      - staging
+    workloadNames:
+      - api-gateway
+  state: "on"
+  priority: 100
+  expiresAt: "2026-07-31T00:00:00Z"
+  reason: "Client demo preparation - need staging alive until midnight"
+  reference: "JIRA-1234"

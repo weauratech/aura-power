@@ -1,0 +1,54 @@
+# Go
+bin/
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+vendor/
+coverage.out
+coverage.html
+
+# Node / Web
+web/node_modules/
+web/dist/
+cmd/server/panelassets/
+cmd/controller/panelassets/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.claude/
+.kiro/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets (never commit)
+*.env
+*.pem
+*.key
+
+# Build artifacts
+/aura-power-server
+/aura-power-controller
+/aura-power
+
+# Helm
+charts/aura-power/charts/
+
+# AI-DLC docs (project-specific planning, not OSS)
+aidlc-docs/
+
+# SQLite dev databases
+*.db
+*.db-shm
+*.db-wal
+
+# Dev tooling
+.ast-graph/

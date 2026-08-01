@@ -1,0 +1,67 @@
+Aura Power has been installed.
+
+{{- if .Values.server.enabled }}
+
+== Server (API + Panel) ==
+
+  Access the web panel:
+
+    kubectl port-forward -n {{ .Release.Namespace }} statefulset/{{ include "aura-power.server.fullname" . }} 8080:{{ .Values.server.port }}
+
+  Then open: http://localhost:8080
+
+  Default admin credentials:
+    Username: {{ .Values.server.auth.initialAdmin.username }}
+    Password: (set via --set server.auth.initialAdmin.password=...)
+
+{{- if .Values.server.gateway.enabled }}
+  Gateway API HTTPRoute created for: {{ join ", " .Values.server.gateway.hostnames }}
+{{- end }}
+
+{{- if .Values.server.ingress.enabled }}
+  Ingress created for: {{ .Values.server.ingress.host }}
+{{- end }}
+
+{{- end }}
+
+{{- if .Values.controller.enabled }}
+
+== Controller (Reconciler) ==
+
+  The controller is running with leader election.
+  It will automatically discover workloads and reconcile power policies.
+
+  View controller logs:
+    kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/component=controller -f
+
+{{- end }}
+
+== Next Steps ==
+
+  1. Opt-in workloads for power management:
+     kubectl annotate deployment <name> aura.sh/power-eligible=true
+
+  2. Or opt-in an entire namespace:
+     kubectl annotate namespace <name> aura.sh/power-eligible=true
+
+  3. Create your first policy:
+     kubectl apply -f - <<EOF
+     apiVersion: power.aura.sh/v1alpha1
+     kind: PowerPolicy
+     metadata:
+       name: dev-off-hours
+       namespace: {{ .Release.Namespace }}
+     spec:
+       scope:
+         namespaces: [dev]
+       schedule:
+         desiredState: "on"
+         windows:
+           - start: "08:00"
+             end: "18:00"
+             days: [1, 2, 3, 4, 5]
+             timezone: "UTC"
+       priority: 10
+     EOF
+
+  Documentation: https://github.com/weauratech/aura-power

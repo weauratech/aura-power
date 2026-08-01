@@ -1,0 +1,17 @@
+{{- if .Values.controller.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "aura-power.controller.fullname" . }}-metrics
+  labels:
+    {{- include "aura-power.controller.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8080
+      targetPort: metrics
+      protocol: TCP
+      name: metrics
+  selector:
+    {{- include "aura-power.controller.selectorLabels" . | nindent 4 }}
+{{- end }}

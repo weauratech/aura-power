@@ -1,0 +1,36 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: powerauditevents.power.aura.sh
+spec:
+  group: power.aura.sh
+  names:
+    kind: PowerAuditEvent
+    listKind: PowerAuditEventList
+    plural: powerauditevents
+    singular: powerauditevent
+    shortNames: [pae]
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                timestamp: { type: string, format: date-time }
+                action: { type: string }
+                actor: { type: string }
+                target:
+                  type: object
+                  properties:
+                    namespace: { type: string }
+                    name: { type: string }
+                    kind: { type: string }
+                result: { type: string }
+                reason: { type: string }
+                ruleName: { type: string }
