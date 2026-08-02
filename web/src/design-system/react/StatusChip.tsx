@@ -9,11 +9,11 @@ import { light, dark } from '../tokens/tokens';
 import type { WorkloadState } from './PowerRing';
 
 export const STATE_LABEL: Record<WorkloadState, string> = {
-  running: 'Em execução',
-  asleep: 'Dormindo',
-  scheduled: 'Agendado',
-  failed: 'Falhou',
-  excluded: 'Fora da governança',
+  running: 'Running',
+  asleep: 'Asleep',
+  scheduled: 'Scheduled',
+  failed: 'Failed',
+  excluded: 'Excluded',
 };
 
 /** A forma do traço carrega o estado mesmo em preto e branco. */
@@ -73,7 +73,7 @@ export function StatusChip({ state, label, size = 'small' }: StatusChipProps) {
       sx={{
         color: fg, backgroundColor: bg, borderColor: border,
         fontWeight: 500,
-        '& .MuiChip-icon': { marginLeft: '6px', marginRight: '-2px' },
+        '& .MuiChip-icon': { marginLeft: '8px', marginRight: '-4px' },
       }}
     />
   );

@@ -18,7 +18,6 @@ import useMediaQuery from '@mui/material/useMediaQuery';
 import { useTheme } from '@mui/material/styles';
 import DashboardIcon from '@mui/icons-material/DashboardOutlined';
 import DevicesIcon from '@mui/icons-material/DevicesOutlined';
-import PolicyIcon from '@mui/icons-material/PolicyOutlined';
 import ScheduleIcon from '@mui/icons-material/ScheduleOutlined';
 import BarChartIcon from '@mui/icons-material/BarChartOutlined';
 import BlockIcon from '@mui/icons-material/BlockOutlined';
@@ -47,8 +46,7 @@ interface LayoutProps {
 const NAV_ITEMS: NavItem[] = [
   { path: '/', label: 'Dashboard', icon: <DashboardIcon /> },
   { path: '/targets', label: 'Targets', icon: <DevicesIcon /> },
-  { path: '/policies', label: 'Policies', icon: <PolicyIcon /> },
-  { path: '/schedule', label: 'Schedule', icon: <ScheduleIcon /> },
+  { path: '/schedule', label: 'Schedules', icon: <ScheduleIcon /> },
   { path: '/metrics', label: 'Metrics', icon: <BarChartIcon /> },
   { path: '/blocked', label: 'Blocked', icon: <BlockIcon /> },
   { path: '/savings', label: 'Savings', icon: <SavingsIcon /> },
