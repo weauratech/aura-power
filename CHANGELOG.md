@@ -5,6 +5,49 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.14] - 2026-08-02
+
+### Added
+- Frontend redesign with Aura Power Design System (Material UI + custom theme)
+- Dashboard: governance coverage gauge, savings card, activity feed, namespace chart, provider status indicators
+- Targets: search, filter by state, group-by namespace, clickable namespace drill-down
+- Schedule creation drawer (right panel) with namespace/workload autocomplete and impact preview
+- Overrides merged into unified Schedules view with "Temporary" badge and countdown
+- Audit Log page with timeline feed, colored action chips, search
+- Metrics page with Prometheus time-series charts (CPU, Memory, 1h-7d range selector)
+- Impact Preview ("Preview Impact" button shows affected targets before creation)
+- Discovery Mode banner (onboarding when no policies exist)
+- Success/error Snackbar notifications on all CRUD operations
+- Provider status chips on Dashboard (Prometheus/OpenCost connected or not)
+- Dark/light mode toggle with localStorage persistence
+- Geist + Geist Mono typography (CDN)
+- Favicon set with SVG dark mode support, PWA manifest
+- PowerNamespaceGroup CRD (was missing from chart)
+- Configurable audit event retention via AUDIT_RETENTION_DAYS env var
+
+### Fixed
+- Cookie auth: SameSite=Lax + auto-detect Secure from X-Forwarded-Proto
+- Override CRD enum (was true/false, now on/off)
+- Dashboard card alignment (equal height grid)
+- StatusChip dot centering
+- Release pipeline: native arm64 runners (5min build vs 40min QEMU)
+- Chart kubeVersion constraint for EKS semver compatibility
+
+### Documentation
+- Quick Start guide (docs/quick-start.md)
+- GitOps coexistence guide (docs/gitops.md) — ArgoCD, Flux, Helm, HPA
+- CRD reference (docs/crds.md)
+- API reference (docs/api-reference.md)
+- Troubleshooting guide (docs/troubleshooting.md)
+- Upgrade guide v1→v2 (docs/upgrade-v2.md)
+- Helm chart README with full values reference
+
+### Testing
+- Shell smoke test script (35 API tests)
+- Go E2E test suite (23 tests, CI-integrated)
+- Playwright browser tests (28 page + 3 flow tests)
+- GitHub Actions smoke test workflow (on-demand)
+
 ## [2.0.0] - 2026-08-01
 
 ### Added

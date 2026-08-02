@@ -17,6 +17,13 @@
 
 ---
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/hero/panel-dark.png">
+    <img src="docs/assets/hero/panel-light.png" alt="Aura Power Dashboard" width="720">
+  </picture>
+</p>
+
 ## Why Aura Power?
 
 Most development workloads run 24/7 even though teams only use them 8-10 hours a day. That is 60% wasted compute. Aura Power lets you define when workloads should be on and automatically shuts them down outside those hours.
