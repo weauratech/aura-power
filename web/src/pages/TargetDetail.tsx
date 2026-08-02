@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useParams } from 'react-router-dom';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
@@ -8,14 +9,17 @@ import Stack from '@mui/material/Stack';
 import Skeleton from '@mui/material/Skeleton';
 import Alert from '@mui/material/Alert';
 import Chip from '@mui/material/Chip';
+import Button from '@mui/material/Button';
 import Table from '@mui/material/Table';
 import TableBody from '@mui/material/TableBody';
 import TableCell from '@mui/material/TableCell';
 import TableRow from '@mui/material/TableRow';
+import ScheduleIcon from '@mui/icons-material/ScheduleOutlined';
 import { StatusChip } from '../design-system/react';
 import { PowerRing } from '../design-system/react';
 import type { WorkloadState } from '../design-system/react/PowerRing';
 import { useTargets, useExplainTarget } from '../hooks/useApi';
+import { ScheduleDrawer } from '../components/ScheduleDrawer';
 
 function mapState(status: { observedState: { powerState: string }; blocked: boolean; divergent: boolean }): WorkloadState {
   if (status.blocked) return 'failed';
@@ -27,6 +31,7 @@ export function TargetDetail() {
   const { namespace = '', name = '' } = useParams();
   const { data: targetsData } = useTargets(namespace);
   const { isLoading } = useExplainTarget(namespace, name);
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   const target = targetsData?.targets?.find(
     (t) => t.spec.targetRef.name === name && t.spec.targetRef.namespace === namespace
@@ -48,7 +53,10 @@ export function TargetDetail() {
           <Typography variant="overline" color="text.secondary">{namespace} / {target.spec.targetRef.kind}</Typography>
           <Typography variant="h2">{name}</Typography>
         </Box>
-        <Box sx={{ ml: 'auto' }}>
+        <Box sx={{ ml: 'auto', display: 'flex', alignItems: 'center', gap: 2 }}>
+          <Button variant="outlined" startIcon={<ScheduleIcon />} onClick={() => setDrawerOpen(true)}>
+            Schedule Workload
+          </Button>
           <StatusChip state={state} />
         </Box>
       </Stack>
@@ -168,6 +176,12 @@ export function TargetDetail() {
           </Grid>
         )}
       </Grid>
+
+      <ScheduleDrawer
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        prefill={{ namespaces: [namespace], workloadNames: [`${namespace}/${name}`] }}
+      />
     </Box>
   );
 }
