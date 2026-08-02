@@ -12,68 +12,35 @@ import Chip from '@mui/material/Chip';
 import Stack from '@mui/material/Stack';
 import Skeleton from '@mui/material/Skeleton';
 import Alert from '@mui/material/Alert';
-import Dialog from '@mui/material/Dialog';
-import DialogTitle from '@mui/material/DialogTitle';
-import DialogContent from '@mui/material/DialogContent';
-import DialogActions from '@mui/material/DialogActions';
-import TextField from '@mui/material/TextField';
-import MenuItem from '@mui/material/MenuItem';
 import IconButton from '@mui/material/IconButton';
 import Tooltip from '@mui/material/Tooltip';
 import DeleteIcon from '@mui/icons-material/DeleteOutlined';
 import AddIcon from '@mui/icons-material/AddOutlined';
 import { StatusChip } from '../design-system/react';
 import type { WorkloadState } from '../design-system/react/PowerRing';
-import { usePolicies, apiPost, apiDelete, type PolicyResponse } from '../hooks/useApi';
+import { usePolicies, useOverrides, apiDelete, type PolicyResponse } from '../hooks/useApi';
 import { useQueryClient } from '@tanstack/react-query';
+import { ScheduleDrawer } from '../components/ScheduleDrawer';
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
+function expiresCountdown(expiresAt: string): string {
+  const diff = new Date(expiresAt).getTime() - Date.now();
+  if (diff <= 0) return 'Expired';
+  const hours = Math.floor(diff / 3600000);
+  const mins = Math.floor((diff % 3600000) / 60000);
+  if (hours > 24) return `${Math.floor(hours / 24)}d ${hours % 24}h`;
+  if (hours > 0) return `${hours}h ${mins}m`;
+  return `${mins}m`;
+}
+
 export function Schedule() {
-  const { data, isLoading, error } = usePolicies();
-  const [createOpen, setCreateOpen] = useState(false);
-  const [creating, setCreating] = useState(false);
-  const [createError, setCreateError] = useState('');
+  const { data: policiesData, isLoading: policiesLoading, error: policiesError } = usePolicies();
+  const { data: overridesData } = useOverrides();
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const queryClient = useQueryClient();
 
-  // Form state
-  const [name, setName] = useState('');
-  const [namespaces, setNamespaces] = useState('');
-  const [desiredState, setDesiredState] = useState('off');
-  const [start, setStart] = useState('20:00');
-  const [end, setEnd] = useState('08:00');
-  const [timezone, setTimezone] = useState('America/Sao_Paulo');
-  const [days, setDays] = useState<number[]>([1, 2, 3, 4, 5]);
-  const [priority, setPriority] = useState('100');
-  const [description, setDescription] = useState('');
-
-  const handleCreate = async () => {
-    setCreating(true);
-    setCreateError('');
-    try {
-      await apiPost('/policies', {
-        metadata: { name, namespace: 'aura-system' },
-        spec: {
-          scope: { namespaces: namespaces.split(',').map(s => s.trim()).filter(Boolean) },
-          schedule: {
-            desiredState,
-            windows: [{ start, end, timezone, days: days.length > 0 ? days : undefined }],
-          },
-          priority: parseInt(priority) || 100,
-          description,
-        },
-      });
-      queryClient.invalidateQueries({ queryKey: ['policies'] });
-      setCreateOpen(false);
-      resetForm();
-    } catch (err) {
-      setCreateError((err as Error).message);
-    } finally {
-      setCreating(false);
-    }
-  };
-
-  const handleDelete = async (p: PolicyResponse) => {
+  const handleDeletePolicy = async (p: PolicyResponse) => {
     if (!confirm(`Delete policy "${p.metadata.name}"?`)) return;
     try {
       await apiDelete(`/policies/${p.metadata.namespace}/${p.metadata.name}`);
@@ -83,24 +50,20 @@ export function Schedule() {
     }
   };
 
-  const resetForm = () => {
-    setName('');
-    setNamespaces('');
-    setDesiredState('off');
-    setStart('20:00');
-    setEnd('08:00');
-    setTimezone('America/Sao_Paulo');
-    setDays([1, 2, 3, 4, 5]);
-    setPriority('100');
-    setDescription('');
-    setCreateError('');
+  const handleDeleteOverride = async (o: { metadata: { name: string; namespace: string } }) => {
+    if (!confirm(`Delete override "${o.metadata.name}"?`)) return;
+    try {
+      await apiDelete(`/overrides/${o.metadata.namespace}/${o.metadata.name}`);
+      queryClient.invalidateQueries({ queryKey: ['overrides'] });
+    } catch (err) {
+      alert((err as Error).message);
+    }
   };
 
-  const toggleDay = (d: number) => {
-    setDays(prev => prev.includes(d) ? prev.filter(x => x !== d) : [...prev, d].sort());
-  };
+  if (policiesError) return <Alert severity="error">{(policiesError as Error).message}</Alert>;
 
-  if (error) return <Alert severity="error">{(error as Error).message}</Alert>;
+  // Merge policies + active overrides into one list
+  const activeOverrides = overridesData?.items?.filter(o => o.status?.phase !== 'Expired') ?? [];
 
   return (
     <Box>
@@ -108,22 +71,23 @@ export function Schedule() {
         <Box>
           <Typography variant="h4">Schedules</Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-            Power policies define when workloads are on or off.
+            Power policies and temporary overrides.
           </Typography>
         </Box>
-        <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>
-          New Policy
+        <Button variant="contained" startIcon={<AddIcon />} onClick={() => setDrawerOpen(true)}>
+          New Schedule
         </Button>
       </Stack>
 
-      {isLoading ? (
+      {policiesLoading ? (
         <Skeleton variant="rounded" height={300} />
       ) : (
         <TableContainer>
           <Table size="small">
             <TableHead>
               <TableRow>
-                <TableCell>Policy</TableCell>
+                <TableCell>Name</TableCell>
+                <TableCell>Type</TableCell>
                 <TableCell>State</TableCell>
                 <TableCell>Window</TableCell>
                 <TableCell>Days</TableCell>
@@ -134,16 +98,20 @@ export function Schedule() {
               </TableRow>
             </TableHead>
             <TableBody>
-              {data?.items?.map((p) => {
+              {/* Policies */}
+              {policiesData?.items?.map((p) => {
                 const state: WorkloadState = p.spec.schedule.desiredState === 'on' ? 'running' : 'asleep';
                 const window = p.spec.schedule.windows?.[0];
                 return (
-                  <TableRow key={`${p.metadata.namespace}/${p.metadata.name}`} hover>
+                  <TableRow key={`policy-${p.metadata.namespace}/${p.metadata.name}`} hover>
                     <TableCell>
                       <Typography variant="subtitle2">{p.metadata.name}</Typography>
                       {p.spec.description && (
-                        <Typography variant="caption" color="text.secondary">{p.spec.description}</Typography>
+                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>{p.spec.description}</Typography>
                       )}
+                    </TableCell>
+                    <TableCell>
+                      <Chip label="Recurring" size="small" variant="outlined" sx={{ height: 22, fontSize: 11 }} />
                     </TableCell>
                     <TableCell>
                       <StatusChip state={state} label={p.spec.schedule.desiredState} />
@@ -157,14 +125,17 @@ export function Schedule() {
                     </TableCell>
                     <TableCell>
                       {window?.days?.map((d) => (
-                        <Chip key={d} label={DAYS[d]} size="small" variant="outlined" sx={{ mr: 0.5, height: 22, fontSize: 11 }} />
-                      )) || <Chip label="Every day" size="small" variant="outlined" sx={{ height: 22, fontSize: 11 }} />}
+                        <Chip key={d} label={DAYS[d]} size="small" variant="outlined" sx={{ mr: 0.5, height: 20, fontSize: 10 }} />
+                      )) || <Chip label="All" size="small" variant="outlined" sx={{ height: 20, fontSize: 10 }} />}
                     </TableCell>
                     <TableCell>
                       <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
-                        {p.spec.scope.namespaces?.map((ns) => (
-                          <Chip key={ns} label={ns} size="small" variant="outlined" sx={{ height: 22, fontSize: 11 }} />
+                        {p.spec.scope.namespaces?.slice(0, 3).map((ns) => (
+                          <Chip key={ns} label={ns} size="small" variant="outlined" sx={{ height: 20, fontSize: 10 }} />
                         ))}
+                        {(p.spec.scope.namespaces?.length ?? 0) > 3 && (
+                          <Chip label={`+${(p.spec.scope.namespaces?.length ?? 0) - 3}`} size="small" sx={{ height: 20, fontSize: 10 }} />
+                        )}
                       </Stack>
                     </TableCell>
                     <TableCell align="right">
@@ -175,7 +146,7 @@ export function Schedule() {
                     </TableCell>
                     <TableCell align="right" sx={{ width: 40 }}>
                       <Tooltip title="Delete">
-                        <IconButton size="small" onClick={() => handleDelete(p)}>
+                        <IconButton size="small" onClick={() => handleDeletePolicy(p)}>
                           <DeleteIcon fontSize="small" />
                         </IconButton>
                       </Tooltip>
@@ -183,11 +154,55 @@ export function Schedule() {
                   </TableRow>
                 );
               })}
-              {(!data?.items || data.items.length === 0) && (
+
+              {/* Overrides (inline with Temporary badge) */}
+              {activeOverrides.map((o) => {
+                const state: WorkloadState = o.spec.state === 'on' ? 'running' : 'asleep';
+                return (
+                  <TableRow key={`override-${o.metadata.namespace}/${o.metadata.name}`} hover>
+                    <TableCell>
+                      <Typography variant="subtitle2">{o.metadata.name}</Typography>
+                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>{o.spec.reason}</Typography>
+                    </TableCell>
+                    <TableCell>
+                      <Chip label="Temporary" size="small" color="warning" sx={{ height: 22, fontSize: 11 }} />
+                    </TableCell>
+                    <TableCell>
+                      <StatusChip state={state} label={o.spec.state} />
+                    </TableCell>
+                    <TableCell>
+                      <Typography variant="code" color="warning.main">{expiresCountdown(o.spec.expiresAt)}</Typography>
+                    </TableCell>
+                    <TableCell>—</TableCell>
+                    <TableCell>
+                      <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+                        {o.spec.scope.namespaces?.map((ns) => (
+                          <Chip key={ns} label={ns} size="small" variant="outlined" sx={{ height: 20, fontSize: 10 }} />
+                        ))}
+                      </Stack>
+                    </TableCell>
+                    <TableCell align="right">
+                      <Typography variant="code">{o.status?.phase === 'Active' ? '—' : '—'}</Typography>
+                    </TableCell>
+                    <TableCell align="right">
+                      <Typography variant="code">{o.spec.priority}</Typography>
+                    </TableCell>
+                    <TableCell align="right" sx={{ width: 40 }}>
+                      <Tooltip title="Delete">
+                        <IconButton size="small" onClick={() => handleDeleteOverride(o)}>
+                          <DeleteIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+
+              {(!policiesData?.items?.length && !activeOverrides.length) && (
                 <TableRow>
-                  <TableCell colSpan={8} align="center">
+                  <TableCell colSpan={9} align="center">
                     <Typography variant="body2" color="text.secondary" sx={{ py: 4 }}>
-                      No schedules defined. Create your first policy.
+                      No schedules defined. Create your first one.
                     </Typography>
                   </TableCell>
                 </TableRow>
@@ -197,50 +212,7 @@ export function Schedule() {
         </TableContainer>
       )}
 
-      {/* Create Policy Dialog */}
-      <Dialog open={createOpen} onClose={() => setCreateOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>New Power Policy</DialogTitle>
-        <DialogContent>
-          {createError && <Alert severity="error" sx={{ mb: 3 }}>{createError}</Alert>}
-          <Stack spacing={3} sx={{ mt: 1 }}>
-            <TextField label="Policy Name" value={name} onChange={e => setName(e.target.value)} fullWidth required />
-            <TextField label="Namespaces" value={namespaces} onChange={e => setNamespaces(e.target.value)} fullWidth helperText="Comma-separated (e.g. staging, dev)" />
-            <TextField label="Desired State" value={desiredState} onChange={e => setDesiredState(e.target.value)} select fullWidth>
-              <MenuItem value="on">On (keep running during window)</MenuItem>
-              <MenuItem value="off">Off (power down during window)</MenuItem>
-            </TextField>
-            <Stack direction="row" spacing={2}>
-              <TextField label="Start" value={start} onChange={e => setStart(e.target.value)} helperText="HH:MM" />
-              <TextField label="End" value={end} onChange={e => setEnd(e.target.value)} helperText="HH:MM" />
-            </Stack>
-            <TextField label="Timezone" value={timezone} onChange={e => setTimezone(e.target.value)} fullWidth />
-            <Box>
-              <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>Active Days</Typography>
-              <Stack direction="row" spacing={1}>
-                {DAYS.map((label, i) => (
-                  <Chip
-                    key={i}
-                    label={label}
-                    size="small"
-                    variant={days.includes(i) ? 'filled' : 'outlined'}
-                    color={days.includes(i) ? 'primary' : 'default'}
-                    onClick={() => toggleDay(i)}
-                    sx={{ cursor: 'pointer' }}
-                  />
-                ))}
-              </Stack>
-            </Box>
-            <TextField label="Priority" value={priority} onChange={e => setPriority(e.target.value)} type="number" helperText="Higher wins (0-1000)" />
-            <TextField label="Description" value={description} onChange={e => setDescription(e.target.value)} fullWidth multiline rows={2} />
-          </Stack>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setCreateOpen(false)}>Cancel</Button>
-          <Button variant="contained" onClick={handleCreate} disabled={creating || !name || !namespaces}>
-            {creating ? 'Creating...' : 'Create Policy'}
-          </Button>
-        </DialogActions>
-      </Dialog>
+      <ScheduleDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} />
     </Box>
   );
 }

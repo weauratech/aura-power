@@ -15,12 +15,15 @@ import Alert from '@mui/material/Alert';
 import MuiLink from '@mui/material/Link';
 import Stack from '@mui/material/Stack';
 import Chip from '@mui/material/Chip';
+import Button from '@mui/material/Button';
 import ToggleButton from '@mui/material/ToggleButton';
 import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
 import SearchIcon from '@mui/icons-material/SearchOutlined';
+import ScheduleIcon from '@mui/icons-material/ScheduleOutlined';
 import { StatusChip } from '../design-system/react';
 import type { WorkloadState } from '../design-system/react/PowerRing';
 import { useTargets } from '../hooks/useApi';
+import { ScheduleDrawer } from '../components/ScheduleDrawer';
 import type { PowerTarget } from '../types';
 
 function mapState(t: PowerTarget): WorkloadState {
@@ -48,11 +51,13 @@ export function Targets() {
   const [stateFilter, setStateFilter] = useState<StateFilter>('all');
   const [groupByNs, setGroupByNs] = useState(false);
 
+  // Schedule drawer
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerPrefill, setDrawerPrefill] = useState<{ namespaces?: string[]; workloadNames?: string[] }>({});
+
   const filtered = useMemo(() => {
     if (!data?.targets) return [];
     let items = data.targets;
-
-    // Search filter
     if (search) {
       const q = search.toLowerCase();
       items = items.filter(t =>
@@ -60,8 +65,6 @@ export function Targets() {
         t.spec.targetRef.namespace.toLowerCase().includes(q)
       );
     }
-
-    // State filter
     if (stateFilter !== 'all') {
       items = items.filter(t => {
         const s = mapState(t);
@@ -71,11 +74,9 @@ export function Targets() {
         return true;
       });
     }
-
     return items;
   }, [data, search, stateFilter]);
 
-  // Group by namespace
   const grouped = useMemo(() => {
     if (!groupByNs) return { '': filtered };
     const map: Record<string, PowerTarget[]> = {};
@@ -86,6 +87,21 @@ export function Targets() {
     });
     return map;
   }, [filtered, groupByNs]);
+
+  const openDrawerForNamespace = (ns: string) => {
+    setDrawerPrefill({ namespaces: [ns] });
+    setDrawerOpen(true);
+  };
+
+  const openDrawerForWorkload = (ns: string, name: string) => {
+    setDrawerPrefill({ namespaces: [ns], workloadNames: [`${ns}/${name}`] });
+    setDrawerOpen(true);
+  };
+
+  const openDrawerEmpty = () => {
+    setDrawerPrefill({});
+    setDrawerOpen(true);
+  };
 
   if (error) return <Alert severity="error">{(error as Error).message}</Alert>;
 
@@ -98,6 +114,9 @@ export function Targets() {
             {filtered.length} workloads {search || stateFilter !== 'all' ? '(filtered)' : ''}
           </Typography>
         </Box>
+        <Button variant="contained" startIcon={<ScheduleIcon />} onClick={openDrawerEmpty}>
+          Create Schedule
+        </Button>
       </Stack>
 
       {/* Filters */}
@@ -124,7 +143,7 @@ export function Targets() {
           <ToggleButton value="failed">Issues</ToggleButton>
         </ToggleButtonGroup>
         <Chip
-          label={groupByNs ? 'Grouped' : 'Flat'}
+          label={groupByNs ? 'Grouped by NS' : 'Flat'}
           size="small"
           variant={groupByNs ? 'filled' : 'outlined'}
           onClick={() => setGroupByNs(!groupByNs)}
@@ -138,43 +157,48 @@ export function Targets() {
         Object.entries(grouped).map(([ns, targets]) => (
           <Box key={ns} sx={{ mb: ns ? 4 : 0 }}>
             {ns && (
-              <Typography variant="overline" color="text.secondary" sx={{ display: 'block', mb: 1, mt: 2 }}>
-                {ns} ({targets.length})
-              </Typography>
+              <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1, mt: 2 }}>
+                <MuiLink
+                  component={Link}
+                  to={`/targets/${ns}`}
+                  underline="hover"
+                  sx={{ cursor: 'pointer' }}
+                >
+                  <Typography variant="overline" color="text.secondary">
+                    {ns} ({targets.length})
+                  </Typography>
+                </MuiLink>
+                <Button size="small" startIcon={<ScheduleIcon />} onClick={() => openDrawerForNamespace(ns)}>
+                  Schedule
+                </Button>
+              </Stack>
             )}
             <TableContainer>
               <Table size="small">
-                {!ns && (
-                  <TableHead>
-                    <TableRow>
-                      <TableCell>Namespace</TableCell>
-                      <TableCell>Name</TableCell>
-                      <TableCell>Kind</TableCell>
-                      <TableCell>State</TableCell>
-                      <TableCell>Desired</TableCell>
-                      <TableCell>Last Transition</TableCell>
-                      <TableCell align="right">Replicas</TableCell>
-                    </TableRow>
-                  </TableHead>
-                )}
-                {ns && (
-                  <TableHead>
-                    <TableRow>
-                      <TableCell>Name</TableCell>
-                      <TableCell>Kind</TableCell>
-                      <TableCell>State</TableCell>
-                      <TableCell>Desired</TableCell>
-                      <TableCell>Last Transition</TableCell>
-                      <TableCell align="right">Replicas</TableCell>
-                    </TableRow>
-                  </TableHead>
-                )}
+                <TableHead>
+                  <TableRow>
+                    {!ns && <TableCell>Namespace</TableCell>}
+                    <TableCell>Name</TableCell>
+                    <TableCell>Kind</TableCell>
+                    <TableCell>State</TableCell>
+                    <TableCell>Desired</TableCell>
+                    <TableCell>Last Transition</TableCell>
+                    <TableCell align="right">Replicas</TableCell>
+                    <TableCell />
+                  </TableRow>
+                </TableHead>
                 <TableBody>
                   {targets.map((t) => (
                     <TableRow key={`${t.spec.targetRef.namespace}/${t.spec.targetRef.name}`} hover>
                       {!ns && (
                         <TableCell>
-                          <Typography variant="code" color="text.secondary">{t.spec.targetRef.namespace}</Typography>
+                          <MuiLink
+                            component={Link}
+                            to={`/targets/${t.spec.targetRef.namespace}`}
+                            underline="hover"
+                          >
+                            <Typography variant="code" color="text.secondary">{t.spec.targetRef.namespace}</Typography>
+                          </MuiLink>
                         </TableCell>
                       )}
                       <TableCell>
@@ -187,11 +211,16 @@ export function Targets() {
                       <TableCell><Typography variant="code">{t.status.desiredState || '—'}</Typography></TableCell>
                       <TableCell><Typography variant="caption" color="text.secondary">{relativeTime(t.status.lastTransition)}</Typography></TableCell>
                       <TableCell align="right"><Typography variant="code">{t.status.observedState.replicas}</Typography></TableCell>
+                      <TableCell align="right" sx={{ width: 40 }}>
+                        <Button size="small" sx={{ minWidth: 0, px: 1 }} onClick={() => openDrawerForWorkload(t.spec.targetRef.namespace, t.spec.targetRef.name)}>
+                          <ScheduleIcon fontSize="small" />
+                        </Button>
+                      </TableCell>
                     </TableRow>
                   ))}
                   {targets.length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={7} align="center">
+                      <TableCell colSpan={8} align="center">
                         <Typography variant="body2" color="text.secondary" sx={{ py: 4 }}>No targets found</Typography>
                       </TableCell>
                     </TableRow>
@@ -202,6 +231,8 @@ export function Targets() {
           </Box>
         ))
       )}
+
+      <ScheduleDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} prefill={drawerPrefill} />
     </Box>
   );
 }

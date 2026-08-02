@@ -132,63 +132,58 @@ export function Dashboard() {
         </Box>
       </Stack>
 
-      {/* Efficiency + Savings row */}
+      {/* Stats row — equal width cards */}
       <Grid container spacing={3} sx={{ mb: 3 }}>
-        <Grid item xs={12} sm={6} md={3}>
-          <Card>
+        <Grid item xs={12} sm={6} md={2}>
+          <Card sx={{ height: '100%' }}>
             <CardContent>
-              <Typography variant="overline" color="text.secondary" sx={{ display: 'block', mb: 1 }}>Governance Coverage</Typography>
-              <Stack direction="row" alignItems="baseline" spacing={1}>
-                <Typography variant="h3" sx={{ fontFamily: "'Geist Mono', monospace" }}>{Math.round(efficiency)}%</Typography>
-              </Stack>
+              <Typography variant="overline" color="text.secondary" sx={{ display: 'block', mb: 1 }}>Coverage</Typography>
+              <Typography variant="h4" sx={{ fontFamily: "'Geist Mono', monospace" }}>{Math.round(efficiency)}%</Typography>
               <LinearProgress variant="determinate" value={efficiency} sx={{ mt: 1.5, height: 4, borderRadius: 2 }} />
-              <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
-                {summary.governed} of {summary.totalTargets} targets managed
-              </Typography>
             </CardContent>
           </Card>
         </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <Card>
+        <Grid item xs={12} sm={6} md={2}>
+          <Card sx={{ height: '100%' }}>
             <CardContent>
-              <Typography variant="overline" color="text.secondary" sx={{ display: 'block', mb: 1 }}>Total Savings</Typography>
-              <Typography variant="h3" sx={{ fontFamily: "'Geist Mono', monospace", color: 'success.main' }}>
+              <Typography variant="overline" color="text.secondary" sx={{ display: 'block', mb: 1 }}>Savings</Typography>
+              <Typography variant="h4" sx={{ fontFamily: "'Geist Mono', monospace", color: 'success.main' }}>
                 ${savings.estimatedCost.toFixed(2)}
               </Typography>
-              <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
-                {savings.cpuHours.toFixed(0)} CPU-h · {savings.memoryGiBHours.toFixed(0)} GiB-h
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                {savings.cpuHours.toFixed(0)} CPU-h
               </Typography>
             </CardContent>
           </Card>
         </Grid>
-        <Grid item xs={6} sm={3} md={1.5}>
-          <Card>
-            <CardContent sx={{ textAlign: 'center' }}>
-              <Typography variant="overline" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>On</Typography>
+        <Grid item xs={6} sm={3} md={2}>
+          <Card sx={{ height: '100%' }}>
+            <CardContent>
+              <Typography variant="overline" color="text.secondary" sx={{ display: 'block', mb: 1 }}>Powered On</Typography>
               <Typography variant="h4" sx={{ fontFamily: "'Geist Mono', monospace" }}>{summary.poweredOn}</Typography>
             </CardContent>
           </Card>
         </Grid>
-        <Grid item xs={6} sm={3} md={1.5}>
-          <Card>
-            <CardContent sx={{ textAlign: 'center' }}>
-              <Typography variant="overline" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>Off</Typography>
+        <Grid item xs={6} sm={3} md={2}>
+          <Card sx={{ height: '100%' }}>
+            <CardContent>
+              <Typography variant="overline" color="text.secondary" sx={{ display: 'block', mb: 1 }}>Powered Off</Typography>
               <Typography variant="h4" sx={{ fontFamily: "'Geist Mono', monospace" }}>{summary.poweredOff}</Typography>
             </CardContent>
           </Card>
         </Grid>
-        <Grid item xs={6} sm={3} md={1.5}>
-          <Card>
-            <CardContent sx={{ textAlign: 'center' }}>
-              <Typography variant="overline" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>Blocked</Typography>
+        <Grid item xs={6} sm={3} md={2}>
+          <Card sx={{ height: '100%' }}>
+            <CardContent>
+              <Typography variant="overline" color="text.secondary" sx={{ display: 'block', mb: 1 }}>Blocked</Typography>
               <Typography variant="h4" sx={{ fontFamily: "'Geist Mono', monospace", color: summary.blocked > 0 ? 'error.main' : undefined }}>{summary.blocked}</Typography>
             </CardContent>
           </Card>
         </Grid>
-        <Grid item xs={6} sm={3} md={1.5}>
-          <Card>
-            <CardContent sx={{ textAlign: 'center' }}>
-              <Typography variant="overline" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>Divergent</Typography>
+        <Grid item xs={6} sm={3} md={2}>
+          <Card sx={{ height: '100%' }}>
+            <CardContent>
+              <Typography variant="overline" color="text.secondary" sx={{ display: 'block', mb: 1 }}>Divergent</Typography>
               <Typography variant="h4" sx={{ fontFamily: "'Geist Mono', monospace", color: summary.divergent > 0 ? 'warning.main' : undefined }}>{summary.divergent}</Typography>
             </CardContent>
           </Card>

@@ -22,7 +22,6 @@ import ScheduleIcon from '@mui/icons-material/ScheduleOutlined';
 import BarChartIcon from '@mui/icons-material/BarChartOutlined';
 import BlockIcon from '@mui/icons-material/BlockOutlined';
 import SavingsIcon from '@mui/icons-material/SavingsOutlined';
-import FlashOnIcon from '@mui/icons-material/FlashOnOutlined';
 import HistoryIcon from '@mui/icons-material/HistoryOutlined';
 import PendingIcon from '@mui/icons-material/HourglassEmptyOutlined';
 import PeopleIcon from '@mui/icons-material/PeopleOutlined';
@@ -49,7 +48,6 @@ const NAV_ITEMS: NavItem[] = [
   { path: '/', label: 'Dashboard', icon: <DashboardIcon /> },
   { path: '/targets', label: 'Targets', icon: <DevicesIcon /> },
   { path: '/schedule', label: 'Schedules', icon: <ScheduleIcon /> },
-  { path: '/overrides', label: 'Overrides', icon: <FlashOnIcon /> },
   { path: '/savings', label: 'Savings', icon: <SavingsIcon /> },
   { path: '/blocked', label: 'Blocked', icon: <BlockIcon /> },
   { path: '/audit', label: 'Audit Log', icon: <HistoryIcon /> },
