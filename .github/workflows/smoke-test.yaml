@@ -1,5 +1,11 @@
 name: Smoke Tests
 
+# NOTE: These tests require network access to the target URL (power.int.weaura.tech).
+# The default target is behind a Cloudflare WARP tunnel and not reachable from GitHub-hosted runners.
+# Use a self-hosted runner with VPN access, or run locally:
+#   ./scripts/smoke-test.sh https://power.int.weaura.tech admin admin123
+#   go test -tags=e2e ./tests/e2e/ -base-url=https://power.int.weaura.tech
+
 on:
   workflow_dispatch:
     inputs:
