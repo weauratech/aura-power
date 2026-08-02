@@ -17,6 +17,7 @@ import { Login } from './pages/Login';
 import { PendingApprovals } from './pages/PendingApprovals';
 import { Users } from './pages/Users';
 import { Overrides } from './pages/Overrides';
+import { AuditLog } from './pages/AuditLog';
 import { useAuth } from './hooks/useAuth';
 
 export function App() {
@@ -54,6 +55,7 @@ export function App() {
           <Route path="/metrics" element={<Metrics />} />
           <Route path="/policies" element={<Policies />} />
           <Route path="/overrides" element={<Overrides />} />
+          <Route path="/audit" element={<AuditLog />} />
           <Route path="/savings" element={<Savings />} />
           <Route path="/blocked" element={<Blocked />} />
           <Route path="/pending" element={<PendingApprovals />} />

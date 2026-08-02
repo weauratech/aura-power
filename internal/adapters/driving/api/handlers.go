@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	corev1 "k8s.io/api/core/v1"
@@ -77,6 +78,133 @@ func (s *Server) handleStatus(c *gin.Context) {
 		"divergent":       divergent,
 		"activePolicies":  len(policies.Items),
 		"activeOverrides": activeOverrides,
+	})
+}
+
+func (s *Server) handleDashboard(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	var targets v1alpha1.PowerTargetList
+	if err := s.client.List(ctx, &targets); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	var policies v1alpha1.PowerPolicyList
+	_ = s.client.List(ctx, &policies)
+
+	var overrides v1alpha1.PowerOverrideList
+	_ = s.client.List(ctx, &overrides)
+
+	var events v1alpha1.PowerAuditEventList
+	_ = s.client.List(ctx, &events)
+
+	// Compute stats
+	var poweredOnD, poweredOffD, blockedD, divergentD, governed int
+	var totalCPUSaved, totalMemSaved, totalCostSaved float64
+	for _, t := range targets.Items {
+		if t.Status.Managed {
+			governed++
+		}
+		switch {
+		case t.Status.Blocked:
+			blockedD++
+		case t.Status.Divergent:
+			divergentD++
+		case t.Status.ObservedState.PowerState == "off":
+			poweredOffD++
+		default:
+			poweredOnD++
+		}
+		if t.Status.Savings != nil {
+			totalCPUSaved += t.Status.Savings.CPUHoursSaved
+			totalMemSaved += t.Status.Savings.MemoryGiBHours
+			totalCostSaved += t.Status.Savings.EstimatedCost
+		}
+	}
+
+	// Efficiency: governed / total
+	total := len(targets.Items)
+	efficiency := 0.0
+	if total > 0 {
+		efficiency = float64(governed) / float64(total) * 100
+	}
+
+	// Recent events (last 10)
+	eventItems := events.Items
+	sort.Slice(eventItems, func(i, j int) bool {
+		return eventItems[i].CreationTimestamp.After(eventItems[j].CreationTimestamp.Time)
+	})
+	recentLimit := 10
+	if len(eventItems) < recentLimit {
+		recentLimit = len(eventItems)
+	}
+	recentEvents := make([]gin.H, 0, recentLimit)
+	for _, e := range eventItems[:recentLimit] {
+		recentEvents = append(recentEvents, gin.H{
+			"timestamp": e.CreationTimestamp.Time,
+			"action":    e.Spec.Action,
+			"target":    e.Spec.Target,
+			"result":    e.Spec.Result,
+			"reason":    e.Spec.Reason,
+			"ruleName":  e.Spec.RuleName,
+		})
+	}
+
+	// Next transitions: policies with active windows, compute next transition time
+	now := time.Now()
+	type transition struct {
+		Policy    string `json:"policy"`
+		State     string `json:"state"`
+		Time      string `json:"time"`
+		Namespace string `json:"namespace"`
+	}
+	var nextTransitions []transition
+	for _, p := range policies.Items {
+		for _, w := range p.Spec.Schedule.Windows {
+			// Simple: show next occurrence based on window end/start
+			if w.Start != "" && w.End != "" {
+				nextTransitions = append(nextTransitions, transition{
+					Policy:    p.Name,
+					State:     p.Spec.Schedule.DesiredState,
+					Time:      w.End,
+					Namespace: p.Namespace,
+				})
+			}
+		}
+	}
+	if len(nextTransitions) > 5 {
+		nextTransitions = nextTransitions[:5]
+	}
+
+	// Active overrides count
+	activeOvr := 0
+	for _, o := range overrides.Items {
+		if o.Status.Phase == "Active" {
+			activeOvr++
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"summary": gin.H{
+			"totalTargets":    total,
+			"poweredOn":       poweredOnD,
+			"poweredOff":      poweredOffD,
+			"blocked":         blockedD,
+			"divergent":       divergentD,
+			"governed":        governed,
+			"activePolicies":  len(policies.Items),
+			"activeOverrides": activeOvr,
+		},
+		"efficiency":      efficiency,
+		"savings": gin.H{
+			"cpuHours":      totalCPUSaved,
+			"memoryGiBHours": totalMemSaved,
+			"estimatedCost": totalCostSaved,
+		},
+		"recentEvents":    recentEvents,
+		"nextTransitions": nextTransitions,
+		"generatedAt":     now,
 	})
 }
 

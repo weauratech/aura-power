@@ -92,6 +92,7 @@ func (s *Server) setupRoutes() {
 	}
 	{
 		api.GET("/status", s.handleStatus)
+		api.GET("/dashboard", s.handleDashboard)
 		api.GET("/discover", s.handleDiscover)
 		api.GET("/targets", s.handleListTargets)
 		api.GET("/targets/:namespace/:name/explain", s.handleExplainTarget)

@@ -114,7 +114,7 @@ export function useAuditEvents(targetNamespace?: string, targetName?: string) {
   if (targetName) params.set('targetName', targetName);
   const query = params.toString() ? `?${params.toString()}` : '';
 
-  return useQuery<{ events: AuditEvent[]; count: number }>({
+  return useQuery<{ events: AuditEvent[]; count: number; total: number }>({
     queryKey: ['audit', targetNamespace, targetName],
     queryFn: () => fetchJSON(`/audit${query}`),
     refetchInterval: 15000,
