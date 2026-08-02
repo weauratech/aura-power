@@ -2,11 +2,22 @@ package api
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/weauratech/aura-power/internal/adapters/driven/auth"
 )
+
+// isSecureRequest returns true if the request arrived over HTTPS
+// (either directly or via a reverse proxy setting X-Forwarded-Proto).
+func isSecureRequest(c *gin.Context) bool {
+	if c.Request.TLS != nil {
+		return true
+	}
+	proto := c.GetHeader("X-Forwarded-Proto")
+	return strings.EqualFold(proto, "https")
+}
 
 // AuthHandlers holds auth-related HTTP handlers.
 type AuthHandlers struct {
@@ -81,12 +92,13 @@ func (h *AuthHandlers) handleLogin(c *gin.Context) {
 	}
 
 	// Set HttpOnly cookie for browser-based access (SPA)
+	secure := isSecureRequest(c)
 	maxAge := int(h.jwtService.AccessTokenTTL().Seconds())
-	c.SetSameSite(http.SameSiteStrictMode)
-	c.SetCookie("aura_session", tokens.AccessToken, maxAge, "/", "", false, true)
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie("aura_session", tokens.AccessToken, maxAge, "/", "", secure, true)
 	// Set refresh token in a separate long-lived cookie
 	refreshMaxAge := int(h.jwtService.RefreshTokenTTL().Seconds())
-	c.SetCookie("aura_refresh", tokens.RefreshToken, refreshMaxAge, "/api/v1/auth", "", false, true)
+	c.SetCookie("aura_refresh", tokens.RefreshToken, refreshMaxAge, "/api/v1/auth", "", secure, true)
 
 	// Also return JSON body (for CLI and programmatic access)
 	c.JSON(http.StatusOK, tokens)
@@ -126,20 +138,22 @@ func (h *AuthHandlers) handleRefresh(c *gin.Context) {
 	}
 
 	// Update cookies
+	secure := isSecureRequest(c)
 	maxAge := int(h.jwtService.AccessTokenTTL().Seconds())
-	c.SetSameSite(http.SameSiteStrictMode)
-	c.SetCookie("aura_session", tokens.AccessToken, maxAge, "/", "", false, true)
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie("aura_session", tokens.AccessToken, maxAge, "/", "", secure, true)
 	refreshMaxAge := int(h.jwtService.RefreshTokenTTL().Seconds())
-	c.SetCookie("aura_refresh", tokens.RefreshToken, refreshMaxAge, "/api/v1/auth", "", false, true)
+	c.SetCookie("aura_refresh", tokens.RefreshToken, refreshMaxAge, "/api/v1/auth", "", secure, true)
 
 	c.JSON(http.StatusOK, tokens)
 }
 
 func (h *AuthHandlers) handleLogout(c *gin.Context) {
 	// Clear session cookies
-	c.SetSameSite(http.SameSiteStrictMode)
-	c.SetCookie("aura_session", "", -1, "/", "", false, true)
-	c.SetCookie("aura_refresh", "", -1, "/api/v1/auth", "", false, true)
+	secure := isSecureRequest(c)
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie("aura_session", "", -1, "/", "", secure, true)
+	c.SetCookie("aura_refresh", "", -1, "/api/v1/auth", "", secure, true)
 	c.JSON(http.StatusOK, gin.H{"message": "logged out"})
 }
 

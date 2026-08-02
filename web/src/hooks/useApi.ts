@@ -15,6 +15,10 @@ async function fetchJSON<T>(path: string): Promise<T> {
     }
     throw new Error(friendlyError('missing authorization'));
   }
+  const contentType = res.headers.get('content-type') || '';
+  if (!contentType.includes('application/json')) {
+    throw new Error('Server returned an unexpected response. Please reload.');
+  }
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
     throw new Error(friendlyError(data.error || `Request failed (${res.status})`));

@@ -1,5 +1,7 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
-import { Spinner, Flex, Text } from '@chakra-ui/react';
+import Box from '@mui/material/Box';
+import CircularProgress from '@mui/material/CircularProgress';
+import Typography from '@mui/material/Typography';
 import { Layout } from './components/Layout';
 import { Dashboard } from './pages/Dashboard';
 import { Targets } from './pages/Targets';
@@ -14,6 +16,7 @@ import { Schedule } from './pages/Schedule';
 import { Login } from './pages/Login';
 import { PendingApprovals } from './pages/PendingApprovals';
 import { Users } from './pages/Users';
+import { Overrides } from './pages/Overrides';
 import { useAuth } from './hooks/useAuth';
 
 export function App() {
@@ -21,14 +24,13 @@ export function App() {
 
   if (isLoading) {
     return (
-      <Flex minH="100vh" justify="center" align="center" bg="gray.50">
-        <Spinner size="lg" color="blue.500" />
-        <Text ml={3} color="gray.500">Loading...</Text>
-      </Flex>
+      <Box sx={{ minHeight: '100vh', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 2 }}>
+        <CircularProgress size={24} />
+        <Typography color="text.secondary">Loading...</Typography>
+      </Box>
     );
   }
 
-  // Auth enabled but not logged in
   if (authEnabled && !isAuthenticated) {
     return <Login onLogin={() => window.location.reload()} />;
   }
@@ -51,6 +53,7 @@ export function App() {
           <Route path="/schedule" element={<Schedule />} />
           <Route path="/metrics" element={<Metrics />} />
           <Route path="/policies" element={<Policies />} />
+          <Route path="/overrides" element={<Overrides />} />
           <Route path="/savings" element={<Savings />} />
           <Route path="/blocked" element={<Blocked />} />
           <Route path="/pending" element={<PendingApprovals />} />

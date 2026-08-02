@@ -1,238 +1,173 @@
-import { Heading, Card, CardBody, SimpleGrid, Text, Badge, Divider, Spinner, Alert, AlertIcon, List, ListItem, VStack, HStack, Box, Code, Flex } from '@chakra-ui/react';
 import { useParams } from 'react-router-dom';
-import { useExplainTarget, useAuditEvents } from '../hooks/useApi';
-import { StatusBadge } from '../components/StatusBadge';
+import Box from '@mui/material/Box';
+import Typography from '@mui/material/Typography';
+import Card from '@mui/material/Card';
+import CardContent from '@mui/material/CardContent';
+import Grid from '@mui/material/Grid';
+import Stack from '@mui/material/Stack';
+import Skeleton from '@mui/material/Skeleton';
+import Alert from '@mui/material/Alert';
+import Chip from '@mui/material/Chip';
+import Table from '@mui/material/Table';
+import TableBody from '@mui/material/TableBody';
+import TableCell from '@mui/material/TableCell';
+import TableRow from '@mui/material/TableRow';
+import { StatusChip } from '../design-system/react';
+import { PowerRing } from '../design-system/react';
+import type { WorkloadState } from '../design-system/react/PowerRing';
+import { useTargets, useExplainTarget } from '../hooks/useApi';
 
-interface ExplainResponse {
-  ref: { namespace: string; name: string; kind: string };
-  effectiveState: string;
-  observedState: { powerState: string; replicas: number };
-  winningRule?: { kind: string; name: string; priority: number; description?: string };
-  suppressedRules?: Array<{ kind: string; name: string; priority: number }>;
-  blocked: boolean;
-  blockReasons?: Array<{ type: string; message: string; waivable: boolean }>;
-  snapshot?: { available: boolean; replicaCount?: number; resources?: { cpuMillicores: number; memoryMiB: number } };
-  ownership?: Array<{ type: string; optedIn: boolean }>;
-  savings?: { cpuHoursSaved: number; estimatedCost: number };
-  lastTransition?: string;
+function mapState(status: { observedState: { powerState: string }; blocked: boolean; divergent: boolean }): WorkloadState {
+  if (status.blocked) return 'failed';
+  if (status.divergent) return 'scheduled';
+  return status.observedState.powerState === 'on' ? 'running' : 'asleep';
 }
 
 export function TargetDetail() {
-  const { namespace, name } = useParams<{ namespace: string; name: string }>();
-  const { data, isLoading, error } = useExplainTarget(namespace ?? '', name ?? '');
-  const { data: auditData } = useAuditEvents(namespace, name);
+  const { namespace = '', name = '' } = useParams();
+  const { data: targetsData } = useTargets(namespace);
+  const { isLoading } = useExplainTarget(namespace, name);
 
-  if (isLoading) return <Flex justify="center" align="center" py={20}><Spinner size="xl" color="blue.500" /><Text ml={3} color="gray.500">Loading target details...</Text></Flex>;
-  if (error) return <Alert status="error" borderRadius="lg"><AlertIcon />Failed to load target details</Alert>;
-  if (!data) return <Alert status="warning" borderRadius="lg"><AlertIcon />Target not found</Alert>;
+  const target = targetsData?.targets?.find(
+    (t) => t.spec.targetRef.name === name && t.spec.targetRef.namespace === namespace
+  );
 
-  const target = data as ExplainResponse;
-  const recentEvents = (auditData?.events ?? []).slice(0, 5);
+  if (isLoading) return <Skeleton variant="rounded" height={400} />;
+
+  if (!target) {
+    return <Alert severity="warning">Target not found: {namespace}/{name}</Alert>;
+  }
+
+  const state = mapState(target.status);
 
   return (
-    <VStack spacing={6} align="stretch">
-      {/* Hero section */}
-      <Card shadow="sm" borderRadius="lg" bg="white">
-        <CardBody>
-          <HStack justify="space-between" align="start">
-            <Box>
-              <Heading size="lg" color="gray.800">{name}</Heading>
-              <HStack spacing={3} mt={2}>
-                <Text color="gray.500" fontSize="sm">{namespace}</Text>
-                <Badge variant="subtle" colorScheme="gray" fontSize="xs">{target.ref?.kind}</Badge>
-              </HStack>
-            </Box>
-            <Box>
-              <StatusBadge state={target.effectiveState ?? 'unknown'} />
-            </Box>
-          </HStack>
-        </CardBody>
-      </Card>
+    <Box>
+      <Stack direction="row" alignItems="center" spacing={3} sx={{ mb: 5 }}>
+        <PowerRing value={state === 'running' ? 1 : 0} state={state} size={48} />
+        <Box>
+          <Typography variant="overline" color="text.secondary">{namespace} / {target.spec.targetRef.kind}</Typography>
+          <Typography variant="h2">{name}</Typography>
+        </Box>
+        <Box sx={{ ml: 'auto' }}>
+          <StatusChip state={state} />
+        </Box>
+      </Stack>
 
-      {/* Blocked alert */}
-      {target.blocked && (
-        <Alert status="error" borderRadius="lg" data-testid="target-blocked-alert">
-          <AlertIcon />
-          <Box>
-            <Text fontWeight="bold" color="gray.700">This workload is blocked</Text>
-            <Text fontSize="sm" color="gray.600">Power management cannot act on this workload due to guardrail violations.</Text>
-          </Box>
-        </Alert>
-      )}
-
-      {/* Managed by */}
-      {target.winningRule && !target.blocked && (
-        <Alert status="info" borderRadius="lg" variant="left-accent" data-testid="target-managed-by">
-          <AlertIcon />
-          <Box>
-            <Text fontWeight="medium" color="gray.700">Managed by: {target.winningRule.name}</Text>
-            {target.winningRule.description && <Text fontSize="sm" color="gray.600">{target.winningRule.description}</Text>}
-            <Text fontSize="xs" color="gray.500">Priority: {target.winningRule.priority} | Kind: {target.winningRule.kind}</Text>
-          </Box>
-        </Alert>
-      )}
-
-      <SimpleGrid columns={{ base: 1, md: 2 }} spacing={6}>
-        {/* State Card */}
-        <Card shadow="sm" borderRadius="lg">
-          <CardBody>
-            <Heading size="sm" mb={4} color="gray.700">State</Heading>
-            <SimpleGrid columns={2} spacing={3}>
-              <Text fontWeight="semibold" fontSize="sm" color="gray.600">Effective:</Text>
-              <StatusBadge state={target.effectiveState ?? 'unknown'} />
-              <Text fontWeight="semibold" fontSize="sm" color="gray.600">Observed:</Text>
-              <StatusBadge state={target.observedState?.powerState ?? 'unknown'} />
-              <Text fontWeight="semibold" fontSize="sm" color="gray.600">Blocked:</Text>
-              <Text fontSize="sm" color={target.blocked ? 'red.500' : 'gray.700'}>{target.blocked ? 'Yes' : 'No'}</Text>
-            </SimpleGrid>
-          </CardBody>
-        </Card>
-
-        {/* Block Reasons */}
-        {target.blockReasons && target.blockReasons.length > 0 && (
-          <Card shadow="sm" borderRadius="lg" borderLeftWidth="3px" borderLeftColor="red.400">
-            <CardBody>
-              <Heading size="sm" mb={4} color="red.600">Block Reasons</Heading>
-              <List spacing={3}>
-                {target.blockReasons.map((b, i) => (
-                  <ListItem key={i}>
-                    <HStack align="start">
-                      <Badge variant="subtle" colorScheme={b.waivable ? 'yellow' : 'red'} mt={0.5}>
-                        {b.type}
-                      </Badge>
-                      <VStack align="start" spacing={0}>
-                        <Text fontSize="sm" color="gray.700">{b.message}</Text>
-                        {b.waivable && (
-                          <Text fontSize="xs" color="orange.600">
-                            Waivable — add <Code fontSize="xs">aura.sh/power-eligible=true</Code> to unblock
-                          </Text>
-                        )}
-                      </VStack>
-                    </HStack>
-                  </ListItem>
-                ))}
-              </List>
-            </CardBody>
+      <Grid container spacing={4}>
+        <Grid item xs={12} md={6}>
+          <Card>
+            <CardContent>
+              <Typography variant="h5" sx={{ mb: 3 }}>Status</Typography>
+              <Table size="small">
+                <TableBody>
+                  <TableRow>
+                    <TableCell><Typography variant="body2" color="text.secondary">Observed State</Typography></TableCell>
+                    <TableCell><Typography variant="code">{target.status.observedState.powerState}</Typography></TableCell>
+                  </TableRow>
+                  <TableRow>
+                    <TableCell><Typography variant="body2" color="text.secondary">Desired State</Typography></TableCell>
+                    <TableCell><Typography variant="code">{target.status.desiredState || '—'}</Typography></TableCell>
+                  </TableRow>
+                  <TableRow>
+                    <TableCell><Typography variant="body2" color="text.secondary">Replicas</Typography></TableCell>
+                    <TableCell><Typography variant="code">{target.status.observedState.replicas}</Typography></TableCell>
+                  </TableRow>
+                  <TableRow>
+                    <TableCell><Typography variant="body2" color="text.secondary">Managed</Typography></TableCell>
+                    <TableCell>{target.status.managed ? <Chip label="Yes" size="small" color="success" /> : <Chip label="No" size="small" />}</TableCell>
+                  </TableRow>
+                  <TableRow>
+                    <TableCell><Typography variant="body2" color="text.secondary">Divergent</Typography></TableCell>
+                    <TableCell>{target.status.divergent ? <Chip label="Yes" size="small" color="warning" /> : <Chip label="No" size="small" />}</TableCell>
+                  </TableRow>
+                  <TableRow>
+                    <TableCell><Typography variant="body2" color="text.secondary">Blocked</Typography></TableCell>
+                    <TableCell>{target.status.blocked ? <Chip label="Yes" size="small" color="error" /> : <Chip label="No" size="small" />}</TableCell>
+                  </TableRow>
+                </TableBody>
+              </Table>
+            </CardContent>
           </Card>
-        )}
+        </Grid>
 
-        {/* Snapshot */}
-        {target.snapshot && target.snapshot.available && (
-          <Card shadow="sm" borderRadius="lg">
-            <CardBody>
-              <Heading size="sm" mb={4} color="gray.700">Snapshot</Heading>
-              <VStack align="stretch" spacing={2}>
-                {target.snapshot.replicaCount != null && (
-                  <HStack>
-                    <Text fontSize="sm" fontWeight="semibold" color="gray.600">Replica Count:</Text>
-                    {target.snapshot.replicaCount === 0 ? (
-                      <Badge variant="subtle" colorScheme="orange">0 (powered off)</Badge>
-                    ) : (
-                      <Text fontSize="sm" color="gray.700">{target.snapshot.replicaCount}</Text>
-                    )}
-                  </HStack>
-                )}
-                {target.snapshot.resources && (
-                  <>
-                    {target.snapshot.resources.cpuMillicores > 0 && (
-                      <HStack>
-                        <Text fontSize="sm" fontWeight="semibold" color="gray.600">CPU:</Text>
-                        <Text fontSize="sm" color="gray.700">{target.snapshot.resources.cpuMillicores}m</Text>
-                      </HStack>
-                    )}
-                    {target.snapshot.resources.memoryMiB > 0 && (
-                      <HStack>
-                        <Text fontSize="sm" fontWeight="semibold" color="gray.600">Memory:</Text>
-                        <Text fontSize="sm" color="gray.700">{target.snapshot.resources.memoryMiB}Mi</Text>
-                      </HStack>
-                    )}
-                  </>
-                )}
-              </VStack>
-            </CardBody>
+        <Grid item xs={12} md={6}>
+          <Card>
+            <CardContent>
+              <Typography variant="h5" sx={{ mb: 3 }}>Decision</Typography>
+              {target.status.winningRule ? (
+                <Table size="small">
+                  <TableBody>
+                    <TableRow>
+                      <TableCell><Typography variant="body2" color="text.secondary">Winning Rule</Typography></TableCell>
+                      <TableCell><Typography variant="code">{target.status.winningRule.name}</Typography></TableCell>
+                    </TableRow>
+                    <TableRow>
+                      <TableCell><Typography variant="body2" color="text.secondary">Kind</Typography></TableCell>
+                      <TableCell><Chip label={target.status.winningRule.kind} size="small" /></TableCell>
+                    </TableRow>
+                    <TableRow>
+                      <TableCell><Typography variant="body2" color="text.secondary">Priority</Typography></TableCell>
+                      <TableCell><Typography variant="code">{target.status.winningRule.priority}</Typography></TableCell>
+                    </TableRow>
+                  </TableBody>
+                </Table>
+              ) : (
+                <Typography variant="body2" color="text.secondary">No governing rule</Typography>
+              )}
+            </CardContent>
           </Card>
-        )}
+        </Grid>
 
-        {/* Savings */}
-        {target.savings && (
-          <Card shadow="sm" borderRadius="lg" borderLeftWidth="3px" borderLeftColor="green.400">
-            <CardBody>
-              <Heading size="sm" mb={4} color="gray.700">Savings</Heading>
-              <VStack align="stretch" spacing={2}>
-                <HStack>
-                  <Text fontSize="sm" fontWeight="semibold" color="gray.600">CPU Hours:</Text>
-                  <Text fontSize="sm" color="gray.700">{target.savings.cpuHoursSaved.toFixed(1)}</Text>
-                </HStack>
-                <HStack>
-                  <Text fontSize="sm" fontWeight="semibold" color="gray.600">Est. Cost:</Text>
-                  <Text fontSize="sm" fontWeight="bold" color="green.600">${target.savings.estimatedCost.toFixed(2)}</Text>
-                </HStack>
-              </VStack>
-            </CardBody>
-          </Card>
-        )}
-
-        {/* Ownership */}
-        {target.ownership && target.ownership.length > 0 && (
-          <Card shadow="sm" borderRadius="lg">
-            <CardBody>
-              <Heading size="sm" mb={4} color="gray.700">Ownership</Heading>
-              <List spacing={2}>
-                {target.ownership.map((o, i) => (
-                  <ListItem key={i}>
-                    <HStack>
-                      <Text fontSize="sm" color="gray.700">{o.type}</Text>
-                      <Badge variant="subtle" colorScheme={o.optedIn ? 'green' : 'gray'} fontSize="xs">
-                        {o.optedIn ? 'opted in' : 'not opted in'}
-                      </Badge>
-                    </HStack>
-                  </ListItem>
-                ))}
-              </List>
-            </CardBody>
-          </Card>
-        )}
-      </SimpleGrid>
-
-      {/* Recent Events */}
-      {recentEvents.length > 0 && (
-        <>
-          <Divider />
-          <Card shadow="sm" borderRadius="lg" data-testid="target-recent-events">
-            <CardBody>
-              <Heading size="sm" mb={4} color="gray.700">Recent Events</Heading>
-              <VStack align="stretch" spacing={3}>
-                {recentEvents.map((evt, i) => (
-                  <Box key={i} p={3} bg="gray.50" borderRadius="md" borderLeftWidth="3px" borderLeftColor={evt.spec.result === 'success' ? 'green.400' : 'red.400'}>
-                    <HStack justify="space-between" mb={1}>
-                      <HStack spacing={2}>
-                        <Badge variant="subtle" colorScheme={evt.spec.result === 'success' ? 'green' : 'red'} fontSize="xs">
-                          {evt.spec.action}
-                        </Badge>
-                        {evt.spec.ruleName && <Text fontSize="xs" color="gray.500">rule: {evt.spec.ruleName}</Text>}
-                      </HStack>
-                      <Text fontSize="xs" color="gray.400">
-                        {new Date(evt.spec.timestamp).toLocaleString()}
-                      </Text>
-                    </HStack>
-                    <Text fontSize="sm" color="gray.700">{evt.spec.reason}</Text>
-                    <Text fontSize="xs" color="gray.500">Actor: {evt.spec.actor} | Result: {evt.spec.result}</Text>
+        {target.status.savings && (
+          <Grid item xs={12} md={6}>
+            <Card>
+              <CardContent>
+                <Typography variant="h5" sx={{ mb: 3 }}>Savings</Typography>
+                <Stack direction="row" spacing={6}>
+                  <Box>
+                    <Typography variant="overline" color="text.secondary" sx={{ display: 'block' }}>CPU Hours</Typography>
+                    <Typography variant="metricSm">{target.status.savings.cpuHoursSaved.toFixed(1)}</Typography>
                   </Box>
-                ))}
-              </VStack>
-            </CardBody>
-          </Card>
-        </>
-      )}
+                  <Box>
+                    <Typography variant="overline" color="text.secondary" sx={{ display: 'block' }}>Memory GiB-h</Typography>
+                    <Typography variant="metricSm">{target.status.savings.memoryGiBHoursSaved.toFixed(1)}</Typography>
+                  </Box>
+                  <Box>
+                    <Typography variant="overline" color="text.secondary" sx={{ display: 'block' }}>Cost Saved</Typography>
+                    <Typography variant="metricSm">${target.status.savings.estimatedCost.toFixed(2)}</Typography>
+                  </Box>
+                </Stack>
+              </CardContent>
+            </Card>
+          </Grid>
+        )}
 
-      {target.lastTransition && (
-        <>
-          <Divider />
-          <Text fontSize="sm" color="gray.500">
-            Last transition: {new Date(target.lastTransition).toLocaleString()}
-          </Text>
-        </>
-      )}
-    </VStack>
+        {target.status.snapshot?.available && (
+          <Grid item xs={12} md={6}>
+            <Card>
+              <CardContent>
+                <Typography variant="h5" sx={{ mb: 3 }}>Snapshot</Typography>
+                <Table size="small">
+                  <TableBody>
+                    <TableRow>
+                      <TableCell><Typography variant="body2" color="text.secondary">Replicas</Typography></TableCell>
+                      <TableCell><Typography variant="code">{target.status.snapshot.replicaCount}</Typography></TableCell>
+                    </TableRow>
+                    <TableRow>
+                      <TableCell><Typography variant="body2" color="text.secondary">CPU</Typography></TableCell>
+                      <TableCell><Typography variant="code">{target.status.snapshot.resources.cpuMillicores}m</Typography></TableCell>
+                    </TableRow>
+                    <TableRow>
+                      <TableCell><Typography variant="body2" color="text.secondary">Memory</Typography></TableCell>
+                      <TableCell><Typography variant="code">{target.status.snapshot.resources.memoryMiB} MiB</Typography></TableCell>
+                    </TableRow>
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          </Grid>
+        )}
+      </Grid>
+    </Box>
   );
 }

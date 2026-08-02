@@ -1,6 +1,13 @@
-import { Box, Button, Card, CardBody, FormControl, FormLabel, Heading, Input, Text, VStack, Alert, AlertIcon, Flex } from '@chakra-ui/react';
 import { useState } from 'react';
-import { friendlyError } from '../utils/errors';
+import Box from '@mui/material/Box';
+import Card from '@mui/material/Card';
+import CardContent from '@mui/material/CardContent';
+import TextField from '@mui/material/TextField';
+import Button from '@mui/material/Button';
+import Typography from '@mui/material/Typography';
+import Alert from '@mui/material/Alert';
+import Stack from '@mui/material/Stack';
+import { PowerRing } from '../design-system/react';
 
 interface LoginProps {
   onLogin: () => void;
@@ -16,7 +23,6 @@ export function Login({ onLogin }: LoginProps) {
     e.preventDefault();
     setError('');
     setLoading(true);
-
     try {
       const res = await fetch('/api/v1/auth/login', {
         method: 'POST',
@@ -24,55 +30,61 @@ export function Login({ onLogin }: LoginProps) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password }),
       });
-
       if (!res.ok) {
-        const data = await res.json();
-        setError(friendlyError(data.error || 'Login failed'));
-        return;
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Authentication failed');
       }
-
-      // Cookie is set automatically by the server (HttpOnly)
-      // No need to store token in localStorage
       onLogin();
-    } catch {
-      setError(friendlyError('Connection failed'));
+    } catch (err) {
+      setError((err as Error).message);
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <Flex minH="100vh" align="center" justify="center" bg="gray.50">
-      <Card shadow="lg" borderRadius="lg" w="100%" maxW="400px" mx={4}>
-        <CardBody p={8}>
-          <VStack spacing={6} align="stretch">
-            <Box textAlign="center">
-              <Heading size="lg" color="gray.800">Aura Power</Heading>
-              <Text color="gray.500" fontSize="sm" mt={1}>Sign in to continue</Text>
-            </Box>
+    <Box sx={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: 'background.default', p: 4 }}>
+      <Card sx={{ width: '100%', maxWidth: 400 }}>
+        <CardContent sx={{ p: 6 }}>
+          <Stack alignItems="center" spacing={2} sx={{ mb: 5 }}>
+            <PowerRing value={0.5} state="running" size={40} />
+            <Typography variant="h3">Aura Power</Typography>
+            <Typography variant="body2" color="text.secondary">Sign in to continue</Typography>
+          </Stack>
 
-            {error && (
-              <Alert status="error" borderRadius="md" fontSize="sm">
-                <AlertIcon />{error}
-              </Alert>
-            )}
+          {error && <Alert severity="error" sx={{ mb: 3 }}>{error}</Alert>}
 
-            <form onSubmit={handleSubmit}>
-              <VStack spacing={4}>
-                <FormControl isRequired>
-                  <FormLabel fontSize="sm">Username</FormLabel>
-                  <Input value={username} onChange={e => setUsername(e.target.value)} autoFocus data-testid="login-username" />
-                </FormControl>
-                <FormControl isRequired>
-                  <FormLabel fontSize="sm">Password</FormLabel>
-                  <Input type="password" value={password} onChange={e => setPassword(e.target.value)} data-testid="login-password" />
-                </FormControl>
-                <Button type="submit" colorScheme="blue" w="100%" isLoading={loading} data-testid="login-submit">Sign in</Button>
-              </VStack>
-            </form>
-          </VStack>
-        </CardBody>
+          <form onSubmit={handleSubmit}>
+            <Stack spacing={3}>
+              <TextField
+                label="Username"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                fullWidth
+                autoFocus
+                autoComplete="username"
+              />
+              <TextField
+                label="Password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                fullWidth
+                autoComplete="current-password"
+              />
+              <Button
+                type="submit"
+                variant="contained"
+                fullWidth
+                disabled={loading || !username || !password}
+                sx={{ minHeight: 44 }}
+              >
+                {loading ? 'Signing in...' : 'Sign in'}
+              </Button>
+            </Stack>
+          </form>
+        </CardContent>
       </Card>
-    </Flex>
+    </Box>
   );
 }
