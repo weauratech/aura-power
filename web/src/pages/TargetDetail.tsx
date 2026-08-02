@@ -54,10 +54,10 @@ export function TargetDetail() {
           <Typography variant="h2">{name}</Typography>
         </Box>
         <Box sx={{ ml: 'auto', display: 'flex', alignItems: 'center', gap: 2 }}>
-          <Button variant="outlined" startIcon={<ScheduleIcon />} onClick={() => setDrawerOpen(true)}>
+          <StatusChip state={state} />
+          <Button variant="contained" startIcon={<ScheduleIcon />} onClick={() => setDrawerOpen(true)}>
             Schedule Workload
           </Button>
-          <StatusChip state={state} />
         </Box>
       </Stack>
 
