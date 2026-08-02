@@ -38,7 +38,7 @@ jobs:
         with:
           context: .
           file: Dockerfile.server
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: |
             ${{ env.IMAGE_SERVER }}:${{ steps.version.outputs.tag }}
@@ -51,7 +51,7 @@ jobs:
         with:
           context: .
           file: Dockerfile.controller
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: |
             ${{ env.IMAGE_CONTROLLER }}:${{ steps.version.outputs.tag }}
