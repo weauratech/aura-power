@@ -15,69 +15,115 @@ env:
   IMAGE_CONTROLLER: ghcr.io/weauratech/aura-power-controller
 
 jobs:
-  docker:
+  docker-amd64:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
-
       - uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Extract version
         id: version
         run: echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-
-      - name: Build and push server
+      - name: Build server (amd64)
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile.server
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           push: true
-          tags: |
-            ${{ env.IMAGE_SERVER }}:${{ steps.version.outputs.tag }}
-            ${{ env.IMAGE_SERVER }}:latest
-          labels: |
-            org.opencontainers.image.version=${{ steps.version.outputs.tag }}
-
-      - name: Build and push controller
+          tags: ${{ env.IMAGE_SERVER }}:${{ steps.version.outputs.tag }}-amd64
+          cache-from: type=gha,scope=server-amd64
+          cache-to: type=gha,mode=max,scope=server-amd64
+      - name: Build controller (amd64)
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile.controller
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           push: true
-          tags: |
-            ${{ env.IMAGE_CONTROLLER }}:${{ steps.version.outputs.tag }}
-            ${{ env.IMAGE_CONTROLLER }}:latest
-          labels: |
-            org.opencontainers.image.version=${{ steps.version.outputs.tag }}
+          tags: ${{ env.IMAGE_CONTROLLER }}:${{ steps.version.outputs.tag }}-amd64
+          cache-from: type=gha,scope=controller-amd64
+          cache-to: type=gha,mode=max,scope=controller-amd64
 
-      - name: Install Cosign
-        uses: sigstore/cosign-installer@v3
+  docker-arm64:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Extract version
+        id: version
+        run: echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+      - name: Build server (arm64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.server
+          platforms: linux/arm64
+          push: true
+          tags: ${{ env.IMAGE_SERVER }}:${{ steps.version.outputs.tag }}-arm64
+          cache-from: type=gha,scope=server-arm64
+          cache-to: type=gha,mode=max,scope=server-arm64
+      - name: Build controller (arm64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.controller
+          platforms: linux/arm64
+          push: true
+          tags: ${{ env.IMAGE_CONTROLLER }}:${{ steps.version.outputs.tag }}-arm64
+          cache-from: type=gha,scope=controller-arm64
+          cache-to: type=gha,mode=max,scope=controller-arm64
 
+  docker-manifest:
+    runs-on: ubuntu-latest
+    needs: [docker-amd64, docker-arm64]
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Extract version
+        id: version
+        run: echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+      - name: Create multi-arch manifests
+        run: |
+          TAG=${{ steps.version.outputs.tag }}
+          # Server
+          docker buildx imagetools create -t ${{ env.IMAGE_SERVER }}:${TAG} -t ${{ env.IMAGE_SERVER }}:latest \
+            ${{ env.IMAGE_SERVER }}:${TAG}-amd64 \
+            ${{ env.IMAGE_SERVER }}:${TAG}-arm64
+          # Controller
+          docker buildx imagetools create -t ${{ env.IMAGE_CONTROLLER }}:${TAG} -t ${{ env.IMAGE_CONTROLLER }}:latest \
+            ${{ env.IMAGE_CONTROLLER }}:${TAG}-amd64 \
+            ${{ env.IMAGE_CONTROLLER }}:${TAG}-arm64
+
+  sign:
+    runs-on: ubuntu-latest
+    needs: docker-manifest
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: sigstore/cosign-installer@v3
+      - name: Extract version
+        id: version
+        run: echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
       - name: Sign images
         run: |
           cosign sign --yes ${{ env.IMAGE_SERVER }}:${{ steps.version.outputs.tag }}
           cosign sign --yes ${{ env.IMAGE_CONTROLLER }}:${{ steps.version.outputs.tag }}
-
-      - name: Generate SBOM
-        uses: anchore/sbom-action@v0
-        with:
-          image: ${{ env.IMAGE_SERVER }}:${{ steps.version.outputs.tag }}
-          artifact-name: sbom-server.spdx.json
-
-      - name: Generate SBOM (controller)
-        uses: anchore/sbom-action@v0
-        with:
-          image: ${{ env.IMAGE_CONTROLLER }}:${{ steps.version.outputs.tag }}
-          artifact-name: sbom-controller.spdx.json
 
   goreleaser:
     runs-on: ubuntu-latest
@@ -88,6 +134,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: Create panelassets placeholder
+        run: mkdir -p cmd/server/panelassets && echo '<html></html>' > cmd/server/panelassets/index.html
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: latest
@@ -97,18 +145,15 @@ jobs:
 
   helm:
     runs-on: ubuntu-latest
-    needs: docker
+    needs: docker-manifest
     steps:
       - uses: actions/checkout@v4
       - uses: azure/setup-helm@v4
-
       - name: Login to GHCR
         run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
-
       - name: Extract version
         id: version
         run: echo "tag=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
-
       - name: Package and push Helm chart
         run: |
           helm package charts/aura-power --version ${{ steps.version.outputs.tag }} --app-version ${{ steps.version.outputs.tag }}

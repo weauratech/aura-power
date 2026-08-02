@@ -73,7 +73,8 @@ export function StatusChip({ state, label, size = 'small' }: StatusChipProps) {
       sx={{
         color: fg, backgroundColor: bg, borderColor: border,
         fontWeight: 500,
-        '& .MuiChip-icon': { marginLeft: '4px', marginRight: '0px' },
+        pl: 1.5,
+        '& .MuiChip-icon': { marginLeft: 0, marginRight: '-2px' },
       }}
     />
   );
