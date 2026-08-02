@@ -47,18 +47,20 @@ export function TargetDetail() {
 
   return (
     <Box>
-      <Stack direction="row" alignItems="center" spacing={3} sx={{ mb: 5 }}>
-        <PowerRing value={state === 'running' ? 1 : 0} state={state} size={48} />
-        <Box>
-          <Typography variant="overline" color="text.secondary">{namespace} / {target.spec.targetRef.kind}</Typography>
-          <Typography variant="h2">{name}</Typography>
-        </Box>
-        <Box sx={{ ml: 'auto', display: 'flex', alignItems: 'center', gap: 2 }}>
-          <StatusChip state={state} />
-          <Button variant="contained" startIcon={<ScheduleIcon />} onClick={() => setDrawerOpen(true)}>
-            Schedule Workload
-          </Button>
-        </Box>
+      <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 5 }}>
+        <Stack direction="row" alignItems="center" spacing={3}>
+          <PowerRing value={state === 'running' ? 1 : 0} state={state} size={48} />
+          <Box>
+            <Typography variant="overline" color="text.secondary">{namespace} / {target.spec.targetRef.kind}</Typography>
+            <Stack direction="row" alignItems="center" spacing={2}>
+              <Typography variant="h4">{name}</Typography>
+              <StatusChip state={state} />
+            </Stack>
+          </Box>
+        </Stack>
+        <Button variant="contained" startIcon={<ScheduleIcon />} onClick={() => setDrawerOpen(true)}>
+          Schedule Workload
+        </Button>
       </Stack>
 
       <Grid container spacing={4}>
