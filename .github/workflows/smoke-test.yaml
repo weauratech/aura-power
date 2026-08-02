@@ -1,0 +1,72 @@
+name: Smoke Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: 'Target URL for smoke tests'
+        required: true
+        default: 'https://power.int.weaura.tech'
+      username:
+        description: 'Admin username'
+        required: true
+        default: 'admin'
+      password:
+        description: 'Admin password'
+        required: true
+        default: 'admin123'
+
+permissions:
+  contents: read
+
+jobs:
+  api-smoke:
+    name: API Smoke Tests (Go)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Create panelassets placeholder
+        run: mkdir -p cmd/server/panelassets && echo '<html></html>' > cmd/server/panelassets/index.html
+      - name: Run E2E API tests
+        run: |
+          go test -tags=e2e -v -count=1 -timeout=120s ./tests/e2e/ \
+            -base-url=${{ inputs.base_url }} \
+            -username=${{ inputs.username }} \
+            -password=${{ inputs.password }}
+
+  api-smoke-shell:
+    name: API Smoke Tests (Shell)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run shell smoke tests
+        run: ./scripts/smoke-test.sh ${{ inputs.base_url }} ${{ inputs.username }} ${{ inputs.password }}
+
+  frontend-smoke:
+    name: Frontend Smoke Tests (Playwright)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install dependencies
+        run: cd tests/e2e/playwright && npm ci
+      - name: Install Playwright browsers
+        run: cd tests/e2e/playwright && npx playwright install --with-deps chromium
+      - name: Run Playwright tests
+        run: cd tests/e2e/playwright && npx playwright test
+        env:
+          BASE_URL: ${{ inputs.base_url }}
+          ADMIN_USER: ${{ inputs.username }}
+          ADMIN_PASS: ${{ inputs.password }}
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: tests/e2e/playwright/playwright-report/
+          retention-days: 7
