@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -133,7 +134,24 @@ func main() {
 }
 
 func runAuditCleanup(ctx context.Context, recorder *kubernetes.AuditRecorder) {
-	ticker := time.NewTicker(6 * time.Hour)
+	retentionDays := 7
+	if v := os.Getenv("AUDIT_RETENTION_DAYS"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
+			retentionDays = parsed
+		}
+	}
+
+	cleanupInterval := 6 * time.Hour
+	if v := os.Getenv("AUDIT_CLEANUP_INTERVAL"); v != "" {
+		if parsed, err := time.ParseDuration(v); err == nil {
+			cleanupInterval = parsed
+		}
+	}
+
+	log := ctrl.Log.WithName("audit-cleanup")
+	log.Info("audit retention configured", "retentionDays", retentionDays, "cleanupInterval", cleanupInterval)
+
+	ticker := time.NewTicker(cleanupInterval)
 	defer ticker.Stop()
 
 	for {
@@ -141,11 +159,11 @@ func runAuditCleanup(ctx context.Context, recorder *kubernetes.AuditRecorder) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			deleted, err := recorder.CleanupExpired(ctx, 7)
+			deleted, err := recorder.CleanupExpired(ctx, retentionDays)
 			if err != nil {
-				ctrl.Log.WithName("audit-cleanup").Error(err, "cleanup failed")
+				log.Error(err, "cleanup failed")
 			} else if deleted > 0 {
-				ctrl.Log.WithName("audit-cleanup").Info("cleaned expired events", "deleted", deleted)
+				log.Info("cleaned expired events", "deleted", deleted, "olderThanDays", retentionDays)
 			}
 		}
 	}

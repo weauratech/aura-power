@@ -55,6 +55,8 @@ spec:
             - name: LEADER_ELECTION_ID
               value: {{ .Values.controller.leaderElection.id | quote }}
             {{- end }}
+            - name: AUDIT_RETENTION_DAYS
+              value: {{ .Values.controller.config.auditRetentionDays | default 7 | quote }}
             {{- with .Values.controller.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

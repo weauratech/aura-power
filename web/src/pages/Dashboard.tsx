@@ -18,6 +18,7 @@ import { PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, 
 import { PowerRing } from '../design-system/react';
 import { useQuery } from '@tanstack/react-query';
 import { useTargets } from '../hooks/useApi';
+import { useProviderStatus } from '../hooks/useProviderStatus';
 
 interface DashboardData {
   summary: {
@@ -80,6 +81,7 @@ function actionIcon(action: string): string {
 export function Dashboard() {
   const { data, isLoading, error } = useDashboard();
   const { data: targetsData } = useTargets();
+  const { metricsAvailable, costAvailable } = useProviderStatus();
   const theme = useTheme();
 
   // Namespace breakdown
@@ -134,6 +136,24 @@ export function Dashboard() {
             {summary.totalTargets} targets · {summary.governed} governed · {summary.activePolicies} policies active
           </Typography>
         </Box>
+      </Stack>
+
+      {/* Provider Status */}
+      <Stack direction="row" spacing={1.5} sx={{ mb: 3 }}>
+        <Chip
+          size="small"
+          variant="outlined"
+          label={metricsAvailable ? 'Prometheus connected' : 'Prometheus not configured'}
+          color={metricsAvailable ? 'success' : 'default'}
+          sx={{ height: 24, fontSize: 11 }}
+        />
+        <Chip
+          size="small"
+          variant="outlined"
+          label={costAvailable ? 'OpenCost connected' : 'OpenCost not configured'}
+          color={costAvailable ? 'success' : 'default'}
+          sx={{ height: 24, fontSize: 11 }}
+        />
       </Stack>
 
       {/* Discovery Mode Banner */}
