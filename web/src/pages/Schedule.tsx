@@ -21,6 +21,7 @@ import type { WorkloadState } from '../design-system/react/PowerRing';
 import { usePolicies, useOverrides, apiDelete, type PolicyResponse } from '../hooks/useApi';
 import { useQueryClient } from '@tanstack/react-query';
 import { ScheduleDrawer } from '../components/ScheduleDrawer';
+import { useNotify } from '../components/Notifications';
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -39,14 +40,16 @@ export function Schedule() {
   const { data: overridesData } = useOverrides();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const queryClient = useQueryClient();
+  const notify = useNotify();
 
   const handleDeletePolicy = async (p: PolicyResponse) => {
     if (!confirm(`Delete policy "${p.metadata.name}"?`)) return;
     try {
       await apiDelete(`/policies/${p.metadata.namespace}/${p.metadata.name}`);
       queryClient.invalidateQueries({ queryKey: ['policies'] });
+      notify(`Policy "${p.metadata.name}" deleted`);
     } catch (err) {
-      alert((err as Error).message);
+      notify((err as Error).message, 'error');
     }
   };
 
@@ -55,8 +58,9 @@ export function Schedule() {
     try {
       await apiDelete(`/overrides/${o.metadata.namespace}/${o.metadata.name}`);
       queryClient.invalidateQueries({ queryKey: ['overrides'] });
+      notify(`Override "${o.metadata.name}" deleted`);
     } catch (err) {
-      alert((err as Error).message);
+      notify((err as Error).message, 'error');
     }
   };
 
@@ -212,7 +216,7 @@ export function Schedule() {
         </TableContainer>
       )}
 
-      <ScheduleDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} />
+      <ScheduleDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} onSuccess={(msg) => notify(msg)} />
     </Box>
   );
 }

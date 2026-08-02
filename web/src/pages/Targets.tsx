@@ -24,6 +24,7 @@ import { StatusChip } from '../design-system/react';
 import type { WorkloadState } from '../design-system/react/PowerRing';
 import { useTargets } from '../hooks/useApi';
 import { ScheduleDrawer } from '../components/ScheduleDrawer';
+import { useNotify } from '../components/Notifications';
 import type { PowerTarget } from '../types';
 
 function mapState(t: PowerTarget): WorkloadState {
@@ -47,6 +48,7 @@ type StateFilter = 'all' | 'running' | 'asleep' | 'failed';
 
 export function Targets() {
   const { data, isLoading, error } = useTargets();
+  const notify = useNotify();
   const [search, setSearch] = useState('');
   const [stateFilter, setStateFilter] = useState<StateFilter>('all');
   const [groupByNs, setGroupByNs] = useState(false);
@@ -232,7 +234,7 @@ export function Targets() {
         ))
       )}
 
-      <ScheduleDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} prefill={drawerPrefill} />
+      <ScheduleDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} prefill={drawerPrefill} onSuccess={(msg) => notify(msg)} />
     </Box>
   );
 }

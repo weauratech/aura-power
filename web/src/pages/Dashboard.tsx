@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { Link } from 'react-router-dom';
 import Box from '@mui/material/Box';
 import Card from '@mui/material/Card';
 import CardContent from '@mui/material/CardContent';
@@ -7,10 +8,12 @@ import Typography from '@mui/material/Typography';
 import Stack from '@mui/material/Stack';
 import Skeleton from '@mui/material/Skeleton';
 import Alert from '@mui/material/Alert';
+import Button from '@mui/material/Button';
 import Chip from '@mui/material/Chip';
 import LinearProgress from '@mui/material/LinearProgress';
 import Divider from '@mui/material/Divider';
 import { useTheme } from '@mui/material/styles';
+import ScheduleIcon from '@mui/icons-material/ScheduleOutlined';
 import { PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip as RTooltip, CartesianGrid } from 'recharts';
 import { PowerRing } from '../design-system/react';
 import { useQuery } from '@tanstack/react-query';
@@ -111,6 +114,7 @@ export function Dashboard() {
 
   const { summary, efficiency, savings, recentEvents, nextTransitions } = data;
   const onRatio = summary.totalTargets > 0 ? summary.poweredOn / summary.totalTargets : 0;
+  const isDiscoveryMode = summary.activePolicies === 0;
 
   const pieData = [
     { name: 'On', value: summary.poweredOn },
@@ -131,6 +135,31 @@ export function Dashboard() {
           </Typography>
         </Box>
       </Stack>
+
+      {/* Discovery Mode Banner */}
+      {isDiscoveryMode && (
+        <Card sx={{ mb: 4, border: 1, borderColor: 'success.main', bgcolor: 'success.light' }}>
+          <CardContent sx={{ py: 3 }}>
+            <Stack direction="row" alignItems="center" justifyContent="space-between">
+              <Box>
+                <Typography variant="h5" sx={{ mb: 0.5 }}>Welcome to Aura Power</Typography>
+                <Typography variant="body2" color="text.secondary">
+                  {summary.totalTargets} workloads discovered across your cluster.
+                  {summary.governed === 0 && ' Create your first schedule to start saving.'}
+                </Typography>
+                <Stack direction="row" spacing={2} sx={{ mt: 1.5 }}>
+                  <Chip label={`${summary.totalTargets} workloads`} size="small" />
+                  <Chip label={`${summary.blocked} blocked`} size="small" color={summary.blocked > 0 ? 'warning' : 'default'} />
+                  <Chip label="0 policies" size="small" />
+                </Stack>
+              </Box>
+              <Button variant="contained" component={Link} to="/schedule" startIcon={<ScheduleIcon />}>
+                Create First Schedule
+              </Button>
+            </Stack>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Stats row — equal width cards */}
       <Grid container spacing={3} sx={{ mb: 3 }}>
