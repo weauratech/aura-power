@@ -40,13 +40,13 @@ export function StatusDot({ state, size = 8 }: { state: WorkloadState; size?: nu
   const { mark } = tone(state, useTheme().palette.mode);
   const hollow = state === 'asleep' || state === 'excluded' || state === 'scheduled';
   return (
-    <Box component="svg" viewBox="0 0 12 12" width={size + 4} height={size + 4}
+    <Box component="svg" viewBox="0 0 10 10" width={size} height={size}
       aria-hidden sx={{ display: 'block', flexShrink: 0 }}>
       <circle
-        cx="6" cy="6" r={hollow ? 4.2 : 4}
+        cx="5" cy="5" r={hollow ? 3.5 : 3.5}
         fill={hollow ? 'none' : mark}
         stroke={hollow ? mark : 'none'}
-        strokeWidth={hollow ? 2 : 0}
+        strokeWidth={hollow ? 1.8 : 0}
         strokeDasharray={hollow ? STATE_STROKE[state] : undefined}
         strokeLinecap="round"
       />
@@ -73,7 +73,7 @@ export function StatusChip({ state, label, size = 'small' }: StatusChipProps) {
       sx={{
         color: fg, backgroundColor: bg, borderColor: border,
         fontWeight: 500,
-        '& .MuiChip-icon': { marginLeft: '8px', marginRight: '-4px' },
+        '& .MuiChip-icon': { marginLeft: '4px', marginRight: '0px' },
       }}
     />
   );
