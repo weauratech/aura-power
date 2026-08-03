@@ -117,6 +117,8 @@ export function Dashboard() {
   const { summary, efficiency, savings, recentEvents, nextTransitions } = data;
   const onRatio = summary.totalTargets > 0 ? summary.poweredOn / summary.totalTargets : 0;
   const isDiscoveryMode = summary.activePolicies === 0;
+  const safeRecentEvents = recentEvents || [];
+  const safeNextTransitions = nextTransitions || [];
 
   const pieData = [
     { name: 'On', value: summary.poweredOn },
@@ -294,11 +296,11 @@ export function Dashboard() {
           <Card sx={{ height: '100%' }}>
             <CardContent>
               <Typography variant="h6" sx={{ mb: 2 }}>Recent Activity</Typography>
-              {recentEvents.length === 0 ? (
+              {safeRecentEvents.length === 0 ? (
                 <Typography variant="body2" color="text.secondary">No recent events</Typography>
               ) : (
                 <Stack spacing={0} divider={<Divider />}>
-                  {recentEvents.slice(0, 7).map((ev, i) => (
+                  {safeRecentEvents.slice(0, 7).map((ev, i) => (
                     <Box key={i} sx={{ py: 1.5 }}>
                       <Stack direction="row" alignItems="flex-start" spacing={1.5}>
                         <Typography sx={{ fontSize: 14, lineHeight: 1.6 }}>{actionIcon(ev.action)}</Typography>
@@ -323,13 +325,13 @@ export function Dashboard() {
         </Grid>
 
         {/* Next Transitions */}
-        {nextTransitions.length > 0 && (
+        {safeNextTransitions.length > 0 && (
           <Grid item xs={12} md={4}>
             <Card>
               <CardContent>
                 <Typography variant="h6" sx={{ mb: 2 }}>Upcoming Transitions</Typography>
                 <Stack spacing={1.5}>
-                  {nextTransitions.map((t, i) => (
+                  {safeNextTransitions.map((t, i) => (
                     <Stack key={i} direction="row" alignItems="center" justifyContent="space-between">
                       <Box>
                         <Typography variant="body2" sx={{ fontWeight: 500 }}>{t.policy}</Typography>

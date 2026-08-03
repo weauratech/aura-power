@@ -175,7 +175,7 @@ export function Notifications() {
                   <TableCell>
                     {ch.spec.events?.length ? (
                       <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
-                        {ch.spec.events.map(ev => (
+                        {ch.spec.events?.map(ev => (
                           <Chip key={ev} label={ev.split('.')[1]} size="small" sx={{ height: 20, fontSize: 10 }} />
                         ))}
                       </Stack>
