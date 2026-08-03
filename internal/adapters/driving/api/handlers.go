@@ -108,14 +108,17 @@ func (s *Server) handleDashboard(c *gin.Context) {
 		if t.Status.Managed {
 			governed++
 		}
-		switch {
-		case t.Status.Blocked:
+		// Count divergent and blocked separately
+		if t.Status.Blocked {
 			blockedD++
-		case t.Status.Divergent:
+		}
+		if t.Status.Divergent {
 			divergentD++
-		case t.Status.ObservedState.PowerState == "off":
+		}
+		// Count power state by observed (what's actually happening)
+		if t.Status.ObservedState.PowerState == "off" || t.Status.ObservedState.Replicas == 0 {
 			poweredOffD++
-		default:
+		} else {
 			poweredOnD++
 		}
 		if t.Status.Savings != nil {

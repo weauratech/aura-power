@@ -2,6 +2,7 @@ package notifications
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -75,21 +76,167 @@ func (d *Dispatcher) Enqueue(event Event) {
 }
 
 // Run starts the dispatcher loop. Blocks until context is cancelled.
+// Uses batching: collects events for 5 seconds, then dispatches grouped.
 func (d *Dispatcher) Run(ctx context.Context) {
 	log := ctrl.Log.WithName("notifications")
 
 	// Wait for cache to sync before processing
 	log.Info("notification dispatcher waiting for readiness...")
 	time.Sleep(15 * time.Second)
-	log.Info("notification dispatcher started")
+	log.Info("notification dispatcher started (batch mode: 5s window)")
 
 	for {
+		// Wait for first event or context cancel
 		select {
 		case <-ctx.Done():
 			log.Info("notification dispatcher stopped")
 			return
-		case event := <-d.queue:
-			d.dispatch(ctx, event)
+		case first := <-d.queue:
+			// Collect events for 5 seconds into a batch
+			batch := []Event{first}
+			timer := time.NewTimer(5 * time.Second)
+		batchLoop:
+			for {
+				select {
+				case ev := <-d.queue:
+					batch = append(batch, ev)
+				case <-timer.C:
+					break batchLoop
+				case <-ctx.Done():
+					timer.Stop()
+					return
+				}
+			}
+			d.dispatchBatch(ctx, batch)
+		}
+	}
+}
+
+func (d *Dispatcher) dispatchBatch(ctx context.Context, batch []Event) {
+	log := ctrl.Log.WithName("notifications")
+
+	if len(batch) == 0 {
+		return
+	}
+
+	// Filter only notifiable actions and deduplicate
+	var filtered []Event
+	seen := map[string]bool{}
+	for _, ev := range batch {
+		key := ev.Action + "/" + ev.Target.Namespace + "/" + ev.Target.Name
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		filtered = append(filtered, ev)
+	}
+
+	if len(filtered) == 0 {
+		return
+	}
+
+	// Load all channels
+	var channels v1alpha1.PowerNotificationChannelList
+	if err := d.client.List(ctx, &channels); err != nil {
+		log.Error(err, "failed to list notification channels")
+		return
+	}
+
+	for i := range channels.Items {
+		ch := &channels.Items[i]
+		if !ch.Spec.Enabled {
+			continue
+		}
+
+		// Filter events for this channel
+		var channelEvents []Event
+		for _, ev := range filtered {
+			if len(ch.Spec.Events) > 0 && !contains(ch.Spec.Events, ev.Action) {
+				continue
+			}
+			if len(ch.Spec.NamespaceFilter) > 0 && !contains(ch.Spec.NamespaceFilter, ev.Target.Namespace) {
+				continue
+			}
+			channelEvents = append(channelEvents, ev)
+		}
+
+		if len(channelEvents) == 0 {
+			continue
+		}
+
+		// Throttle: check if any event in batch was already sent recently
+		throttleDur := 5 * time.Minute
+		if ch.Spec.Throttle != "" {
+			if parsed, err := time.ParseDuration(ch.Spec.Throttle); err == nil {
+				throttleDur = parsed
+			}
+		}
+
+		// For batch, throttle by first target (representative)
+		key := ch.Name + "/batch/" + channelEvents[0].Action
+		d.mu.Lock()
+		lastSent, exists := d.throttle[key]
+		if exists && time.Since(lastSent) < throttleDur {
+			d.mu.Unlock()
+			continue
+		}
+		d.throttle[key] = time.Now()
+		d.mu.Unlock()
+
+		// Resolve URL
+		url := ch.Spec.URL
+		if url == "" {
+			continue
+		}
+
+		// Find sender
+		sender, ok := d.senders[ch.Spec.Type]
+		if !ok {
+			continue
+		}
+
+		// Send batch as one message
+		batchEvent := Event{
+			Action:    channelEvents[0].Action,
+			Target:    channelEvents[0].Target,
+			Result:    channelEvents[0].Result,
+			Reason:    fmt.Sprintf("%d workload(s) affected", len(channelEvents)),
+			RuleName:  channelEvents[0].RuleName,
+			Timestamp: channelEvents[0].Timestamp,
+		}
+
+		// Build reason with all targets
+		if len(channelEvents) > 1 {
+			names := ""
+			for i, ev := range channelEvents {
+				if i > 4 {
+					names += fmt.Sprintf(" (+%d more)", len(channelEvents)-5)
+					break
+				}
+				if i > 0 {
+					names += ", "
+				}
+				names += ev.Target.Namespace + "/" + ev.Target.Name
+			}
+			batchEvent.Reason = names
+		} else {
+			batchEvent.Reason = channelEvents[0].Reason
+		}
+
+		if err := sender.Send(ctx, url, batchEvent); err != nil {
+			log.Error(err, "notification send failed", "channel", ch.Name)
+			ch.Status.TotalErrors++
+			ch.Status.LastError = err.Error()
+		} else {
+			now := metav1.Now()
+			ch.Status.TotalSent++
+			ch.Status.LastNotification = &now
+			ch.Status.LastError = ""
+			log.Info("batch notification sent", "channel", ch.Name, "events", len(channelEvents))
+		}
+
+		if err := d.client.Status().Update(ctx, ch); err != nil {
+			log.Error(err, "failed to update channel status", "channel", ch.Name)
 		}
 	}
 }
