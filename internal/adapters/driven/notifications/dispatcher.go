@@ -120,21 +120,22 @@ func (d *Dispatcher) dispatch(ctx context.Context, event Event) {
 			continue
 		}
 
-		// Throttle check
+		// Throttle check (default: 5m per target even if not configured)
+		throttleDur := 5 * time.Minute
 		if ch.Spec.Throttle != "" {
-			throttleDur, err := time.ParseDuration(ch.Spec.Throttle)
-			if err == nil {
-				key := ch.Name + "/" + event.Target.Namespace + "/" + event.Target.Name
-				d.mu.Lock()
-				lastSent, exists := d.throttle[key]
-				if exists && time.Since(lastSent) < throttleDur {
-					d.mu.Unlock()
-					continue
-				}
-				d.throttle[key] = time.Now()
-				d.mu.Unlock()
+			if parsed, err := time.ParseDuration(ch.Spec.Throttle); err == nil {
+				throttleDur = parsed
 			}
 		}
+		key := ch.Name + "/" + event.Target.Namespace + "/" + event.Target.Name
+		d.mu.Lock()
+		lastSent, exists := d.throttle[key]
+		if exists && time.Since(lastSent) < throttleDur {
+			d.mu.Unlock()
+			continue
+		}
+		d.throttle[key] = time.Now()
+		d.mu.Unlock()
 
 		// Resolve URL
 		url := ch.Spec.URL

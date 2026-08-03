@@ -62,8 +62,8 @@ func (a *AuditRecorder) Record(ctx context.Context, event ports.AuditEvent) erro
 		return fmt.Errorf("failed to create audit event: %w", err)
 	}
 
-	// Dispatch notification (non-blocking)
-	if a.notifier != nil {
+	// Dispatch notification only for real state transitions (not routine reconciliation)
+	if a.notifier != nil && isNotifiableAction(string(event.Action)) {
 		a.notifier.Enqueue(notifications.Event{
 			Action:    string(event.Action),
 			Target:    notifications.TargetRef{Namespace: event.Target.Namespace, Name: event.Target.Name, Kind: string(event.Target.Kind)},
@@ -75,6 +75,17 @@ func (a *AuditRecorder) Record(ctx context.Context, event ports.AuditEvent) erro
 	}
 
 	return nil
+}
+
+// isNotifiableAction returns true for events that should trigger webhook notifications.
+func isNotifiableAction(action string) bool {
+	switch action {
+	case "workload.powered_down", "workload.restored", "workload.execution_error",
+		"override.created", "override.expired", "policy.created", "policy.deleted":
+		return true
+	default:
+		return false
+	}
 }
 
 func (a *AuditRecorder) List(ctx context.Context, opts ports.AuditListOptions) ([]ports.AuditEvent, error) {
