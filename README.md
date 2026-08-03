@@ -67,7 +67,7 @@ The server handles user interactions and serves the web panel. The controller ru
 
 ## Quick Start
 
-### Install
+### Install with Gateway API
 
 ```bash
 helm install aura-power oci://ghcr.io/weauratech/charts/aura-power \
@@ -79,7 +79,31 @@ helm install aura-power oci://ghcr.io/weauratech/charts/aura-power \
   --set server.gateway.gatewayRef.name=my-gateway \
   --set server.gateway.gatewayRef.namespace=gateway-ns \
   --set server.gateway.gatewayRef.sectionName=https \
-  --set "server.gateway.hostnames[0]=power.int.example.com"
+  --set "server.gateway.hostnames[0]=power.example.com"
+```
+
+### Install with Ingress
+
+```bash
+helm install aura-power oci://ghcr.io/weauratech/charts/aura-power \
+  --namespace aura-system --create-namespace \
+  --set server.auth.jwtSecret=$(openssl rand -hex 32) \
+  --set server.auth.initialAdmin.password=changeme \
+  --set server.prometheus.url=http://prometheus.monitoring.svc:9090 \
+  --set server.ingress.enabled=true \
+  --set server.ingress.className=nginx \
+  --set server.ingress.host=power.example.com \
+  --set server.ingress.tls=true \
+  --set server.ingress.tlsSecretName=power-tls
+```
+
+### Install (local / port-forward only)
+
+```bash
+helm install aura-power oci://ghcr.io/weauratech/charts/aura-power \
+  --namespace aura-system --create-namespace \
+  --set server.auth.jwtSecret=$(openssl rand -hex 32) \
+  --set server.auth.initialAdmin.password=changeme
 ```
 
 ### Access the Panel
