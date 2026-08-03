@@ -120,6 +120,7 @@ func (s *Server) setupRoutes() {
 			write.POST("/overrides", s.handleCreateOverride)
 			write.POST("/namespace-groups", s.handleCreateNamespaceGroup)
 			write.POST("/notification-channels", s.handleCreateNotificationChannel)
+			write.PUT("/notification-channels/:namespace/:name", s.handleUpdateNotificationChannel)
 		}
 		// Delete operations: admin only
 		del := api.Group("")
@@ -139,6 +140,7 @@ func (s *Server) setupRoutes() {
 		api.DELETE("/overrides/:namespace/:name", s.handleDeleteOverride)
 		api.POST("/namespace-groups", s.handleCreateNamespaceGroup)
 		api.POST("/notification-channels", s.handleCreateNotificationChannel)
+		api.PUT("/notification-channels/:namespace/:name", s.handleUpdateNotificationChannel)
 		api.DELETE("/namespace-groups/:namespace/:name", s.handleDeleteNamespaceGroup)
 		api.DELETE("/notification-channels/:namespace/:name", s.handleDeleteNotificationChannel)
 	}

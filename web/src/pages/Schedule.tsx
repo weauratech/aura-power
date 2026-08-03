@@ -41,6 +41,7 @@ export function Schedule() {
   const { data: policiesData, isLoading: policiesLoading, error: policiesError } = usePolicies();
   const { data: overridesData } = useOverrides();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [editingPolicy, setEditingPolicy] = useState<PolicyResponse | null>(null);
   const queryClient = useQueryClient();
   const notify = useNotify();
   const [deleteTarget, setDeleteTarget] = useState<{ type: 'policy' | 'override'; name: string; namespace: string } | null>(null);
@@ -84,7 +85,7 @@ export function Schedule() {
             Power policies and temporary overrides.
           </Typography>
         </Box>
-        <Button variant="contained" startIcon={<AddIcon />} onClick={() => setDrawerOpen(true)}>
+        <Button variant="contained" startIcon={<AddIcon />} onClick={() => { setEditingPolicy(null); setDrawerOpen(true); }}>
           New Schedule
         </Button>
       </Stack>
@@ -113,7 +114,7 @@ export function Schedule() {
                 const state: WorkloadState = p.spec.schedule.desiredState === 'on' ? 'running' : 'asleep';
                 const window = p.spec.schedule.windows?.[0];
                 return (
-                  <TableRow key={`policy-${p.metadata.namespace}/${p.metadata.name}`} hover>
+                  <TableRow key={`policy-${p.metadata.namespace}/${p.metadata.name}`} hover sx={{ cursor: 'pointer' }} onClick={() => { setEditingPolicy(p); setDrawerOpen(true); }}>
                     <TableCell>
                       <Typography variant="subtitle2">{p.metadata.name}</Typography>
                       {p.spec.description && (
@@ -225,7 +226,16 @@ export function Schedule() {
         </TableContainer>
       )}
 
-      <ScheduleDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} onSuccess={(msg) => notify(msg)} />
+      <ScheduleDrawer
+        open={drawerOpen}
+        onClose={() => { setDrawerOpen(false); setEditingPolicy(null); }}
+        onSuccess={(msg) => notify(msg)}
+        editPolicy={editingPolicy ? {
+          name: editingPolicy.metadata.name,
+          namespace: editingPolicy.metadata.namespace,
+          spec: editingPolicy.spec,
+        } : null}
+      />
 
       {/* Namespace Defaults Info */}
       {policiesData?.items?.some(p => p.metadata.name.startsWith('ns-default-')) && (

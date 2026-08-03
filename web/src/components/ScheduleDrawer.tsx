@@ -17,7 +17,7 @@ import CircularProgress from '@mui/material/CircularProgress';
 import Tooltip from '@mui/material/Tooltip';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import CloseIcon from '@mui/icons-material/CloseOutlined';
-import { useNamespaces, useTargets, apiPost } from '../hooks/useApi';
+import { useNamespaces, useTargets, apiPost, apiPut } from '../hooks/useApi';
 import { useQueryClient } from '@tanstack/react-query';
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -30,6 +30,17 @@ export interface ScheduleDrawerProps {
     namespaces?: string[];
     workloadNames?: string[];
   };
+  /** If provided, drawer opens in edit mode for this policy */
+  editPolicy?: {
+    name: string;
+    namespace: string;
+    spec: {
+      scope: { namespaces?: string[]; workloadNames?: string[] };
+      schedule: { desiredState: string; windows?: Array<{ start: string; end: string; timezone: string; days?: number[] }> };
+      priority: number;
+      description?: string;
+    };
+  } | null;
 }
 
 interface PreviewResult {
@@ -39,7 +50,7 @@ interface PreviewResult {
   blocked: number;
 }
 
-export function ScheduleDrawer({ open, onClose, onSuccess, prefill }: ScheduleDrawerProps) {
+export function ScheduleDrawer({ open, onClose, onSuccess, prefill, editPolicy }: ScheduleDrawerProps) {
   const queryClient = useQueryClient();
   const { data: nsData } = useNamespaces();
   const { data: targetsData } = useTargets();
@@ -82,6 +93,26 @@ export function ScheduleDrawer({ open, onClose, onSuccess, prefill }: ScheduleDr
       setScopeMode('workloads');
     }
   }, [prefill]);
+
+  // Pre-fill from editPolicy
+  useEffect(() => {
+    if (editPolicy) {
+      setName(editPolicy.name);
+      setSelectedNamespaces(editPolicy.spec.scope.namespaces || []);
+      setSelectedWorkloads(editPolicy.spec.scope.workloadNames?.map(w => `${(editPolicy.spec.scope.namespaces || [''])[0]}/${w}`) || []);
+      setDesiredState(editPolicy.spec.schedule.desiredState);
+      const win = editPolicy.spec.schedule.windows?.[0];
+      if (win) {
+        setStart(win.start || '20:00');
+        setEnd(win.end || '08:00');
+        setTimezone(win.timezone || 'America/Sao_Paulo');
+        setDays(win.days || [1, 2, 3, 4, 5]);
+      }
+      setPriority(String(editPolicy.spec.priority));
+      setDescription(editPolicy.spec.description || '');
+      setScopeMode(editPolicy.spec.scope.workloadNames?.length ? 'workloads' : 'namespaces');
+    }
+  }, [editPolicy]);
 
   // Reset preview when form changes
   useEffect(() => {
@@ -149,6 +180,22 @@ export function ScheduleDrawer({ open, onClose, onSuccess, prefill }: ScheduleDr
         });
         queryClient.invalidateQueries({ queryKey: ['overrides'] });
         onSuccess?.(`Override "${name}" created (expires in ${expiresIn}h)`);
+      } else if (editPolicy) {
+        // Update existing policy
+        await apiPut(`/policies/${editPolicy.namespace}/${editPolicy.name}`, {
+          metadata: { name: editPolicy.name, namespace: editPolicy.namespace },
+          spec: {
+            scope,
+            schedule: {
+              desiredState,
+              windows: [{ start, end, timezone, days: days.length > 0 && days.length < 7 ? days : undefined }],
+            },
+            priority: parseInt(priority) || 100,
+            description,
+          },
+        });
+        queryClient.invalidateQueries({ queryKey: ['policies'] });
+        onSuccess?.(`Schedule "${editPolicy.name}" updated`);
       } else {
         await apiPost('/policies', {
           metadata: { name, namespace: 'aura-system' },
@@ -199,7 +246,7 @@ export function ScheduleDrawer({ open, onClose, onSuccess, prefill }: ScheduleDr
       <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
         {/* Header */}
         <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ px: 3, py: 2.5, borderBottom: 1, borderColor: 'divider' }}>
-          <Typography variant="h5">New Schedule</Typography>
+          <Typography variant="h5">{editPolicy ? 'Edit Schedule' : 'New Schedule'}</Typography>
           <IconButton onClick={onClose} size="small"><CloseIcon /></IconButton>
         </Stack>
 
@@ -318,7 +365,7 @@ export function ScheduleDrawer({ open, onClose, onSuccess, prefill }: ScheduleDr
         <Stack direction="row" spacing={2} sx={{ px: 3, py: 2.5, borderTop: 1, borderColor: 'divider' }}>
           <Button onClick={onClose} sx={{ flex: 1 }}>Cancel</Button>
           <Button variant="contained" onClick={handleCreate} disabled={creating || !canSubmit} sx={{ flex: 1 }}>
-            {creating ? 'Creating...' : isOverride ? 'Create Override' : 'Create Schedule'}
+            {creating ? 'Saving...' : isOverride ? 'Create Override' : editPolicy ? 'Save Changes' : 'Create Schedule'}
           </Button>
         </Stack>
       </Box>

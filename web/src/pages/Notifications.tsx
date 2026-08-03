@@ -23,7 +23,7 @@ import DeleteIcon from '@mui/icons-material/DeleteOutlined';
 import AddIcon from '@mui/icons-material/AddOutlined';
 import CloseIcon from '@mui/icons-material/CloseOutlined';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { apiPost, apiDelete } from '../hooks/useApi';
+import { apiPost, apiPut, apiDelete } from '../hooks/useApi';
 import { useNotify } from '../components/Notifications';
 import { EmptyState } from '../components/EmptyState';
 import { ConfirmDialog } from '../components/ConfirmDialog';
@@ -64,6 +64,7 @@ export function Notifications() {
   const queryClient = useQueryClient();
   const notify = useNotify();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [editingChannel, setEditingChannel] = useState<NotificationChannel | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ name: string; namespace: string } | null>(null);
 
   // Form state
@@ -81,20 +82,30 @@ export function Notifications() {
     setCreating(true);
     setCreateError('');
     try {
-      await apiPost('/notification-channels', {
-        metadata: { name, namespace: 'aura-system' },
-        spec: {
-          type,
-          url,
-          events: events.length > 0 ? events : undefined,
-          namespaceFilter: nsFilter ? nsFilter.split(',').map(s => s.trim()).filter(Boolean) : undefined,
-          throttle: throttle || undefined,
-          enabled,
-        },
-      });
+      const spec = {
+        type,
+        url,
+        events: events.length > 0 ? events : undefined,
+        namespaceFilter: nsFilter ? nsFilter.split(',').map(s => s.trim()).filter(Boolean) : undefined,
+        throttle: throttle || undefined,
+        enabled,
+      };
+
+      if (editingChannel) {
+        // Update existing
+        await apiPut(`/notification-channels/${editingChannel.metadata.namespace}/${editingChannel.metadata.name}`, { spec });
+        notify(`Channel "${editingChannel.metadata.name}" updated`);
+      } else {
+        // Create new
+        await apiPost('/notification-channels', {
+          metadata: { name, namespace: 'aura-system' },
+          spec,
+        });
+        notify(`Channel "${name}" created`);
+      }
       queryClient.invalidateQueries({ queryKey: ['notification-channels'] });
-      notify(`Channel "${name}" created`);
       setDrawerOpen(false);
+      setEditingChannel(null);
       resetForm();
     } catch (err) {
       setCreateError((err as Error).message);
@@ -120,6 +131,24 @@ export function Notifications() {
     setNsFilter(''); setThrottle('5m'); setEnabled(true); setCreateError('');
   };
 
+  const openEdit = (ch: NotificationChannel) => {
+    setEditingChannel(ch);
+    setName(ch.metadata.name);
+    setType(ch.spec.type);
+    setUrl(ch.spec.url);
+    setEvents(ch.spec.events || []);
+    setNsFilter(ch.spec.namespaceFilter?.join(', ') || '');
+    setThrottle(ch.spec.throttle || '5m');
+    setEnabled(ch.spec.enabled);
+    setDrawerOpen(true);
+  };
+
+  const openCreate = () => {
+    setEditingChannel(null);
+    resetForm();
+    setDrawerOpen(true);
+  };
+
   const toggleEvent = (ev: string) => {
     setEvents(prev => prev.includes(ev) ? prev.filter(e => e !== ev) : [...prev, ev]);
   };
@@ -135,7 +164,7 @@ export function Notifications() {
             Webhook channels for power event alerts.
           </Typography>
         </Box>
-        <Button variant="contained" startIcon={<AddIcon />} onClick={() => setDrawerOpen(true)}>
+        <Button variant="contained" startIcon={<AddIcon />} onClick={openCreate}>
           New Channel
         </Button>
       </Stack>
@@ -147,7 +176,7 @@ export function Notifications() {
           title="No notification channels"
           description="Create a webhook channel to receive alerts when workloads are powered down or restored."
           actionLabel="New Channel"
-          onAction={() => setDrawerOpen(true)}
+          onAction={openCreate}
         />
       ) : (
         <TableContainer>
@@ -165,7 +194,7 @@ export function Notifications() {
             </TableHead>
             <TableBody>
               {data.items?.map((ch) => (
-                <TableRow key={`${ch.metadata.namespace}/${ch.metadata.name}`} hover>
+                <TableRow key={`${ch.metadata.namespace}/${ch.metadata.name}`} hover sx={{ cursor: 'pointer' }} onClick={() => openEdit(ch)}>
                   <TableCell>
                     <Typography variant="subtitle2">{ch.metadata.name}</Typography>
                   </TableCell>
@@ -217,7 +246,7 @@ export function Notifications() {
       <Drawer anchor="right" open={drawerOpen} onClose={() => setDrawerOpen(false)} sx={{ '& .MuiDrawer-paper': { width: 400, p: 0 } }}>
         <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
           <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ px: 3, py: 2.5, borderBottom: 1, borderColor: 'divider' }}>
-            <Typography variant="h5">New Channel</Typography>
+            <Typography variant="h5">{editingChannel ? 'Edit Channel' : 'New Channel'}</Typography>
             <IconButton onClick={() => setDrawerOpen(false)} size="small"><CloseIcon /></IconButton>
           </Stack>
 
@@ -257,7 +286,7 @@ export function Notifications() {
           <Stack direction="row" spacing={2} sx={{ px: 3, py: 2.5, borderTop: 1, borderColor: 'divider' }}>
             <Button onClick={() => setDrawerOpen(false)} sx={{ flex: 1 }}>Cancel</Button>
             <Button variant="contained" onClick={handleCreate} disabled={creating || !name || !url} sx={{ flex: 1 }}>
-              {creating ? 'Creating...' : 'Create Channel'}
+              {creating ? 'Saving...' : editingChannel ? 'Save Changes' : 'Create Channel'}
             </Button>
           </Stack>
         </Box>

@@ -23,10 +23,10 @@ metadata:
 rules:
   # Full CRD management
   - apiGroups: ["power.aura.sh"]
-    resources: ["powerpolicies", "poweroverrides", "powertargets", "powerauditevents", "powerschedules", "powernamespacegroups"]
+    resources: ["powerpolicies", "poweroverrides", "powertargets", "powerauditevents", "powerschedules", "powernamespacegroups", "powernotificationchannels"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["power.aura.sh"]
-    resources: ["powerpolicies/status", "poweroverrides/status", "powertargets/status"]
+    resources: ["powerpolicies/status", "poweroverrides/status", "powertargets/status", "powernotificationchannels/status"]
     verbs: ["get", "update", "patch"]
   # Workload execution (power-down / restore)
   - apiGroups: ["apps"]

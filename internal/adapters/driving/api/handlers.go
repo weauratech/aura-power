@@ -850,3 +850,35 @@ func (s *Server) handleDeleteNotificationChannel(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"deleted": name})
 }
+
+
+func (s *Server) handleUpdateNotificationChannel(c *gin.Context) {
+	ctx := c.Request.Context()
+	ns := c.Param("namespace")
+	name := c.Param("name")
+
+	// Get existing
+	var existing v1alpha1.PowerNotificationChannel
+	key := client.ObjectKey{Namespace: ns, Name: name}
+	if err := s.client.Get(ctx, key, &existing); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "channel not found"})
+		return
+	}
+
+	// Bind new spec
+	var update struct {
+		Spec v1alpha1.PowerNotificationChannelSpec `json:"spec"`
+	}
+	if err := c.ShouldBindJSON(&update); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid payload: " + err.Error()})
+		return
+	}
+
+	existing.Spec = update.Spec
+	if err := s.client.Update(ctx, &existing); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update channel: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"name": name, "namespace": ns})
+}
