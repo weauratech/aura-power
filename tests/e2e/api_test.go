@@ -40,6 +40,7 @@ func newClient(t *testing.T) *testClient {
 
 func (c *testClient) request(method, path string, body interface{}) (*http.Response, []byte) {
 	c.t.Helper()
+	time.Sleep(500 * time.Millisecond) // Rate limit to avoid gateway overload
 	var bodyReader io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)

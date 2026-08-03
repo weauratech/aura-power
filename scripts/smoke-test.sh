@@ -35,11 +35,15 @@ request() {
   if [ -n "$body" ]; then
     args+=(-d "$body")
   fi
+  sleep 0.3
   curl "${args[@]}" -X "$method" "${BASE_URL}${path}"
 }
 
 get_status() { echo "$1" | tail -1; }
 get_body() { echo "$1" | sed '$d'; }
+
+# Small delay between requests to avoid gateway rate limits
+delay() { sleep 0.3; }
 
 echo ""
 echo -e "${YELLOW}═══════════════════════════════════════════════════${NC}"
