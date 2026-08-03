@@ -164,7 +164,7 @@ export function Notifications() {
               </TableRow>
             </TableHead>
             <TableBody>
-              {data.items.map((ch) => (
+              {data.items?.map((ch) => (
                 <TableRow key={`${ch.metadata.namespace}/${ch.metadata.name}`} hover>
                   <TableCell>
                     <Typography variant="subtitle2">{ch.metadata.name}</Typography>
