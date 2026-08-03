@@ -39,10 +39,15 @@ function useNotificationChannels() {
     queryKey: ['notification-channels'],
     queryFn: async () => {
       const res = await fetch('/api/v1/notification-channels', { credentials: 'same-origin' });
-      if (!res.ok) throw new Error('Failed to load channels');
-      return res.json();
+      if (!res.ok) {
+        if (res.status === 504) return { items: [], count: 0 };
+        throw new Error('Failed to load channels');
+      }
+      const data = await res.json();
+      return { items: data.items || [], count: data.count || 0 };
     },
     refetchInterval: 15000,
+    retry: 1,
   });
 }
 
