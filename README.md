@@ -18,10 +18,7 @@
 ---
 
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/hero/panel-dark.png">
-    <img src="docs/assets/hero/panel-light.png" alt="Aura Power Dashboard" width="720">
-  </picture>
+  <img src="docs/assets/hero/social-preview.png" alt="Aura Power Dashboard" width="820">
 </p>
 
 ## Why Aura Power?
