@@ -12,6 +12,7 @@ import InputAdornment from '@mui/material/InputAdornment';
 import Divider from '@mui/material/Divider';
 import SearchIcon from '@mui/icons-material/SearchOutlined';
 import { useAuditEvents } from '../hooks/useApi';
+import { EmptyState } from '../components/EmptyState';
 
 function formatTime(ts: string): string {
   const d = new Date(ts);
@@ -91,7 +92,10 @@ export function AuditLog() {
       {isLoading ? (
         <Skeleton variant="rounded" height={400} />
       ) : events.length === 0 ? (
-        <Alert severity="info">No audit events recorded yet.</Alert>
+        <EmptyState
+          title="No audit events"
+          description="Events are recorded when workloads are powered down, restored, or when policies change. Create a schedule to start generating events."
+        />
       ) : (
         <Card>
           <CardContent sx={{ p: 0, '&:last-child': { pb: 0 } }}>

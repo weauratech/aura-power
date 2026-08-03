@@ -25,6 +25,7 @@ import type { WorkloadState } from '../design-system/react/PowerRing';
 import { useTargets } from '../hooks/useApi';
 import { ScheduleDrawer } from '../components/ScheduleDrawer';
 import { useNotify } from '../components/Notifications';
+import { EmptyState } from '../components/EmptyState';
 import type { PowerTarget } from '../types';
 
 function mapState(t: PowerTarget): WorkloadState {
@@ -223,7 +224,10 @@ export function Targets() {
                   {targets.length === 0 && (
                     <TableRow>
                       <TableCell colSpan={8} align="center">
-                        <Typography variant="body2" color="text.secondary" sx={{ py: 4 }}>No targets found</Typography>
+                        <EmptyState
+                          title="No targets discovered"
+                          description="Aura Power discovers workloads automatically. Make sure the controller is running and namespaces are not excluded."
+                        />
                       </TableCell>
                     </TableRow>
                   )}

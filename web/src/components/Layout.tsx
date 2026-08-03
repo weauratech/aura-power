@@ -30,6 +30,7 @@ import LightModeIcon from '@mui/icons-material/LightModeOutlined';
 import DarkModeIcon from '@mui/icons-material/DarkModeOutlined';
 import LogoutIcon from '@mui/icons-material/LogoutOutlined';
 import { useThemeMode } from '../ThemeContext';
+import { ErrorBoundary } from './ErrorBoundary';
 
 const DRAWER_WIDTH = 240;
 
@@ -144,7 +145,12 @@ export function Layout({ user, onLogout }: LayoutProps) {
             </Tooltip>
           </Stack>
         )}
-        <Typography variant="caption" color="text.disabled">Aura Power v2.0</Typography>
+        <Typography variant="caption" color="text.disabled">
+          Aura Power v2.0 ·{' '}
+          <Typography component="a" variant="caption" href="https://github.com/weauratech/aura-power/releases" target="_blank" rel="noopener" color="text.disabled" sx={{ textDecoration: 'underline', '&:hover': { color: 'text.secondary' } }}>
+            CLI
+          </Typography>
+        </Typography>
       </Box>
     </Box>
   );
@@ -207,7 +213,9 @@ export function Layout({ user, onLogout }: LayoutProps) {
           </Box>
         )}
         <Box sx={{ p: { xs: 3, md: 5 }, flex: 1 }}>
-          <Outlet />
+          <ErrorBoundary>
+            <Outlet />
+          </ErrorBoundary>
         </Box>
       </Box>
     </Box>

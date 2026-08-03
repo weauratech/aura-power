@@ -22,6 +22,8 @@ import { usePolicies, useOverrides, apiDelete, type PolicyResponse } from '../ho
 import { useQueryClient } from '@tanstack/react-query';
 import { ScheduleDrawer } from '../components/ScheduleDrawer';
 import { useNotify } from '../components/Notifications';
+import { EmptyState } from '../components/EmptyState';
+import { ConfirmDialog } from '../components/ConfirmDialog';
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -41,27 +43,31 @@ export function Schedule() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const queryClient = useQueryClient();
   const notify = useNotify();
+  const [deleteTarget, setDeleteTarget] = useState<{ type: 'policy' | 'override'; name: string; namespace: string } | null>(null);
 
   const handleDeletePolicy = async (p: PolicyResponse) => {
-    if (!confirm(`Delete policy "${p.metadata.name}"?`)) return;
-    try {
-      await apiDelete(`/policies/${p.metadata.namespace}/${p.metadata.name}`);
-      queryClient.invalidateQueries({ queryKey: ['policies'] });
-      notify(`Policy "${p.metadata.name}" deleted`);
-    } catch (err) {
-      notify((err as Error).message, 'error');
-    }
+    setDeleteTarget({ type: 'policy', name: p.metadata.name, namespace: p.metadata.namespace });
   };
 
   const handleDeleteOverride = async (o: { metadata: { name: string; namespace: string } }) => {
-    if (!confirm(`Delete override "${o.metadata.name}"?`)) return;
+    setDeleteTarget({ type: 'override', name: o.metadata.name, namespace: o.metadata.namespace });
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
     try {
-      await apiDelete(`/overrides/${o.metadata.namespace}/${o.metadata.name}`);
-      queryClient.invalidateQueries({ queryKey: ['overrides'] });
-      notify(`Override "${o.metadata.name}" deleted`);
+      if (deleteTarget.type === 'policy') {
+        await apiDelete(`/policies/${deleteTarget.namespace}/${deleteTarget.name}`);
+        queryClient.invalidateQueries({ queryKey: ['policies'] });
+      } else {
+        await apiDelete(`/overrides/${deleteTarget.namespace}/${deleteTarget.name}`);
+        queryClient.invalidateQueries({ queryKey: ['overrides'] });
+      }
+      notify(`${deleteTarget.type === 'policy' ? 'Policy' : 'Override'} "${deleteTarget.name}" deleted`);
     } catch (err) {
       notify((err as Error).message, 'error');
     }
+    setDeleteTarget(null);
   };
 
   if (policiesError) return <Alert severity="error">{(policiesError as Error).message}</Alert>;
@@ -205,9 +211,12 @@ export function Schedule() {
               {(!policiesData?.items?.length && !activeOverrides.length) && (
                 <TableRow>
                   <TableCell colSpan={9} align="center">
-                    <Typography variant="body2" color="text.secondary" sx={{ py: 4 }}>
-                      No schedules defined. Create your first one.
-                    </Typography>
+                    <EmptyState
+                      title="No schedules yet"
+                      description="Create your first power schedule to start governing workloads and saving costs."
+                      actionLabel="New Schedule"
+                      onAction={() => setDrawerOpen(true)}
+                    />
                   </TableCell>
                 </TableRow>
               )}
@@ -217,6 +226,15 @@ export function Schedule() {
       )}
 
       <ScheduleDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} onSuccess={(msg) => notify(msg)} />
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        title={`Delete ${deleteTarget?.type === 'policy' ? 'Policy' : 'Override'}`}
+        message={`Are you sure you want to delete "${deleteTarget?.name}"? This will remove governance from all affected targets.`}
+        confirmLabel="Delete"
+        onConfirm={confirmDelete}
+        onCancel={() => setDeleteTarget(null)}
+      />
     </Box>
   );
 }
