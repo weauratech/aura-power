@@ -49,7 +49,7 @@ func NewDispatcher(c client.Client) *Dispatcher {
 	d := &Dispatcher{
 		client:   c,
 		senders:  make(map[string]Sender),
-		queue:    make(chan Event, 100),
+		queue:    make(chan Event, 500),
 		throttle: make(map[string]time.Time),
 	}
 	// Register built-in senders
@@ -77,6 +77,10 @@ func (d *Dispatcher) Enqueue(event Event) {
 // Run starts the dispatcher loop. Blocks until context is cancelled.
 func (d *Dispatcher) Run(ctx context.Context) {
 	log := ctrl.Log.WithName("notifications")
+
+	// Wait for cache to sync before processing
+	log.Info("notification dispatcher waiting for readiness...")
+	time.Sleep(15 * time.Second)
 	log.Info("notification dispatcher started")
 
 	for {
