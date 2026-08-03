@@ -227,6 +227,25 @@ export function Schedule() {
 
       <ScheduleDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} onSuccess={(msg) => notify(msg)} />
 
+      {/* Namespace Defaults Info */}
+      {policiesData?.items?.some(p => p.metadata.name.startsWith('ns-default-')) && (
+        <Box sx={{ mt: 5 }}>
+          <Typography variant="h6" sx={{ mb: 2 }}>Namespace Defaults</Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            These policies are auto-generated from namespace annotations (<code>aura.sh/default-schedule</code>).
+            Annotate a namespace to apply a built-in schedule:
+          </Typography>
+          <Box sx={{ p: 2, borderRadius: 1, border: 1, borderColor: 'divider', bgcolor: 'background.paper', mb: 2 }}>
+            <Typography variant="code" sx={{ fontSize: 12, display: 'block' }}>
+              kubectl annotate namespace dev aura.sh/default-schedule=business-hours
+            </Typography>
+          </Box>
+          <Typography variant="caption" color="text.secondary">
+            Available schedules: <strong>business-hours</strong> (Mon-Fri 08-18), <strong>always-off</strong>, <strong>weekdays-only</strong> (Mon-Fri full day)
+          </Typography>
+        </Box>
+      )}
+
       <ConfirmDialog
         open={!!deleteTarget}
         title={`Delete ${deleteTarget?.type === 'policy' ? 'Policy' : 'Override'}`}

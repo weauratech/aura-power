@@ -16,6 +16,7 @@ import (
 
 	v1alpha1 "github.com/weauratech/aura-power/api/v1alpha1"
 	"github.com/weauratech/aura-power/internal/adapters/driven/kubernetes"
+	"github.com/weauratech/aura-power/internal/adapters/driven/notifications"
 	"github.com/weauratech/aura-power/internal/adapters/driven/observability"
 	"github.com/weauratech/aura-power/internal/adapters/driving/background"
 	"github.com/weauratech/aura-power/internal/adapters/driving/reconciler"
@@ -62,6 +63,10 @@ func main() {
 	auditRecorder := kubernetes.NewAuditRecorder(k8sClient, mgr.GetEventRecorderFor("aura-power"), "aura-system")
 	metricsExporter := observability.NewPrometheusExporter()
 
+	// Create notification dispatcher
+	notifDispatcher := notifications.NewDispatcher(k8sClient)
+	auditRecorder.SetNotifier(notifDispatcher)
+
 	// Register reconcilers
 	targetReconciler := &reconciler.TargetReconciler{
 		Client:   k8sClient,
@@ -107,8 +112,16 @@ func main() {
 	ctx := ctrl.SetupSignalHandler()
 	go runAuditCleanup(ctx, auditRecorder)
 
+	// Start notification dispatcher (background)
+	go notifDispatcher.Run(ctx)
+
 	// Start discovery loop (as manager runnable — starts after cache is synced)
 	discoverer := kubernetes.NewDiscoverer(k8sClient)
+	// Configure built-in schedule timezone
+	if tz := os.Getenv("BUILTIN_SCHEDULE_TIMEZONE"); tz != "" {
+		background.DefaultTimezone = tz
+	}
+
 	discoveryLoop := &background.DiscoveryLoop{
 		Client:     k8sClient,
 		Discoverer: discoverer,

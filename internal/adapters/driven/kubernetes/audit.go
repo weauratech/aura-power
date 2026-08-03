@@ -11,17 +11,24 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/weauratech/aura-power/api/v1alpha1"
+	"github.com/weauratech/aura-power/internal/adapters/driven/notifications"
 	"github.com/weauratech/aura-power/internal/ports"
 )
 
 type AuditRecorder struct {
-	client    client.Client
-	recorder  record.EventRecorder
-	namespace string
+	client       client.Client
+	recorder     record.EventRecorder
+	namespace    string
+	notifier     *notifications.Dispatcher
 }
 
 func NewAuditRecorder(c client.Client, recorder record.EventRecorder, namespace string) *AuditRecorder {
 	return &AuditRecorder{client: c, recorder: recorder, namespace: namespace}
+}
+
+// SetNotifier attaches a notification dispatcher to the audit recorder.
+func (a *AuditRecorder) SetNotifier(n *notifications.Dispatcher) {
+	a.notifier = n
 }
 
 func (a *AuditRecorder) Record(ctx context.Context, event ports.AuditEvent) error {
@@ -53,6 +60,18 @@ func (a *AuditRecorder) Record(ctx context.Context, event ports.AuditEvent) erro
 
 	if err := a.client.Create(ctx, auditEvent); err != nil {
 		return fmt.Errorf("failed to create audit event: %w", err)
+	}
+
+	// Dispatch notification (non-blocking)
+	if a.notifier != nil {
+		a.notifier.Enqueue(notifications.Event{
+			Action:    string(event.Action),
+			Target:    notifications.TargetRef{Namespace: event.Target.Namespace, Name: event.Target.Name, Kind: string(event.Target.Kind)},
+			Result:    event.Result,
+			Reason:    event.Reason,
+			RuleName:  event.RuleName,
+			Timestamp: event.Timestamp,
+		})
 	}
 
 	return nil

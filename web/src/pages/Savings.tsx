@@ -3,6 +3,8 @@ import Typography from '@mui/material/Typography';
 import Card from '@mui/material/Card';
 import CardContent from '@mui/material/CardContent';
 import Grid from '@mui/material/Grid';
+import Stack from '@mui/material/Stack';
+import Button from '@mui/material/Button';
 import Skeleton from '@mui/material/Skeleton';
 import Alert from '@mui/material/Alert';
 import Table from '@mui/material/Table';
@@ -31,7 +33,12 @@ export function Savings() {
 
   return (
     <Box>
-      <Typography variant="h4" sx={{ mb: 4 }}>Savings</Typography>
+      <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 4 }}>
+        <Typography variant="h4">Savings</Typography>
+        <Button variant="outlined" size="small" href="/api/v1/savings/export" download>
+          Export CSV
+        </Button>
+      </Stack>
 
       <Grid container spacing={3} sx={{ mb: 5 }}>
         <Grid item xs={12} sm={4}>

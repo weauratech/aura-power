@@ -1,0 +1,81 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: powernotificationchannels.power.aura.sh
+spec:
+  group: power.aura.sh
+  names:
+    kind: PowerNotificationChannel
+    listKind: PowerNotificationChannelList
+    plural: powernotificationchannels
+    singular: powernotificationchannel
+    shortNames:
+      - pnc
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Type
+          type: string
+          jsonPath: .spec.type
+        - name: Enabled
+          type: boolean
+          jsonPath: .spec.enabled
+        - name: Sent
+          type: integer
+          jsonPath: .status.totalSent
+        - name: Errors
+          type: integer
+          jsonPath: .status.totalErrors
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [type, enabled]
+              properties:
+                type:
+                  type: string
+                  enum: ["google-chat", "slack", "discord", "generic"]
+                url:
+                  type: string
+                urlFrom:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+                    key:
+                      type: string
+                events:
+                  type: array
+                  items:
+                    type: string
+                namespaceFilter:
+                  type: array
+                  items:
+                    type: string
+                throttle:
+                  type: string
+                enabled:
+                  type: boolean
+                  default: true
+            status:
+              type: object
+              properties:
+                lastNotification:
+                  type: string
+                  format: date-time
+                lastError:
+                  type: string
+                totalSent:
+                  type: integer
+                totalErrors:
+                  type: integer

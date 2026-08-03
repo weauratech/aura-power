@@ -23,6 +23,7 @@ import BarChartIcon from '@mui/icons-material/BarChartOutlined';
 import BlockIcon from '@mui/icons-material/BlockOutlined';
 import SavingsIcon from '@mui/icons-material/SavingsOutlined';
 import HistoryIcon from '@mui/icons-material/HistoryOutlined';
+import NotificationsIcon from '@mui/icons-material/NotificationsOutlined';
 import PendingIcon from '@mui/icons-material/HourglassEmptyOutlined';
 import PeopleIcon from '@mui/icons-material/PeopleOutlined';
 import MenuIcon from '@mui/icons-material/MenuOutlined';
@@ -52,6 +53,7 @@ const NAV_ITEMS: NavItem[] = [
   { path: '/savings', label: 'Savings', icon: <SavingsIcon /> },
   { path: '/blocked', label: 'Blocked', icon: <BlockIcon /> },
   { path: '/audit', label: 'Audit Log', icon: <HistoryIcon /> },
+  { path: '/notifications', label: 'Notifications', icon: <NotificationsIcon /> },
   { path: '/metrics', label: 'Metrics', icon: <BarChartIcon /> },
 ];
 

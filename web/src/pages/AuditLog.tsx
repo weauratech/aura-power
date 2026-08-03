@@ -4,6 +4,7 @@ import Typography from '@mui/material/Typography';
 import Card from '@mui/material/Card';
 import CardContent from '@mui/material/CardContent';
 import Stack from '@mui/material/Stack';
+import Button from '@mui/material/Button';
 import Skeleton from '@mui/material/Skeleton';
 import Alert from '@mui/material/Alert';
 import Chip from '@mui/material/Chip';
@@ -73,9 +74,14 @@ export function AuditLog() {
             Power actions and state transitions
           </Typography>
         </Box>
-        <Typography variant="caption" color="text.disabled">
-          {data?.total ?? 0} total events
-        </Typography>
+        <Stack direction="row" alignItems="center" spacing={2}>
+          <Button variant="outlined" size="small" href="/api/v1/audit/export" download>
+            Export CSV
+          </Button>
+          <Typography variant="caption" color="text.disabled">
+            {data?.total ?? 0} total events
+          </Typography>
+        </Stack>
       </Stack>
 
       <TextField

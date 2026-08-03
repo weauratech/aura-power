@@ -100,11 +100,14 @@ func (s *Server) setupRoutes() {
 		api.POST("/preview/override", s.handlePreviewOverride)
 		api.GET("/savings", s.handleSavings)
 		api.GET("/savings/breakdown", s.handleSavingsBreakdown)
+		api.GET("/savings/export", s.handleSavingsExport)
 		api.GET("/audit", s.handleAuditList)
+		api.GET("/audit/export", s.handleAuditExport)
 		api.GET("/policies", s.handleListPolicies)
 		api.GET("/overrides", s.handleListOverrides)
 		api.GET("/namespaces", s.handleListNamespaces)
 		api.GET("/namespace-groups", s.handleListNamespaceGroups)
+		api.GET("/notification-channels", s.handleListNotificationChannels)
 	}
 
 	// Write operations: approver + admin
@@ -116,6 +119,7 @@ func (s *Server) setupRoutes() {
 			write.PUT("/policies/:namespace/:name", s.handleUpdatePolicy)
 			write.POST("/overrides", s.handleCreateOverride)
 			write.POST("/namespace-groups", s.handleCreateNamespaceGroup)
+			write.POST("/notification-channels", s.handleCreateNotificationChannel)
 		}
 		// Delete operations: admin only
 		del := api.Group("")
@@ -124,6 +128,7 @@ func (s *Server) setupRoutes() {
 			del.DELETE("/policies/:namespace/:name", s.handleDeletePolicy)
 			del.DELETE("/overrides/:namespace/:name", s.handleDeleteOverride)
 			del.DELETE("/namespace-groups/:namespace/:name", s.handleDeleteNamespaceGroup)
+			del.DELETE("/notification-channels/:namespace/:name", s.handleDeleteNotificationChannel)
 		}
 	} else {
 		// No auth — all routes open
@@ -133,7 +138,9 @@ func (s *Server) setupRoutes() {
 		api.POST("/overrides", s.handleCreateOverride)
 		api.DELETE("/overrides/:namespace/:name", s.handleDeleteOverride)
 		api.POST("/namespace-groups", s.handleCreateNamespaceGroup)
+		api.POST("/notification-channels", s.handleCreateNotificationChannel)
 		api.DELETE("/namespace-groups/:namespace/:name", s.handleDeleteNamespaceGroup)
+		api.DELETE("/notification-channels/:namespace/:name", s.handleDeleteNotificationChannel)
 	}
 
 	// Panel assets served via FinalizeRoutes (NoRoute handler)

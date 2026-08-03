@@ -1,9 +1,11 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -493,6 +495,69 @@ func (s *Server) handleSavingsBreakdown(c *gin.Context) {
 	})
 }
 
+func (s *Server) handleSavingsExport(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	var targets v1alpha1.PowerTargetList
+	if err := s.client.List(ctx, &targets); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.Header("Content-Type", "text/csv")
+	c.Header("Content-Disposition", "attachment; filename=aura-power-savings.csv")
+
+	c.Writer.WriteString("namespace,name,kind,cpu_hours_saved,memory_gib_hours_saved,estimated_cost_usd,desired_state\n")
+	for _, t := range targets.Items {
+		if t.Status.Savings == nil {
+			continue
+		}
+		s := t.Status.Savings
+		if s.CPUHoursSaved == 0 && s.MemoryGiBHours == 0 && s.EstimatedCost == 0 {
+			continue
+		}
+		line := fmt.Sprintf("%s,%s,%s,%.2f,%.2f,%.4f,%s\n",
+			t.Spec.TargetRef.Namespace, t.Spec.TargetRef.Name, t.Spec.TargetRef.Kind,
+			s.CPUHoursSaved, s.MemoryGiBHours, s.EstimatedCost, t.Status.DesiredState)
+		c.Writer.WriteString(line)
+	}
+}
+
+func (s *Server) handleAuditExport(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	var events v1alpha1.PowerAuditEventList
+	if err := s.client.List(ctx, &events); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Sort descending
+	items := events.Items
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].CreationTimestamp.After(items[j].CreationTimestamp.Time)
+	})
+
+	c.Header("Content-Type", "text/csv")
+	c.Header("Content-Disposition", "attachment; filename=aura-power-audit.csv")
+
+	c.Writer.WriteString("timestamp,action,target_namespace,target_name,target_kind,result,reason,rule_name\n")
+	for _, e := range items {
+		line := fmt.Sprintf("%s,%s,%s,%s,%s,%s,%s,%s\n",
+			e.Spec.Timestamp, e.Spec.Action,
+			e.Spec.Target.Namespace, e.Spec.Target.Name, e.Spec.Target.Kind,
+			e.Spec.Result, csvEscape(e.Spec.Reason), e.Spec.RuleName)
+		c.Writer.WriteString(line)
+	}
+}
+
+func csvEscape(s string) string {
+	if strings.ContainsAny(s, ",\"\n") {
+		return "\"" + strings.ReplaceAll(s, "\"", "\"\"") + "\""
+	}
+	return s
+}
+
 func (s *Server) handleAuditList(c *gin.Context) {
 	ctx := c.Request.Context()
 
@@ -729,6 +794,57 @@ func (s *Server) handleDeleteNamespaceGroup(c *gin.Context) {
 
 	if err := s.client.Delete(ctx, group); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete group: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"deleted": name})
+}
+
+
+func (s *Server) handleListNotificationChannels(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	var channels v1alpha1.PowerNotificationChannelList
+	if err := s.client.List(ctx, &channels); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"items": channels.Items, "count": len(channels.Items)})
+}
+
+func (s *Server) handleCreateNotificationChannel(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	var channel v1alpha1.PowerNotificationChannel
+	if err := c.ShouldBindJSON(&channel); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid channel: " + err.Error()})
+		return
+	}
+
+	if channel.Namespace == "" {
+		channel.Namespace = "aura-system"
+	}
+
+	if err := s.client.Create(ctx, &channel); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create channel: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{"name": channel.Name, "namespace": channel.Namespace})
+}
+
+func (s *Server) handleDeleteNotificationChannel(c *gin.Context) {
+	ctx := c.Request.Context()
+	ns := c.Param("namespace")
+	name := c.Param("name")
+
+	channel := &v1alpha1.PowerNotificationChannel{}
+	channel.Name = name
+	channel.Namespace = ns
+
+	if err := s.client.Delete(ctx, channel); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete channel: " + err.Error()})
 		return
 	}
 
