@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import type { StatusSummary, DiscoverySummary, SavingsSummary, PowerTarget, AuditEvent } from '../types';
+import type { StatusSummary, DiscoverySummary, SavingsSummary, PowerTarget, AuditEvent, PowerState } from '../types';
 import { friendlyError } from '../utils/errors';
 
 const API_BASE = '/api/v1';
@@ -197,7 +197,7 @@ export interface PolicyResponse {
   metadata: { name: string; namespace: string; creationTimestamp: string };
   spec: {
     scope: { namespaces?: string[] };
-    schedule: { desiredState: string; windows?: Array<{ start: string; end: string; timezone: string; days?: number[] }> };
+    schedule: { desiredState: PowerState; windows?: Array<{ start: string; end: string; timezone: string; days?: number[] }> };
     priority: number;
     description?: string;
   };
@@ -208,7 +208,7 @@ export interface OverrideResponse {
   metadata: { name: string; namespace: string; creationTimestamp: string };
   spec: {
     scope: { namespaces?: string[]; workloadNames?: string[] };
-    state: string;
+    state: PowerState;
     priority: number;
     expiresAt: string;
     reason: string;

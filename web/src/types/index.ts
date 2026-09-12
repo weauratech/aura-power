@@ -1,3 +1,5 @@
+export type PowerState = 'on' | 'off';
+
 export interface TargetRef {
   cluster?: string;
   apiVersion?: string;
@@ -10,7 +12,7 @@ export interface TargetRef {
 export interface ObservedState {
   replicas: number;
   suspended: boolean;
-  powerState: string;
+  powerState: PowerState | '';
 }
 
 export interface RuleReference {
@@ -51,7 +53,7 @@ export interface PowerTarget {
   spec: { targetRef: TargetRef };
   status: {
     observedState: ObservedState;
-    desiredState: string;
+    desiredState: PowerState | '';
     managed: boolean;
     divergent: boolean;
     winningRule?: RuleReference;

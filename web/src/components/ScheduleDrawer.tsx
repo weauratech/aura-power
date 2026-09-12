@@ -19,7 +19,7 @@ import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import CloseIcon from '@mui/icons-material/CloseOutlined';
 import { useNamespaces, useTargets, apiPost, apiPut } from '../hooks/useApi';
 import { useQueryClient } from '@tanstack/react-query';
-import type { TargetRef } from '../types';
+import type { PowerState, TargetRef } from '../types';
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -38,7 +38,7 @@ export interface ScheduleDrawerProps {
     namespace: string;
     spec: {
       scope: { namespaces?: string[]; workloadNames?: string[]; targetRefs?: TargetRef[] };
-      schedule: { desiredState: string; windows?: Array<{ start: string; end: string; timezone: string; days?: number[] }> };
+      schedule: { desiredState: PowerState; windows?: Array<{ start: string; end: string; timezone: string; days?: number[] }> };
       priority: number;
       description?: string;
     };
@@ -64,7 +64,7 @@ export function ScheduleDrawer({ open, onClose, onSuccess, prefill, editPolicy }
   const [name, setName] = useState('');
   const [selectedNamespaces, setSelectedNamespaces] = useState<string[]>([]);
   const [selectedWorkloads, setSelectedWorkloads] = useState<TargetRef[]>([]);
-  const [desiredState, setDesiredState] = useState('off');
+  const [desiredState, setDesiredState] = useState<PowerState>('off');
   const [start, setStart] = useState('20:00');
   const [end, setEnd] = useState('08:00');
   const [timezone, setTimezone] = useState('America/Sao_Paulo');
@@ -287,7 +287,7 @@ export function ScheduleDrawer({ open, onClose, onSuccess, prefill, editPolicy }
             <Divider />
 
             {/* Desired state */}
-            <TextField label="Desired State" value={desiredState} onChange={e => setDesiredState(e.target.value)} select fullWidth size="small">
+            <TextField label="Desired State" value={desiredState} onChange={e => setDesiredState(e.target.value as PowerState)} select fullWidth size="small">
               <MenuItem value="on">On — keep running during window</MenuItem>
               <MenuItem value="off">Off — power down during window</MenuItem>
             </TextField>

@@ -44,9 +44,6 @@ func (d *DiscoveryLoop) Run(ctx context.Context) {
 	log.Info("waiting for leader election...")
 	time.Sleep(5 * time.Second)
 
-	// Seed built-in schedules on first run
-	SeedBuiltInSchedules(ctx, d.Client, d.Config.Namespace)
-
 	// Run immediately after cache is ready
 	d.runDiscovery(ctx)
 
@@ -74,6 +71,12 @@ func (d *DiscoveryLoop) Start(ctx context.Context) error {
 func (d *DiscoveryLoop) runDiscovery(ctx context.Context) {
 	log := ctrl.Log.WithName("discovery")
 	start := time.Now()
+
+	// This is intentionally idempotent and retried every cycle. A temporary API
+	// failure during startup must not leave built-in schedules absent forever.
+	if err := SeedBuiltInSchedules(ctx, d.Client, d.Config.Namespace); err != nil {
+		log.Error(err, "failed to seed one or more built-in schedules")
+	}
 
 	// Discover all workloads (nil = all namespaces, discoverer lists them)
 	workloads, err := d.Discoverer.DiscoverAll(ctx, nil)

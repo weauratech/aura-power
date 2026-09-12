@@ -21,6 +21,7 @@ spec:
           properties:
             spec:
               type: object
+              required: [desiredState]
               properties:
                 windows:
                   type: array
@@ -31,5 +32,5 @@ spec:
                       end: { type: string }
                       days: { type: array, items: { type: integer } }
                       timezone: { type: string }
-                desiredState: { type: string, enum: [on, off] }
+                desiredState: { type: string, enum: ["on", "off"] }
                 description: { type: string }
