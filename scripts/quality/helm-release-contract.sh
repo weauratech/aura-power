@@ -44,4 +44,8 @@ if helm template aura-power charts/aura-power --set server.replicas=2 >/dev/null
   exit 1
 fi
 
+observability_render="$(helm template aura-power charts/aura-power --set networkPolicy.enabled=true --set serviceMonitor.enabled=true)"
+grep -q 'port: 9003' <<<"$observability_render"
+[[ "$(grep -c '^kind: ServiceMonitor$' <<<"$observability_render")" -eq 2 ]]
+
 echo "Helm/release contract checks passed"

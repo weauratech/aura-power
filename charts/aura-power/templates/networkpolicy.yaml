@@ -29,6 +29,16 @@ spec:
     - ports:
         - port: 9090
           protocol: TCP
+    # OpenCost
+    - ports:
+        - port: 9003
+          protocol: TCP
+    {{- range .Values.networkPolicy.additionalServerEgressPorts }}
+    # Explicit non-standard provider or notification webhook port
+    - ports:
+        - port: {{ . }}
+          protocol: TCP
+    {{- end }}
     # DNS
     - ports:
         - port: 53

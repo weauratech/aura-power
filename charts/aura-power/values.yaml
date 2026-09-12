@@ -152,3 +152,5 @@ networkPolicy:
   enabled: false
   # server allows ingress from anywhere on port 8080
   # controller allows ingress only from monitoring namespace on port 8080
+  # Add ports used by HTTP notification webhooks that do not use 443.
+  additionalServerEgressPorts: []

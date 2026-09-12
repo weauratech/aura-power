@@ -36,6 +36,17 @@
         "failurePolicy": { "type": "string", "enum": ["Fail", "Ignore"] },
         "timeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 30 }
       }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "additionalServerEgressPorts": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 1, "maximum": 65535 },
+          "uniqueItems": true
+        }
+      }
     }
   }
 }
