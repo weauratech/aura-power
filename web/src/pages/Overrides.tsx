@@ -236,7 +236,7 @@ export function Overrides() {
           {createError && <Alert severity="error" sx={{ mb: 2 }}>{createError}</Alert>}
           <Stack spacing={3} sx={{ mt: 1 }}>
             <TextField label="Override Name" value={name} onChange={e => setName(e.target.value)} fullWidth required />
-            <TextField label="Namespaces" value={namespaces} onChange={e => setNamespaces(e.target.value)} fullWidth helperText="Comma-separated" required />
+            <TextField label="Namespaces" value={namespaces} onChange={e => setNamespaces(e.target.value)} fullWidth helperText="Comma-separated; provide namespaces or exact workloads" />
             <TextField label="Exact Workloads (optional)" value={workloadRefs} onChange={e => setWorkloadRefs(e.target.value)} fullWidth helperText="Comma-separated namespace/kind/name references; append #uid to bind an incarnation" />
             <TextField label="Desired State" value={state} onChange={e => setState(e.target.value)} select fullWidth>
               <MenuItem value="on">On (keep running)</MenuItem>
@@ -250,7 +250,7 @@ export function Overrides() {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setCreateOpen(false)}>Cancel</Button>
-          <Button variant="contained" onClick={handleCreate} disabled={creating || !name || !namespaces || reason.length < 3}>
+          <Button variant="contained" onClick={handleCreate} disabled={creating || !name || (!namespaces.trim() && !workloadRefs.trim()) || reason.length < 3}>
             {creating ? 'Creating...' : 'Create Override'}
           </Button>
         </DialogActions>

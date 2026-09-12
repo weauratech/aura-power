@@ -104,6 +104,54 @@ func TestDispatchBatchDeduplicatesExactEvents(t *testing.T) {
 	}
 }
 
+func TestDispatchBatchSeparatesDifferentActionsResultsAndRules(t *testing.T) {
+	channel := &v1alpha1.PowerNotificationChannel{
+		ObjectMeta: metav1.ObjectMeta{Name: "batch", Namespace: "aura-system"},
+		Spec:       v1alpha1.PowerNotificationChannelSpec{Type: "fixture", URL: "https://example.test", Enabled: true},
+	}
+	d, c, sender := testDispatcher(t, channel)
+	d.dispatchBatch(context.Background(), []Event{
+		{Action: "workload.powered_down", Result: "success", RuleName: "nightly", Target: TargetRef{Namespace: "team-a", Name: "api", Kind: "Deployment"}},
+		{Action: "workload.powered_down", Result: "success", RuleName: "nightly", Target: TargetRef{Namespace: "team-b", Name: "api", Kind: "StatefulSet"}},
+		{Action: "workload.powered_down", Result: "blocked", RuleName: "nightly", Target: TargetRef{Namespace: "team-a", Name: "worker", Kind: "Deployment"}},
+		{Action: "workload.powered_down", Result: "success", RuleName: "weekend", Target: TargetRef{Namespace: "team-a", Name: "cron", Kind: "CronJob"}},
+		{Action: "workload.restored", Result: "success", RuleName: "nightly", Target: TargetRef{Namespace: "team-a", Name: "api", Kind: "Deployment"}},
+	})
+
+	if len(sender.events) != 4 {
+		t.Fatalf("deliveries=%d want=4 semantically homogeneous messages: %+v", len(sender.events), sender.events)
+	}
+	if !strings.Contains(sender.events[0].Reason, "2 workload(s)") {
+		t.Fatalf("same action/result/rule was not batched: %+v", sender.events[0])
+	}
+	for _, event := range sender.events {
+		if event.Action == "" || event.Result == "" || event.RuleName == "" {
+			t.Fatalf("delivery lost action/result/rule identity: %+v", event)
+		}
+	}
+	var got v1alpha1.PowerNotificationChannel
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(channel), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.TotalSent != 4 {
+		t.Fatalf("totalSent=%d want=4 deliveries", got.Status.TotalSent)
+	}
+}
+
+func TestEnqueueDropsOldestWhenQueueIsFull(t *testing.T) {
+	d, _, _ := testDispatcher(t)
+	d.queue = make(chan Event, 2)
+	d.Enqueue(Event{Target: TargetRef{Name: "oldest"}})
+	d.Enqueue(Event{Target: TargetRef{Name: "middle"}})
+	d.Enqueue(Event{Target: TargetRef{Name: "newest"}})
+
+	first := <-d.queue
+	second := <-d.queue
+	if first.Target.Name != "middle" || second.Target.Name != "newest" {
+		t.Fatalf("queue retained wrong events: first=%q second=%q", first.Target.Name, second.Target.Name)
+	}
+}
+
 func TestDispatchResolvesSecretInChannelNamespaceAndRedactsFailure(t *testing.T) {
 	const webhookURL = "https://hooks.example.test/private-token"
 	channel := &v1alpha1.PowerNotificationChannel{

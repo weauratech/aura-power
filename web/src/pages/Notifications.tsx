@@ -295,7 +295,6 @@ export function Notifications() {
               <TextField label="Provider Type" value={type} onChange={e => setType(e.target.value)} select size="small" fullWidth>
                 <MenuItem value="google-chat">Google Chat</MenuItem>
                 <MenuItem value="slack">Slack</MenuItem>
-                <MenuItem value="discord">Discord</MenuItem>
                 <MenuItem value="generic">Generic Webhook</MenuItem>
               </TextField>
               <TextField label="Webhook URL" value={url} onChange={e => setUrl(e.target.value)} size="small" fullWidth required placeholder="https://..." />

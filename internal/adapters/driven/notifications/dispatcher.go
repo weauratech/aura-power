@@ -75,8 +75,19 @@ func (d *Dispatcher) Enqueue(event Event) {
 	select {
 	case d.queue <- event:
 	default:
-		// Queue full, drop oldest
-		ctrl.Log.WithName("notifications").Info("queue full, dropping event")
+		// Preserve the most recent controller state when producers outrun the
+		// dispatcher. The first non-blocking receive makes room by evicting the
+		// oldest pending event; a concurrent consumer may already have done so.
+		select {
+		case <-d.queue:
+		default:
+		}
+		select {
+		case d.queue <- event:
+			ctrl.Log.WithName("notifications").Info("queue full, dropped oldest event")
+		default:
+			ctrl.Log.WithName("notifications").Info("queue remained full, dropping newest event")
+		}
 	}
 }
 
@@ -177,23 +188,18 @@ func (d *Dispatcher) dispatchBatch(ctx context.Context, batch []Event) {
 			continue
 		}
 
-		// Throttle: check if any event in batch was already sent recently
+		// A message must have one truthful action, result, and rule. Combining
+		// different decisions under the first event's metadata makes the webhook
+		// claim that unrelated workloads had the same outcome.
+		groups := groupBatchEvents(channelEvents)
+
+		// Throttle each semantically homogeneous group independently.
 		throttleDur := 5 * time.Minute
 		if ch.Spec.Throttle != "" {
 			if parsed, err := time.ParseDuration(ch.Spec.Throttle); err == nil && parsed > 0 {
 				throttleDur = parsed
 			}
 		}
-
-		// For batch, throttle by first target (representative)
-		key := batchThrottleKey(ch, channelEvents)
-		d.mu.Lock()
-		expiresAt, exists := d.throttle[key]
-		if exists && time.Now().Before(expiresAt) {
-			d.mu.Unlock()
-			continue
-		}
-		d.mu.Unlock()
 
 		// Resolve URL
 		url, err := d.resolveWebhookURL(ctx, ch)
@@ -209,38 +215,21 @@ func (d *Dispatcher) dispatchBatch(ctx context.Context, batch []Event) {
 			continue
 		}
 
-		// Send batch as one message
-		batchEvent := Event{
-			Action:    channelEvents[0].Action,
-			Target:    channelEvents[0].Target,
-			Result:    channelEvents[0].Result,
-			Reason:    fmt.Sprintf("%d workload(s) affected", len(channelEvents)),
-			RuleName:  channelEvents[0].RuleName,
-			Timestamp: channelEvents[0].Timestamp,
-		}
-
-		// Build reason with all targets
-		if len(channelEvents) > 1 {
-			names := fmt.Sprintf("%d workload(s): ", len(channelEvents))
-			for i, ev := range channelEvents {
-				if i > 4 {
-					names += fmt.Sprintf(" (+%d more)", len(channelEvents)-5)
-					break
-				}
-				if i > 0 {
-					names += ", "
-				}
-				names += fmt.Sprintf("%s/%s (%s)", ev.Target.Namespace, ev.Target.Name, ev.Target.Kind)
+		for _, group := range groups {
+			key := batchThrottleKey(ch, group)
+			d.mu.Lock()
+			expiresAt, exists := d.throttle[key]
+			d.mu.Unlock()
+			if exists && time.Now().Before(expiresAt) {
+				continue
 			}
-			batchEvent.Reason = names
-		} else {
-			batchEvent.Reason = channelEvents[0].Reason
-		}
 
-		if err := sender.Send(ctx, url, batchEvent); err != nil {
-			d.recordFailure(ctx, ch, "send notification", err, url)
-			continue
-		} else {
+			batchEvent := summarizeBatch(group)
+			if err := sender.Send(ctx, url, batchEvent); err != nil {
+				d.recordFailure(ctx, ch, "send notification", err, url)
+				continue
+			}
+
 			d.mu.Lock()
 			d.throttle[key] = time.Now().Add(throttleDur)
 			d.mu.Unlock()
@@ -248,13 +237,55 @@ func (d *Dispatcher) dispatchBatch(ctx context.Context, batch []Event) {
 			ch.Status.TotalSent++
 			ch.Status.LastNotification = &now
 			ch.Status.LastError = ""
-			log.Info("batch notification sent", "channel", ch.Name, "events", len(channelEvents))
-		}
+			log.Info("batch notification sent", "channel", ch.Name, "events", len(group), "action", batchEvent.Action, "result", batchEvent.Result, "rule", batchEvent.RuleName)
 
-		if err := d.client.Status().Update(ctx, ch); err != nil {
-			log.Error(err, "failed to update channel status", "channel", ch.Name, "namespace", ch.Namespace)
+			if err := d.client.Status().Update(ctx, ch); err != nil {
+				log.Error(err, "failed to update channel status", "channel", ch.Name, "namespace", ch.Namespace)
+			}
 		}
 	}
+}
+
+func groupBatchEvents(events []Event) [][]Event {
+	type semanticKey struct {
+		action string
+		result string
+		rule   string
+	}
+	groups := make([][]Event, 0)
+	indexes := make(map[semanticKey]int)
+	for _, event := range events {
+		key := semanticKey{action: event.Action, result: event.Result, rule: event.RuleName}
+		index, ok := indexes[key]
+		if !ok {
+			index = len(groups)
+			indexes[key] = index
+			groups = append(groups, nil)
+		}
+		groups[index] = append(groups[index], event)
+	}
+	return groups
+}
+
+func summarizeBatch(events []Event) Event {
+	batchEvent := events[0]
+	if len(events) == 1 {
+		return batchEvent
+	}
+
+	names := fmt.Sprintf("%d workload(s): ", len(events))
+	for i, event := range events {
+		if i > 4 {
+			names += fmt.Sprintf(" (+%d more)", len(events)-5)
+			break
+		}
+		if i > 0 {
+			names += ", "
+		}
+		names += fmt.Sprintf("%s/%s (%s)", event.Target.Namespace, event.Target.Name, event.Target.Kind)
+	}
+	batchEvent.Reason = names
+	return batchEvent
 }
 
 func (d *Dispatcher) dispatch(ctx context.Context, event Event) {
@@ -400,7 +431,7 @@ func batchThrottleKey(channel *v1alpha1.PowerNotificationChannel, events []Event
 }
 
 func eventIdentity(event Event) string {
-	return event.Action + "/" + event.Target.Namespace + "/" + event.Target.Kind + "/" + event.Target.Name + "/" + event.Target.UID
+	return event.Action + "/" + event.Result + "/" + event.RuleName + "/" + event.Target.Namespace + "/" + event.Target.Kind + "/" + event.Target.Name + "/" + event.Target.UID
 }
 
 func contains(slice []string, item string) bool {

@@ -1,4 +1,4 @@
-import { screen, within } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { http, HttpResponse } from 'msw';
@@ -7,6 +7,7 @@ import { PendingApprovals } from '../../src/pages/PendingApprovals';
 import { Targets } from '../../src/pages/Targets';
 import { Schedule } from '../../src/pages/Schedule';
 import { Notifications as NotificationsPage } from '../../src/pages/Notifications';
+import { Overrides } from '../../src/pages/Overrides';
 import { Blocked } from '../../src/pages/Blocked';
 import { Layout } from '../../src/components/Layout';
 import { origin, server } from '../server';
@@ -72,12 +73,48 @@ describe('operational pages', () => {
     await userEvent.keyboard(' ');
     expect(await screen.findByRole('dialog', { name: 'Edit Channel' })).toBeVisible();
     expect(screen.getByRole('button', { name: 'Close notification channel drawer' })).toHaveFocus();
+    await userEvent.click(screen.getByLabelText('Provider Type'));
+    expect(screen.queryByRole('option', { name: 'Discord' })).not.toBeInTheDocument();
+    await userEvent.keyboard('{Escape}');
 
     view.unmount();
     renderUI(<NotificationsPage />);
     await userEvent.click(await screen.findByRole('button', { name: 'Delete notification channel operations' }));
     expect(await screen.findByRole('dialog', { name: 'Delete Notification Channel' })).toBeVisible();
     expect(screen.queryByRole('dialog', { name: 'Edit Channel' })).not.toBeInTheDocument();
+  });
+
+  it('creates an override scoped only by exact workload references', async () => {
+    let payload: {
+      spec?: {
+        scope?: { namespaces?: string[]; targetRefs?: Array<{ namespace: string; kind: string; name: string; uid?: string }> };
+        reason?: string;
+      };
+    } | undefined;
+    server.use(
+      http.get(`${origin}/overrides`, () => HttpResponse.json({ items: [], count: 0 })),
+      http.post(`${origin}/overrides`, async ({ request }) => {
+        payload = await request.json() as typeof payload;
+        return HttpResponse.json(payload, { status: 201 });
+      }),
+    );
+    renderUI(<Overrides />);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'New Override' }));
+    const dialog = await screen.findByRole('dialog', { name: 'New Override' });
+    await userEvent.type(within(dialog).getByRole('textbox', { name: /Override Name/ }), 'keep-api-on');
+    await userEvent.type(within(dialog).getByRole('textbox', { name: /Exact Workloads/ }), 'fixture-a/Deployment/api#uid-1');
+    await userEvent.type(within(dialog).getByRole('textbox', { name: /Reason/ }), 'incident mitigation');
+    const submit = within(dialog).getByRole('button', { name: 'Create Override' });
+    expect(submit).toBeEnabled();
+    await userEvent.click(submit);
+
+    await waitFor(() => expect(payload).toBeDefined());
+    expect(payload?.spec).toMatchObject({
+      scope: { targetRefs: [{ namespace: 'fixture-a', kind: 'Deployment', name: 'api', uid: 'uid-1' }] },
+      reason: 'incident mitigation',
+    });
+    expect(payload?.spec?.scope?.namespaces).toBeUndefined();
   });
 
   it('filters targets by a value the operator can see', async () => {

@@ -15,22 +15,25 @@ test('administrator navigation keeps every primary destination reachable', async
     ['Users', 'Users'],
   ] as const;
   for (const [link, heading] of destinations) {
+    if ((page.viewportSize()?.width ?? 1280) < 900) {
+      await page.getByRole('button', { name: 'Open navigation' }).click();
+    }
     await page.getByRole('link', { name: link, exact: true }).click();
     await expect(page.getByRole('heading', { name: heading, exact: true })).toBeVisible();
   }
 });
 
-test('@mutation member receives an authorization denial for policy creation', async ({ page, request }) => {
+test('@mutation member receives an authorization denial for policy creation', async ({ page }) => {
   const adminUser = process.env.AURA_E2E_ADMIN_USER;
   const adminPassword = process.env.AURA_E2E_ADMIN_PASSWORD;
   if (!adminUser || !adminPassword) throw new Error('administrator fixture credentials are required');
   const username = `codex-member-${Date.now()}`;
   const password = `fixture-${Date.now()}-A!`;
-  const create = await request.post('/api/v1/users', { data: { username, password, role: 'member' } });
+  const create = await page.request.post('/api/v1/users', { data: { username, password, role: 'member' } });
   expect(create.status()).toBe(201);
   const created = await create.json();
   try {
-    await request.post('/api/v1/auth/logout');
+    await page.request.post('/api/v1/auth/logout');
     await page.goto('/');
     await page.getByLabel('Username').fill(username);
     await page.getByLabel('Password').fill(password);
@@ -41,8 +44,8 @@ test('@mutation member receives an authorization denial for policy creation', as
     });
     expect(denied.status()).toBe(403);
   } finally {
-    await request.post('/api/v1/auth/login', { data: { username: adminUser, password: adminPassword } });
-    const cleanup = await request.delete(`/api/v1/users/${created.id}`);
+    await page.request.post('/api/v1/auth/login', { data: { username: adminUser, password: adminPassword } });
+    const cleanup = await page.request.delete(`/api/v1/users/${created.id}`);
     expect([200, 204]).toContain(cleanup.status());
   }
 });
