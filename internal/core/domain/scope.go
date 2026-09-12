@@ -6,6 +6,9 @@ func MatchesScope(target Target, scope Scope) bool {
 	if len(scope.NamespaceGroups) > 0 {
 		return false
 	}
+	if !matchesTargetRefs(target, scope) {
+		return false
+	}
 	if !matchesNamespaceNames(target, scope) {
 		return false
 	}
@@ -19,6 +22,28 @@ func MatchesScope(target Target, scope Scope) bool {
 		return false
 	}
 	return true
+}
+
+func matchesTargetRefs(target Target, scope Scope) bool {
+	if len(scope.TargetRefs) == 0 {
+		return true
+	}
+	for _, ref := range scope.TargetRefs {
+		if ref.Namespace != target.Ref.Namespace || ref.Name != target.Ref.Name || ref.Kind != target.Ref.Kind {
+			continue
+		}
+		if ref.Cluster != "" && ref.Cluster != target.Ref.Cluster {
+			continue
+		}
+		if ref.APIVersion != "" && ref.APIVersion != target.Ref.APIVersion {
+			continue
+		}
+		if ref.UID != "" && ref.UID != target.Ref.UID {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 func matchesNamespaceNames(target Target, scope Scope) bool {
@@ -75,7 +100,7 @@ func labelsMatch(targetLabels, selectorLabels map[string]string) bool {
 
 // ComputeSpecificity determines how specific a scope is.
 func ComputeSpecificity(scope Scope) ScopeSpecificity {
-	if len(scope.WorkloadNames) > 0 || len(scope.WorkloadLabels) > 0 {
+	if len(scope.TargetRefs) > 0 || len(scope.WorkloadNames) > 0 || len(scope.WorkloadLabels) > 0 {
 		return ScopeWorkload
 	}
 	if len(scope.Namespaces) > 0 || len(scope.NamespaceGroups) > 0 || len(scope.NamespaceLabels) > 0 {

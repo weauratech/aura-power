@@ -1,7 +1,10 @@
 export interface TargetRef {
+  cluster?: string;
+  apiVersion?: string;
   namespace: string;
   name: string;
   kind: 'Deployment' | 'StatefulSet' | 'CronJob';
+  uid?: string;
 }
 
 export interface ObservedState {

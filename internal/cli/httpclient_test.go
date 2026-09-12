@@ -88,7 +88,7 @@ func TestOverrideValidationRejectsInvalidInputBeforeNetwork(t *testing.T) {
 		{name: "duration", state: "off", duration: "tomorrow"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := runOverrideCreate("team-a/api", tc.state, tc.duration, "fixture", "", 100); err == nil {
+			if err := runOverrideCreate("team-a/api", "Deployment", "", tc.state, tc.duration, "fixture", "", 100); err == nil {
 				t.Fatal("invalid input was accepted")
 			}
 		})
@@ -108,18 +108,22 @@ func TestCLICommandHTTPContracts(t *testing.T) {
 		{name: "status", wantMethod: http.MethodGet, wantPath: "/api/v1/targets?namespace=team-a&state=off", status: 200, response: `{"targets":[],"count":0}`, invoke: func() error { namespace = "team-a"; return runStatus("off") }},
 		{name: "discover", wantMethod: http.MethodGet, wantPath: "/api/v1/discover?namespace=team-a", status: 200, response: `{"totalWorkloads":0}`, invoke: func() error { namespace = "team-a"; return runDiscover() }},
 		{name: "savings", wantMethod: http.MethodGet, wantPath: "/api/v1/savings?period=7d&namespace=team-a", status: 200, response: `{"totalCPUHours":0}`, invoke: func() error { namespace = "team-a"; return runSavings("7d") }},
-		{name: "explain", wantMethod: http.MethodGet, wantPath: "/api/v1/targets/team-a/api/explain", status: 200, response: `{"effectiveState":"off"}`, invoke: func() error { return runExplain("team-a/api") }},
+		{name: "explain", wantMethod: http.MethodGet, wantPath: "/api/v1/targets/team-a/api/explain?kind=Deployment", status: 200, response: `{"effectiveState":"off"}`, invoke: func() error { return runExplain("team-a/api", "Deployment", "") }},
 		{name: "whoami", wantMethod: http.MethodGet, wantPath: "/api/v1/auth/me", status: 200, response: `{"id":"1","username":"member","role":"member"}`, invoke: runWhoami},
 		{
 			name: "override", wantMethod: http.MethodPost, wantPath: "/api/v1/overrides", status: 201, response: `{"name":"override-fixture"}`,
-			invoke: func() error { return runOverrideCreate("team-a/api", "off", "1h", "test", "ISSUE-1", 123) },
+			invoke: func() error {
+				return runOverrideCreate("team-a/api", "Deployment", "uid-api", "off", "1h", "test", "ISSUE-1", 123)
+			},
 			checkBody: func(t *testing.T, body map[string]any) {
 				spec := body["spec"].(map[string]any)
 				if spec["state"] != "off" || spec["priority"] != float64(123) || spec["reason"] != "test" {
 					t.Fatalf("override semantics lost: %#v", spec)
 				}
 				scope := spec["scope"].(map[string]any)
-				if scope["namespaces"].([]any)[0] != "team-a" || scope["workloadNames"].([]any)[0] != "api" {
+				refs := scope["targetRefs"].([]any)
+				ref := refs[0].(map[string]any)
+				if ref["namespace"] != "team-a" || ref["name"] != "api" || ref["kind"] != "Deployment" || ref["uid"] != "uid-api" {
 					t.Fatalf("override target lost: %#v", scope)
 				}
 			},
@@ -162,7 +166,7 @@ func TestCLICommandHTTPContracts(t *testing.T) {
 
 func TestCLIReportsRemoteAndTargetErrors(t *testing.T) {
 	setupCLIUnitTest(t)
-	if err := runExplain("missing-separator"); err == nil {
+	if err := runExplain("missing-separator", "Deployment", ""); err == nil {
 		t.Fatal("invalid target accepted")
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -176,7 +180,7 @@ func TestCLIReportsRemoteAndTargetErrors(t *testing.T) {
 		"status":   func() error { return runStatus("") },
 		"discover": runDiscover,
 		"savings":  func() error { return runSavings("30d") },
-		"explain":  func() error { return runExplain("team-a/api") },
+		"explain":  func() error { return runExplain("team-a/api", "Deployment", "") },
 		"whoami":   runWhoami,
 	} {
 		t.Run(name, func(t *testing.T) {

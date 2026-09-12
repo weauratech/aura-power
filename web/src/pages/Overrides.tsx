@@ -26,6 +26,20 @@ import { StatusChip } from '../design-system/react';
 import type { WorkloadState } from '../design-system/react/PowerRing';
 import { useOverrides, apiPost, apiDelete, type OverrideResponse } from '../hooks/useApi';
 import { useQueryClient } from '@tanstack/react-query';
+import type { TargetRef } from '../types';
+
+function parseTargetRefs(input: string): TargetRef[] {
+  if (!input.trim()) return [];
+  return input.split(',').map(value => {
+    const trimmed = value.trim();
+    const [path, uid] = trimmed.split('#', 2);
+    const [namespace, kind, name, ...extra] = path.split('/');
+    if (!namespace || !name || extra.length > 0 || !['Deployment', 'StatefulSet', 'CronJob'].includes(kind)) {
+      throw new Error(`Invalid exact workload "${trimmed}"; use namespace/kind/name or namespace/kind/name#uid`);
+    }
+    return { namespace, kind: kind as TargetRef['kind'], name, ...(uid ? { uid } : {}) };
+  });
+}
 
 function expiresCountdown(expiresAt: string): { text: string; urgent: boolean } {
   const diff = new Date(expiresAt).getTime() - Date.now();
@@ -47,7 +61,7 @@ export function Overrides() {
   // Form
   const [name, setName] = useState('');
   const [namespaces, setNamespaces] = useState('');
-  const [workloadNames, setWorkloadNames] = useState('');
+  const [workloadRefs, setWorkloadRefs] = useState('');
   const [state, setState] = useState('on');
   const [priority, setPriority] = useState('500');
   const [reason, setReason] = useState('');
@@ -59,12 +73,14 @@ export function Overrides() {
     setCreateError('');
     try {
       const expiresAt = new Date(Date.now() + parseInt(expiresIn) * 3600000).toISOString();
+      const targetRefs = parseTargetRefs(workloadRefs);
+      const selectedNamespaces = namespaces.split(',').map(s => s.trim()).filter(Boolean);
       await apiPost('/overrides', {
         metadata: { name, namespace: 'aura-system' },
         spec: {
           scope: {
-            namespaces: namespaces.split(',').map(s => s.trim()).filter(Boolean),
-            workloadNames: workloadNames ? workloadNames.split(',').map(s => s.trim()).filter(Boolean) : undefined,
+            namespaces: selectedNamespaces.length > 0 ? selectedNamespaces : undefined,
+            targetRefs: targetRefs.length > 0 ? targetRefs : undefined,
           },
           state,
           priority: parseInt(priority) || 500,
@@ -94,7 +110,7 @@ export function Overrides() {
   };
 
   const resetForm = () => {
-    setName(''); setNamespaces(''); setWorkloadNames(''); setState('on');
+    setName(''); setNamespaces(''); setWorkloadRefs(''); setState('on');
     setPriority('500'); setReason(''); setReference(''); setExpiresIn('4');
     setCreateError('');
   };
@@ -221,7 +237,7 @@ export function Overrides() {
           <Stack spacing={3} sx={{ mt: 1 }}>
             <TextField label="Override Name" value={name} onChange={e => setName(e.target.value)} fullWidth required />
             <TextField label="Namespaces" value={namespaces} onChange={e => setNamespaces(e.target.value)} fullWidth helperText="Comma-separated" required />
-            <TextField label="Workload Names (optional)" value={workloadNames} onChange={e => setWorkloadNames(e.target.value)} fullWidth helperText="Comma-separated, leave empty for all in namespace" />
+            <TextField label="Exact Workloads (optional)" value={workloadRefs} onChange={e => setWorkloadRefs(e.target.value)} fullWidth helperText="Comma-separated namespace/kind/name references; append #uid to bind an incarnation" />
             <TextField label="Desired State" value={state} onChange={e => setState(e.target.value)} select fullWidth>
               <MenuItem value="on">On (keep running)</MenuItem>
               <MenuItem value="off">Off (power down)</MenuItem>

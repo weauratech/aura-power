@@ -18,6 +18,7 @@ import (
 // error so callers cannot accidentally evaluate a group-only rule globally.
 func ResolveScope(ctx context.Context, c client.Client, ruleNamespace string, scope v1alpha1.PolicyScope) (domain.Scope, error) {
 	resolved := domain.Scope{
+		TargetRefs:      targetReferences(scope.TargetRefs),
 		Namespaces:      append([]string(nil), scope.Namespaces...),
 		NamespaceLabels: cloneMap(scope.NamespaceLabels),
 		WorkloadNames:   append([]string(nil), scope.WorkloadNames...),
@@ -48,13 +49,24 @@ func ResolveScope(ctx context.Context, c client.Client, ruleNamespace string, sc
 func Target(target *v1alpha1.PowerTarget) domain.Target {
 	return domain.Target{
 		Ref: domain.WorkloadRef{
-			Namespace: target.Spec.TargetRef.Namespace,
-			Name:      target.Spec.TargetRef.Name,
-			Kind:      domain.WorkloadKind(target.Spec.TargetRef.Kind),
+			Cluster: target.Spec.TargetRef.Cluster, APIVersion: target.Spec.TargetRef.APIVersion,
+			Namespace: target.Spec.TargetRef.Namespace, Name: target.Spec.TargetRef.Name,
+			Kind: domain.WorkloadKind(target.Spec.TargetRef.Kind), UID: target.Spec.TargetRef.UID,
 		},
 		Labels:          cloneMap(target.Status.WorkloadLabels),
 		NamespaceLabels: cloneMap(target.Status.NamespaceLabels),
 	}
+}
+
+func targetReferences(refs []v1alpha1.TargetReference) []domain.WorkloadRef {
+	result := make([]domain.WorkloadRef, 0, len(refs))
+	for _, ref := range refs {
+		result = append(result, domain.WorkloadRef{
+			Cluster: ref.Cluster, APIVersion: ref.APIVersion, Namespace: ref.Namespace,
+			Name: ref.Name, Kind: domain.WorkloadKind(ref.Kind), UID: ref.UID,
+		})
+	}
+	return result
 }
 
 func cloneMap(source map[string]string) map[string]string {

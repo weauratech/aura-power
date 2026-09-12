@@ -331,3 +331,33 @@ func TestHTTPPreviewDoesNotPersistAndTargetsFilter(t *testing.T) {
 		}
 	}
 }
+
+func TestHTTPPreviewExactTargetsAvoidNamespaceNameCrossProduct(t *testing.T) {
+	makeTarget := func(namespace, name, kind, uid string) *v1alpha1.PowerTarget {
+		return &v1alpha1.PowerTarget{
+			ObjectMeta: metav1.ObjectMeta{Name: namespace + "-" + name + "-" + kind, Namespace: "aura-system"},
+			Spec:       v1alpha1.PowerTargetSpec{TargetRef: v1alpha1.TargetReference{Namespace: namespace, Name: name, Kind: kind, UID: uid}},
+		}
+	}
+	objects := []client.Object{
+		makeTarget("team-a", "api", "Deployment", "api-a"),
+		makeTarget("team-a", "worker", "StatefulSet", "worker-a"),
+		makeTarget("team-b", "api", "Deployment", "api-b"),
+		makeTarget("team-b", "worker", "StatefulSet", "worker-b"),
+	}
+	f := newContractFixture(t, objects...)
+	token := f.token(t, auth.RoleMember)
+	scope := map[string]any{"targetRefs": []map[string]string{
+		{"namespace": "team-a", "name": "api", "kind": "Deployment", "uid": "api-a"},
+		{"namespace": "team-b", "name": "worker", "kind": "StatefulSet", "uid": "worker-b"},
+	}}
+	response := requestContract(t, f.server.Handler(), "POST", "/api/v1/preview/policy", token, map[string]any{
+		"scope": scope, "schedule": map[string]string{"desiredState": "off"},
+	})
+	if response.Code != http.StatusOK {
+		t.Fatalf("preview returned %d: %s", response.Code, response.Body.String())
+	}
+	if got := decodeContract[map[string]int](t, response)["totalAffected"]; got != 2 {
+		t.Fatalf("exact preview affected %d targets, want 2", got)
+	}
+}

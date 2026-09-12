@@ -112,10 +112,14 @@ export function useTargets(namespace?: string, state?: string) {
   });
 }
 
-export function useExplainTarget(namespace: string, name: string) {
+export function useExplainTarget(namespace: string, name: string, kind?: string, uid?: string) {
+  const params = new URLSearchParams();
+  if (kind) params.set('kind', kind);
+  if (uid) params.set('uid', uid);
+  const query = params.toString() ? `?${params.toString()}` : '';
   return useQuery({
-    queryKey: ['explain', namespace, name],
-    queryFn: () => fetchJSON(`/targets/${namespace}/${name}/explain`),
+    queryKey: ['explain', namespace, name, kind, uid],
+    queryFn: () => fetchJSON(`/targets/${namespace}/${name}/explain${query}`),
     enabled: !!namespace && !!name,
   });
 }

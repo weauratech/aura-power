@@ -62,6 +62,18 @@ spec:
               scope:
                 type: object
                 properties:
+                  targetRefs:
+                    type: array
+                    items:
+                      type: object
+                      required: [namespace, name, kind]
+                      properties:
+                        cluster: { type: string }
+                        apiVersion: { type: string }
+                        namespace: { type: string, minLength: 1 }
+                        name: { type: string, minLength: 1 }
+                        kind: { type: string, enum: [Deployment, StatefulSet, CronJob] }
+                        uid: { type: string }
                   namespaces:
                     type: array
                     items:

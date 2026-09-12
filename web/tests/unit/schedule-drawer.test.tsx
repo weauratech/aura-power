@@ -5,6 +5,7 @@ import { http, HttpResponse } from 'msw';
 import { ScheduleDrawer } from '../../src/components/ScheduleDrawer';
 import { origin, server } from '../server';
 import { renderUI } from '../helpers';
+import { target } from '../helpers';
 
 describe('schedule form contracts', () => {
   it('submits an explicit namespace scope exactly once and reports completion', async () => {
@@ -61,5 +62,32 @@ describe('schedule form contracts', () => {
     expect(screen.getByText(/1 will be powered off/)).toBeVisible();
     expect(screen.getByText(/1 blocked by guardrails/)).toBeVisible();
     expect(received).toHaveBeenCalledWith(expect.objectContaining({ scope: { namespaces: ['fixture-a'] } }));
+  });
+
+  it('submits exact workload references without a namespace/name cross-product', async () => {
+    const api = target('api', 'on', 'fixture-a');
+    api.spec.targetRef.uid = 'api-a';
+    const worker = target('worker', 'on', 'fixture-b');
+    worker.spec.targetRef.kind = 'StatefulSet';
+    worker.spec.targetRef.uid = 'worker-b';
+    const received = vi.fn();
+    server.use(
+      http.get(`${origin}/targets`, () => HttpResponse.json({ targets: [api, worker], count: 2 })),
+      http.post(`${origin}/policies`, async ({ request }) => {
+        received(await request.json());
+        return HttpResponse.json({ created: true }, { status: 201 });
+      }),
+    );
+    renderUI(<ScheduleDrawer open onClose={() => undefined} prefill={{ targetRefs: [api.spec.targetRef, worker.spec.targetRef] }} />);
+
+    const user = userEvent.setup();
+    await user.type(screen.getByRole('textbox', { name: /^Name/ }), 'exact-policy');
+    await user.click(screen.getByRole('button', { name: 'Create Schedule' }));
+
+    await waitFor(() => expect(received).toHaveBeenCalledOnce());
+    const payload = received.mock.calls[0][0] as { spec: { scope: Record<string, unknown> } };
+    expect(payload.spec.scope).toEqual({ targetRefs: [api.spec.targetRef, worker.spec.targetRef] });
+    expect(payload.spec.scope).not.toHaveProperty('namespaces');
+    expect(payload.spec.scope).not.toHaveProperty('workloadNames');
   });
 });

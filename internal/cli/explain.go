@@ -4,37 +4,52 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"strings"
 
 	"github.com/spf13/cobra"
 )
 
 func newExplainCmd() *cobra.Command {
+	var kind, uid string
 	cmd := &cobra.Command{
 		Use:   "explain <namespace>/<workload>",
 		Short: "Explain the current state of a workload",
 		Long:  "Display full explainability for a workload: desired state, winning rule, blocks, snapshot, ownership.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runExplain(args[0])
+			return runExplain(args[0], kind, uid)
 		},
 	}
+	cmd.Flags().StringVar(&kind, "kind", "", "Workload kind (Deployment, StatefulSet, or CronJob)")
+	cmd.Flags().StringVar(&uid, "uid", "", "Optional Kubernetes UID for an exact object incarnation")
+	_ = cmd.MarkFlagRequired("kind")
 	return cmd
 }
 
-func runExplain(target string) error {
+func runExplain(target, kind, uid string) error {
 	parts := strings.SplitN(target, "/", 2)
 	if len(parts) != 2 {
 		return fmt.Errorf("target must be in format <namespace>/<name>")
 	}
 	ns, name := parts[0], parts[1]
+	if kind == "" {
+		return fmt.Errorf("kind is required to identify a workload exactly")
+	}
+	if !validWorkloadKind(kind) {
+		return fmt.Errorf("invalid workload kind %q", kind)
+	}
 
 	serverURL, err := getServerURL()
 	if err != nil {
 		return err
 	}
 
-	endpoint := fmt.Sprintf("%s/api/v1/targets/%s/%s/explain", serverURL, ns, name)
+	query := url.Values{"kind": []string{kind}}
+	if uid != "" {
+		query.Set("uid", uid)
+	}
+	endpoint := fmt.Sprintf("%s/api/v1/targets/%s/%s/explain?%s", serverURL, url.PathEscape(ns), url.PathEscape(name), query.Encode())
 	resp, err := authenticatedGet(endpoint)
 	if err != nil {
 		return err

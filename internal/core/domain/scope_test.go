@@ -79,6 +79,36 @@ func TestMatchesScope_ANDLogic(t *testing.T) {
 	}
 }
 
+func TestMatchesScope_ExactReferencesDoNotCreateCrossProduct(t *testing.T) {
+	selectedAPI := WorkloadRef{Namespace: "team-a", Name: "api", Kind: WorkloadKindDeployment, UID: "api-uid"}
+	selectedWorker := WorkloadRef{Namespace: "team-b", Name: "worker", Kind: WorkloadKindStatefulSet, UID: "worker-uid"}
+	scope := Scope{TargetRefs: []WorkloadRef{selectedAPI, selectedWorker}}
+
+	cases := []struct {
+		ref  WorkloadRef
+		want bool
+	}{
+		{selectedAPI, true},
+		{selectedWorker, true},
+		{WorkloadRef{Namespace: "team-a", Name: "worker", Kind: WorkloadKindStatefulSet, UID: "other"}, false},
+		{WorkloadRef{Namespace: "team-b", Name: "api", Kind: WorkloadKindDeployment, UID: "other"}, false},
+		{WorkloadRef{Namespace: "team-a", Name: "api", Kind: WorkloadKindCronJob, UID: "api-uid"}, false},
+		{WorkloadRef{Namespace: "team-a", Name: "api", Kind: WorkloadKindDeployment, UID: "recreated"}, false},
+	}
+	for _, tc := range cases {
+		if got := MatchesScope(Target{Ref: tc.ref}, scope); got != tc.want {
+			t.Errorf("MatchesScope(%+v)=%v, want %v", tc.ref, got, tc.want)
+		}
+	}
+}
+
+func TestMatchesScope_ExactReferenceWithoutUIDFollowsLogicalWorkload(t *testing.T) {
+	scope := Scope{TargetRefs: []WorkloadRef{{Namespace: "team-a", Name: "api", Kind: WorkloadKindDeployment}}}
+	if !MatchesScope(Target{Ref: WorkloadRef{Namespace: "team-a", Name: "api", Kind: WorkloadKindDeployment, UID: "new-uid"}}, scope) {
+		t.Fatal("a reference without UID should match the logical workload")
+	}
+}
+
 func TestComputeSpecificity_ClusterWide(t *testing.T) {
 	scope := Scope{}
 	if ComputeSpecificity(scope) != ScopeClusterWide {

@@ -19,6 +19,7 @@ import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import CloseIcon from '@mui/icons-material/CloseOutlined';
 import { useNamespaces, useTargets, apiPost, apiPut } from '../hooks/useApi';
 import { useQueryClient } from '@tanstack/react-query';
+import type { TargetRef } from '../types';
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -29,13 +30,14 @@ export interface ScheduleDrawerProps {
   prefill?: {
     namespaces?: string[];
     workloadNames?: string[];
+    targetRefs?: TargetRef[];
   };
   /** If provided, drawer opens in edit mode for this policy */
   editPolicy?: {
     name: string;
     namespace: string;
     spec: {
-      scope: { namespaces?: string[]; workloadNames?: string[] };
+      scope: { namespaces?: string[]; workloadNames?: string[]; targetRefs?: TargetRef[] };
       schedule: { desiredState: string; windows?: Array<{ start: string; end: string; timezone: string; days?: number[] }> };
       priority: number;
       description?: string;
@@ -61,7 +63,7 @@ export function ScheduleDrawer({ open, onClose, onSuccess, prefill, editPolicy }
   // Form
   const [name, setName] = useState('');
   const [selectedNamespaces, setSelectedNamespaces] = useState<string[]>([]);
-  const [selectedWorkloads, setSelectedWorkloads] = useState<string[]>([]);
+  const [selectedWorkloads, setSelectedWorkloads] = useState<TargetRef[]>([]);
   const [desiredState, setDesiredState] = useState('off');
   const [start, setStart] = useState('20:00');
   const [end, setEnd] = useState('08:00');
@@ -89,7 +91,12 @@ export function ScheduleDrawer({ open, onClose, onSuccess, prefill, editPolicy }
       setScopeMode('namespaces');
     }
     if (prefill?.workloadNames) {
-      setSelectedWorkloads(prefill.workloadNames);
+      const names = new Set(prefill.workloadNames);
+      setSelectedWorkloads(targetsData?.targets?.map(t => t.spec.targetRef).filter(ref => names.has(`${ref.namespace}/${ref.name}`)) ?? []);
+      setScopeMode('workloads');
+    }
+    if (prefill?.targetRefs) {
+      setSelectedWorkloads(prefill.targetRefs);
       setScopeMode('workloads');
     }
   }, [prefill]);
@@ -99,7 +106,9 @@ export function ScheduleDrawer({ open, onClose, onSuccess, prefill, editPolicy }
     if (editPolicy) {
       setName(editPolicy.name);
       setSelectedNamespaces(editPolicy.spec.scope.namespaces || []);
-      setSelectedWorkloads(editPolicy.spec.scope.workloadNames?.map(w => `${(editPolicy.spec.scope.namespaces || [''])[0]}/${w}`) || []);
+      setSelectedWorkloads(editPolicy.spec.scope.targetRefs || targetsData?.targets?.map(t => t.spec.targetRef).filter(ref =>
+        editPolicy.spec.scope.workloadNames?.includes(ref.name) && editPolicy.spec.scope.namespaces?.includes(ref.namespace)
+      ) || []);
       setDesiredState(editPolicy.spec.schedule.desiredState);
       const win = editPolicy.spec.schedule.windows?.[0];
       if (win) {
@@ -110,9 +119,9 @@ export function ScheduleDrawer({ open, onClose, onSuccess, prefill, editPolicy }
       }
       setPriority(String(editPolicy.spec.priority));
       setDescription(editPolicy.spec.description || '');
-      setScopeMode(editPolicy.spec.scope.workloadNames?.length ? 'workloads' : 'namespaces');
+      setScopeMode(editPolicy.spec.scope.targetRefs?.length || editPolicy.spec.scope.workloadNames?.length ? 'workloads' : 'namespaces');
     }
-  }, [editPolicy]);
+  }, [editPolicy, targetsData]);
 
   // Reset preview when form changes
   useEffect(() => {
@@ -120,7 +129,7 @@ export function ScheduleDrawer({ open, onClose, onSuccess, prefill, editPolicy }
   }, [selectedNamespaces, selectedWorkloads, desiredState, start, end, days, priority, scopeMode]);
 
   const namespaceOptions = nsData?.namespaces ?? [];
-  const workloadOptions = targetsData?.targets?.map(t => `${t.spec.targetRef.namespace}/${t.spec.targetRef.name}`) ?? [];
+  const workloadOptions = targetsData?.targets?.map(t => t.spec.targetRef) ?? [];
 
   const toggleDay = (d: number) => {
     setDays(prev => prev.includes(d) ? prev.filter(x => x !== d) : [...prev, d].sort());
@@ -131,9 +140,7 @@ export function ScheduleDrawer({ open, onClose, onSuccess, prefill, editPolicy }
     if (scopeMode === 'namespaces') {
       scope.namespaces = selectedNamespaces;
     } else {
-      const nsSet = new Set(selectedWorkloads.map(w => w.split('/')[0]));
-      scope.namespaces = Array.from(nsSet);
-      scope.workloadNames = selectedWorkloads.map(w => w.split('/')[1]);
+      scope.targetRefs = selectedWorkloads;
     }
     return scope;
   };
@@ -273,7 +280,7 @@ export function ScheduleDrawer({ open, onClose, onSuccess, prefill, editPolicy }
               {scopeMode === 'namespaces' ? (
                 <Autocomplete multiple size="small" options={namespaceOptions} value={selectedNamespaces} onChange={(_, v) => setSelectedNamespaces(v)} renderInput={(params) => <TextField {...params} label="Select Namespaces" placeholder="Type to search..." />} renderTags={(value, getTagProps) => value.map((option, index) => <Chip {...getTagProps({ index })} key={option} label={option} size="small" />)} />
               ) : (
-                <Autocomplete multiple size="small" options={workloadOptions} value={selectedWorkloads} onChange={(_, v) => setSelectedWorkloads(v)} renderInput={(params) => <TextField {...params} label="Select Workloads" placeholder="namespace/name" />} renderTags={(value, getTagProps) => value.map((option, index) => <Chip {...getTagProps({ index })} key={option} label={option} size="small" />)} />
+                <Autocomplete multiple size="small" options={workloadOptions} value={selectedWorkloads} onChange={(_, v) => setSelectedWorkloads(v)} isOptionEqualToValue={(a, b) => workloadKey(a) === workloadKey(b)} getOptionLabel={workloadKey} renderInput={(params) => <TextField {...params} label="Select Workloads" placeholder="namespace/kind/name" />} renderTags={(value, getTagProps) => value.map((option, index) => <Chip {...getTagProps({ index })} key={workloadKey(option)} label={workloadKey(option)} size="small" />)} />
               )}
             </Box>
 
@@ -371,4 +378,8 @@ export function ScheduleDrawer({ open, onClose, onSuccess, prefill, editPolicy }
       </Box>
     </Drawer>
   );
+}
+
+function workloadKey(ref: TargetRef): string {
+  return `${ref.namespace}/${ref.kind}/${ref.name}${ref.uid ? `#${ref.uid}` : ''}`;
 }

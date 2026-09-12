@@ -46,3 +46,20 @@ func TestResolveScopeFailsClosedForMissingGroup(t *testing.T) {
 		t.Fatal("missing group must not degrade to a cluster-wide scope")
 	}
 }
+
+func TestResolveScopePreservesExactTargetIdentity(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := v1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).Build()
+	got, err := ResolveScope(context.Background(), c, "control", v1alpha1.PolicyScope{TargetRefs: []v1alpha1.TargetReference{{
+		Cluster: "cluster-a", APIVersion: "apps/v1", Namespace: "team-a", Name: "api", Kind: "Deployment", UID: "api-uid",
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.TargetRefs) != 1 || got.TargetRefs[0].Cluster != "cluster-a" || got.TargetRefs[0].APIVersion != "apps/v1" || got.TargetRefs[0].UID != "api-uid" {
+		t.Fatalf("exact identity lost: %+v", got.TargetRefs)
+	}
+}

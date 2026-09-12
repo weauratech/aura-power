@@ -26,7 +26,7 @@ import { useTargets } from '../hooks/useApi';
 import { ScheduleDrawer } from '../components/ScheduleDrawer';
 import { useNotify } from '../components/Notifications';
 import { EmptyState } from '../components/EmptyState';
-import type { PowerTarget } from '../types';
+import type { PowerTarget, TargetRef } from '../types';
 
 function mapState(t: PowerTarget): WorkloadState {
   if (t.status.blocked) return 'failed';
@@ -45,6 +45,12 @@ function relativeTime(ts?: string): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
+function targetURL(ref: TargetRef): string {
+  const params = new URLSearchParams({ kind: ref.kind });
+  if (ref.uid) params.set('uid', ref.uid);
+  return `/targets/${encodeURIComponent(ref.namespace)}/${encodeURIComponent(ref.name)}?${params}`;
+}
+
 type StateFilter = 'all' | 'running' | 'asleep' | 'failed';
 
 export function Targets() {
@@ -56,7 +62,7 @@ export function Targets() {
 
   // Schedule drawer
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [drawerPrefill, setDrawerPrefill] = useState<{ namespaces?: string[]; workloadNames?: string[] }>({});
+  const [drawerPrefill, setDrawerPrefill] = useState<{ namespaces?: string[]; targetRefs?: TargetRef[] }>({});
 
   const filtered = useMemo(() => {
     if (!data?.targets) return [];
@@ -96,8 +102,8 @@ export function Targets() {
     setDrawerOpen(true);
   };
 
-  const openDrawerForWorkload = (ns: string, name: string) => {
-    setDrawerPrefill({ namespaces: [ns], workloadNames: [`${ns}/${name}`] });
+  const openDrawerForWorkload = (ref: TargetRef) => {
+    setDrawerPrefill({ targetRefs: [ref] });
     setDrawerOpen(true);
   };
 
@@ -192,7 +198,7 @@ export function Targets() {
                 </TableHead>
                 <TableBody>
                   {targets.map((t) => (
-                    <TableRow key={`${t.spec.targetRef.namespace}/${t.spec.targetRef.name}`} hover>
+                    <TableRow key={`${t.spec.targetRef.namespace}/${t.spec.targetRef.kind}/${t.spec.targetRef.name}/${t.spec.targetRef.uid || ''}`} hover>
                       {!ns && (
                         <TableCell>
                           <MuiLink
@@ -205,7 +211,7 @@ export function Targets() {
                         </TableCell>
                       )}
                       <TableCell>
-                        <MuiLink component={Link} to={`/targets/${t.spec.targetRef.namespace}/${t.spec.targetRef.name}`} underline="hover">
+                        <MuiLink component={Link} to={targetURL(t.spec.targetRef)} underline="hover">
                           {t.spec.targetRef.name}
                         </MuiLink>
                       </TableCell>
@@ -215,7 +221,7 @@ export function Targets() {
                       <TableCell><Typography variant="caption" color="text.secondary">{relativeTime(t.status.lastTransition)}</Typography></TableCell>
                       <TableCell align="right"><Typography variant="code">{t.status.observedState.replicas}</Typography></TableCell>
                       <TableCell align="right" sx={{ width: 40 }}>
-                        <Button size="small" sx={{ minWidth: 0, px: 1 }} onClick={() => openDrawerForWorkload(t.spec.targetRef.namespace, t.spec.targetRef.name)}>
+                        <Button size="small" sx={{ minWidth: 0, px: 1 }} onClick={() => openDrawerForWorkload(t.spec.targetRef)}>
                           <ScheduleIcon fontSize="small" />
                         </Button>
                       </TableCell>

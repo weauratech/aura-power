@@ -84,6 +84,7 @@ type Schedule struct {
 // Scope defines which workloads a policy/override targets.
 // All non-empty selectors are intersected (AND logic).
 type Scope struct {
+	TargetRefs []WorkloadRef
 	Namespaces []string
 	// NamespaceGroups contains unresolved group references. Adapters must resolve
 	// these references before evaluation; MatchesScope fails closed while any

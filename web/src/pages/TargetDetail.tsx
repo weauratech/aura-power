@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import Card from '@mui/material/Card';
@@ -29,12 +29,16 @@ function mapState(status: { observedState: { powerState: string }; blocked: bool
 
 export function TargetDetail() {
   const { namespace = '', name = '' } = useParams();
+  const [searchParams] = useSearchParams();
+  const kind = searchParams.get('kind') || undefined;
+  const uid = searchParams.get('uid') || undefined;
   const { data: targetsData } = useTargets(namespace);
-  const { isLoading } = useExplainTarget(namespace, name);
+  const { isLoading } = useExplainTarget(namespace, name, kind, uid);
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   const target = targetsData?.targets?.find(
-    (t) => t.spec.targetRef.name === name && t.spec.targetRef.namespace === namespace
+    (t) => t.spec.targetRef.name === name && t.spec.targetRef.namespace === namespace &&
+      (!kind || t.spec.targetRef.kind === kind) && (!uid || t.spec.targetRef.uid === uid)
   );
 
   if (isLoading) return <Skeleton variant="rounded" height={400} />;
@@ -182,7 +186,7 @@ export function TargetDetail() {
       <ScheduleDrawer
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
-        prefill={{ namespaces: [namespace], workloadNames: [`${namespace}/${name}`] }}
+        prefill={{ targetRefs: [target.spec.targetRef] }}
       />
     </Box>
   );

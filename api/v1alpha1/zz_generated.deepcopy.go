@@ -402,6 +402,11 @@ func (in *PowerScheduleList) DeepCopyObject() runtime.Object {
 // Shared deep copy helpers
 func (in *PolicyScope) DeepCopyInto(out *PolicyScope) {
 	*out = *in
+	if in.TargetRefs != nil {
+		in, out := &in.TargetRefs, &out.TargetRefs
+		*out = make([]TargetReference, len(*in))
+		copy(*out, *in)
+	}
 	if in.Namespaces != nil {
 		in, out := &in.Namespaces, &out.Namespaces
 		*out = make([]string, len(*in))

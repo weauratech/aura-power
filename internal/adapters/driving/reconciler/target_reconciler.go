@@ -376,6 +376,7 @@ func toDomainPolicy(p *v1alpha1.PowerPolicy) domain.PolicySpec {
 		Name:      p.Name,
 		Namespace: p.Namespace,
 		Scope: domain.Scope{
+			TargetRefs:      toDomainTargetReferences(p.Spec.Scope.TargetRefs),
 			Namespaces:      p.Spec.Scope.Namespaces,
 			NamespaceGroups: p.Spec.Scope.NamespaceGroups,
 			NamespaceLabels: p.Spec.Scope.NamespaceLabels,
@@ -397,6 +398,7 @@ func toDomainOverride(o *v1alpha1.PowerOverride) domain.OverrideSpec {
 		Name:      o.Name,
 		Namespace: o.Namespace,
 		Scope: domain.Scope{
+			TargetRefs:      toDomainTargetReferences(o.Spec.Scope.TargetRefs),
 			Namespaces:      o.Spec.Scope.Namespaces,
 			NamespaceGroups: o.Spec.Scope.NamespaceGroups,
 			NamespaceLabels: o.Spec.Scope.NamespaceLabels,
@@ -410,6 +412,17 @@ func toDomainOverride(o *v1alpha1.PowerOverride) domain.OverrideSpec {
 		Reference: o.Spec.Reference,
 		CreatedAt: o.CreationTimestamp.Time,
 	}
+}
+
+func toDomainTargetReferences(refs []v1alpha1.TargetReference) []domain.WorkloadRef {
+	result := make([]domain.WorkloadRef, 0, len(refs))
+	for _, ref := range refs {
+		result = append(result, domain.WorkloadRef{
+			Cluster: ref.Cluster, APIVersion: ref.APIVersion, Namespace: ref.Namespace,
+			Name: ref.Name, Kind: domain.WorkloadKind(ref.Kind), UID: ref.UID,
+		})
+	}
+	return result
 }
 
 func toDomainTimeWindow(w v1alpha1.TimeWindowSpec) domain.TimeWindow {
