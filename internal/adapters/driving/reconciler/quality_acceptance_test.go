@@ -24,7 +24,7 @@ func TestAcceptanceCTRL04PolicyNamespaceGroupsReachDomain(t *testing.T) {
 	got := toDomainPolicy(p)
 	// The public CRD advertises namespaceGroups, so conversion must retain a selector
 	// rather than degrading the policy to an empty, cluster-wide scope.
-	if len(got.Scope.Namespaces) == 0 && len(got.Scope.NamespaceLabels) == 0 && len(got.Scope.WorkloadNames) == 0 && len(got.Scope.WorkloadLabels) == 0 {
+	if len(got.Scope.Namespaces) == 0 && len(got.Scope.NamespaceGroups) == 0 && len(got.Scope.NamespaceLabels) == 0 && len(got.Scope.WorkloadNames) == 0 && len(got.Scope.WorkloadLabels) == 0 {
 		t.Fatalf("CTRL-04: namespaceGroups was silently dropped: CRD=%+v domain=%+v", p.Spec.Scope, got.Scope)
 	}
 }
@@ -32,7 +32,9 @@ func TestAcceptanceCTRL04PolicyNamespaceGroupsReachDomain(t *testing.T) {
 func TestAcceptanceCTRL05WorkloadAndNamespaceLabelsReachDecisionEngine(t *testing.T) {
 	target := &v1alpha1.PowerTarget{ObjectMeta: metav1.ObjectMeta{Name: "fixtures--api", Namespace: "aura-system", Labels: map[string]string{
 		"power.aura.sh/target-namespace": "fixtures", "power.aura.sh/target-name": "api", "power.aura.sh/target-kind": "Deployment",
-	}}, Spec: v1alpha1.PowerTargetSpec{TargetRef: v1alpha1.TargetReference{Namespace: "fixtures", Name: "api", Kind: "Deployment"}}}
+	}}, Spec: v1alpha1.PowerTargetSpec{TargetRef: v1alpha1.TargetReference{Namespace: "fixtures", Name: "api", Kind: "Deployment"}}, Status: v1alpha1.PowerTargetStatus{
+		WorkloadLabels: map[string]string{"tier": "backend"}, NamespaceLabels: map[string]string{"environment": "test"},
+	}}
 	got := toDomainTarget(target)
 	if got.Labels["tier"] != "backend" || got.NamespaceLabels["environment"] != "test" {
 		t.Fatalf("CTRL-05: discovery metadata cannot survive in PowerTarget: labels=%v namespaceLabels=%v", got.Labels, got.NamespaceLabels)

@@ -37,6 +37,14 @@ type TargetReference struct {
 
 // PowerTargetStatus defines the observed and computed state.
 type PowerTargetStatus struct {
+	// WorkloadLabels is the workload label snapshot used for policy selection.
+	// +optional
+	WorkloadLabels map[string]string `json:"workloadLabels,omitempty"`
+
+	// NamespaceLabels is the namespace label snapshot used for policy selection.
+	// +optional
+	NamespaceLabels map[string]string `json:"namespaceLabels,omitempty"`
+
 	// ObservedState is the current actual state of the workload.
 	ObservedState ObservedStateSpec `json:"observedState,omitempty"`
 

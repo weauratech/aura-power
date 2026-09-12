@@ -223,10 +223,14 @@ func (d *DiscoveryLoop) newPowerTarget(ctx context.Context, targetName string, w
 		return false, fmt.Errorf("failed to create PowerTarget: %w", err)
 	}
 
-	// Update status (separate call since status is a subresource)
+	// Update status (separate call since status is a subresource).
+	// Preserve execution state during the identity migration, then refresh the
+	// discovery projection from the current workload.
 	if previous != nil {
 		previous.DeepCopyInto(&target.Status)
 	}
+	target.Status.WorkloadLabels = copyStringMap(wl.Labels)
+	target.Status.NamespaceLabels = copyStringMap(wl.NamespaceLabels)
 	target.Status.ObservedState = v1alpha1.ObservedStateSpec{
 		Replicas:   wl.Replicas,
 		Suspended:  wl.Suspended,
@@ -273,9 +277,22 @@ func (d *DiscoveryLoop) updateObservedState(ctx context.Context, target *v1alpha
 		Suspended:  wl.Suspended,
 		PowerState: powerState,
 	}
+	target.Status.WorkloadLabels = copyStringMap(wl.Labels)
+	target.Status.NamespaceLabels = copyStringMap(wl.NamespaceLabels)
 	target.Status.Ownership = ownershipSpecs
 
 	return d.Client.Status().Update(ctx, target)
+}
+
+func copyStringMap(source map[string]string) map[string]string {
+	if source == nil {
+		return nil
+	}
+	result := make(map[string]string, len(source))
+	for key, value := range source {
+		result[key] = value
+	}
+	return result
 }
 
 func (d *DiscoveryLoop) cleanupOrphans(ctx context.Context, currentWorkloads []ports.DiscoveredWorkload) int {

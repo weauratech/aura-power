@@ -75,3 +75,35 @@ func TestQualityDiscoverySkipsSystemAndExemptWorkloads(t *testing.T) {
 		t.Fatalf("created %d protected targets", len(targets.Items))
 	}
 }
+
+func TestQualityDiscoveryPersistsSelectionLabels(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(discoveryScheme(t)).WithStatusSubresource(&v1alpha1.PowerTarget{}).Build()
+	loop := DiscoveryLoop{Client: c, Config: DiscoveryConfig{Namespace: "aura-system", ExemptAnnotation: "aura.sh/power-exempt", OptInAnnotation: "aura.sh/power-eligible"}}
+	workload := ports.DiscoveredWorkload{
+		Ref:             domain.WorkloadRef{Namespace: "fixtures", Name: "api", Kind: domain.WorkloadKindDeployment, UID: "uid-api"},
+		Replicas:        2,
+		Labels:          map[string]string{"tier": "backend", "eligible": ""},
+		NamespaceLabels: map[string]string{"environment": "test"},
+	}
+	if _, err := loop.ensurePowerTarget(context.Background(), workload); err != nil {
+		t.Fatal(err)
+	}
+	var target v1alpha1.PowerTarget
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "aura-system", Name: powerTargetName(workload.Ref)}, &target); err != nil {
+		t.Fatal(err)
+	}
+	if target.Status.WorkloadLabels["tier"] != "backend" || target.Status.NamespaceLabels["environment"] != "test" {
+		t.Fatalf("selection metadata lost: workload=%v namespace=%v", target.Status.WorkloadLabels, target.Status.NamespaceLabels)
+	}
+	workload.Labels = map[string]string{"tier": "worker"}
+	workload.NamespaceLabels = map[string]string{"environment": "staging"}
+	if _, err := loop.ensurePowerTarget(context.Background(), workload); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "aura-system", Name: powerTargetName(workload.Ref)}, &target); err != nil {
+		t.Fatal(err)
+	}
+	if target.Status.WorkloadLabels["tier"] != "worker" || target.Status.NamespaceLabels["environment"] != "staging" {
+		t.Fatalf("selection metadata was not refreshed: workload=%v namespace=%v", target.Status.WorkloadLabels, target.Status.NamespaceLabels)
+	}
+}

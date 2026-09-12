@@ -13,6 +13,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/weauratech/aura-power/api/v1alpha1"
+	"github.com/weauratech/aura-power/internal/adapters/selection"
+	"github.com/weauratech/aura-power/internal/core/domain"
 )
 
 func (s *Server) handleHealthz(c *gin.Context) {
@@ -338,6 +340,11 @@ func (s *Server) handlePreviewPolicy(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	resolvedScope, err := selection.ResolveScope(ctx, s.client, c.DefaultQuery("namespace", "aura-system"), policySpec.Scope)
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+		return
+	}
 
 	var policies v1alpha1.PowerPolicyList
 	if err := s.client.List(ctx, &policies); err != nil {
@@ -357,20 +364,7 @@ func (s *Server) handlePreviewPolicy(c *gin.Context) {
 	blocked := 0
 
 	for _, t := range targets.Items {
-		// Simple scope match check
-		matched := false
-		if len(policySpec.Scope.Namespaces) == 0 {
-			matched = true
-		} else {
-			for _, ns := range policySpec.Scope.Namespaces {
-				if t.Spec.TargetRef.Namespace == ns {
-					matched = true
-					break
-				}
-			}
-		}
-
-		if !matched {
+		if !domain.MatchesScope(selection.Target(&t), resolvedScope) {
 			continue
 		}
 
@@ -405,21 +399,15 @@ func (s *Server) handlePreviewOverride(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	resolvedScope, err := selection.ResolveScope(ctx, s.client, c.DefaultQuery("namespace", "aura-system"), overrideSpec.Scope)
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+		return
+	}
 
 	affected := 0
 	for _, t := range targets.Items {
-		matched := false
-		if len(overrideSpec.Scope.Namespaces) == 0 {
-			matched = true
-		} else {
-			for _, ns := range overrideSpec.Scope.Namespaces {
-				if t.Spec.TargetRef.Namespace == ns {
-					matched = true
-					break
-				}
-			}
-		}
-		if matched {
+		if domain.MatchesScope(selection.Target(&t), resolvedScope) {
 			affected++
 		}
 	}
@@ -669,6 +657,10 @@ func (s *Server) handleCreatePolicy(c *gin.Context) {
 	if policy.Namespace == "" {
 		policy.Namespace = "aura-system"
 	}
+	if _, err := selection.ResolveScope(ctx, s.client, policy.Namespace, policy.Spec.Scope); err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+		return
+	}
 
 	if err := s.client.Create(ctx, &policy); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create policy: " + err.Error()})
@@ -700,6 +692,10 @@ func (s *Server) handleUpdatePolicy(c *gin.Context) {
 
 	// Apply changes to existing (preserve metadata)
 	existing.Spec = updated.Spec
+	if _, err := selection.ResolveScope(ctx, s.client, existing.Namespace, existing.Spec.Scope); err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+		return
+	}
 
 	if err := s.client.Update(ctx, &existing); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update policy: " + err.Error()})
@@ -737,6 +733,10 @@ func (s *Server) handleCreateOverride(c *gin.Context) {
 
 	if override.Namespace == "" {
 		override.Namespace = "aura-system"
+	}
+	if _, err := selection.ResolveScope(ctx, s.client, override.Namespace, override.Spec.Scope); err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+		return
 	}
 
 	if err := s.client.Create(ctx, &override); err != nil {

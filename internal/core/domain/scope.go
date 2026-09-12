@@ -3,6 +3,9 @@ package domain
 // MatchesScope evaluates whether a target matches a scope using AND intersection logic.
 // Empty selectors match everything. All non-empty selectors must match.
 func MatchesScope(target Target, scope Scope) bool {
+	if len(scope.NamespaceGroups) > 0 {
+		return false
+	}
 	if !matchesNamespaceNames(target, scope) {
 		return false
 	}
@@ -62,7 +65,8 @@ func labelsMatch(targetLabels, selectorLabels map[string]string) bool {
 		return false
 	}
 	for key, value := range selectorLabels {
-		if targetLabels[key] != value {
+		actual, present := targetLabels[key]
+		if !present || actual != value {
 			return false
 		}
 	}
@@ -74,7 +78,7 @@ func ComputeSpecificity(scope Scope) ScopeSpecificity {
 	if len(scope.WorkloadNames) > 0 || len(scope.WorkloadLabels) > 0 {
 		return ScopeWorkload
 	}
-	if len(scope.Namespaces) > 0 || len(scope.NamespaceLabels) > 0 {
+	if len(scope.Namespaces) > 0 || len(scope.NamespaceGroups) > 0 || len(scope.NamespaceLabels) > 0 {
 		return ScopeNamespace
 	}
 	return ScopeClusterWide

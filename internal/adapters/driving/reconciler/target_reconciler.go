@@ -10,6 +10,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	v1alpha1 "github.com/weauratech/aura-power/api/v1alpha1"
+	"github.com/weauratech/aura-power/internal/adapters/selection"
 	"github.com/weauratech/aura-power/internal/core/domain"
 	"github.com/weauratech/aura-power/internal/ports"
 )
@@ -179,7 +180,13 @@ func (r *TargetReconciler) loadPolicies(ctx context.Context) ([]domain.PolicySpe
 	}
 	policies := make([]domain.PolicySpec, 0, len(list.Items))
 	for _, p := range list.Items {
-		policies = append(policies, toDomainPolicy(&p))
+		converted := toDomainPolicy(&p)
+		resolved, err := selection.ResolveScope(ctx, r.Client, p.Namespace, p.Spec.Scope)
+		if err != nil {
+			return nil, err
+		}
+		converted.Scope = resolved
+		policies = append(policies, converted)
 	}
 	return policies, nil
 }
@@ -191,7 +198,13 @@ func (r *TargetReconciler) loadOverrides(ctx context.Context) ([]domain.Override
 	}
 	overrides := make([]domain.OverrideSpec, 0, len(list.Items))
 	for _, o := range list.Items {
-		overrides = append(overrides, toDomainOverride(&o))
+		converted := toDomainOverride(&o)
+		resolved, err := selection.ResolveScope(ctx, r.Client, o.Namespace, o.Spec.Scope)
+		if err != nil {
+			return nil, err
+		}
+		converted.Scope = resolved
+		overrides = append(overrides, converted)
 	}
 	return overrides, nil
 }
@@ -251,12 +264,13 @@ func toDomainTarget(t *v1alpha1.PowerTarget) domain.Target {
 	}
 
 	return domain.Target{
-		Ref:           ref,
-		ObservedState: observed,
-		Ownership:     ownership,
-		Annotations:   t.GetAnnotations(),
-		Labels:        t.GetLabels(),
-		Snapshot:      snapshot,
+		Ref:             ref,
+		ObservedState:   observed,
+		Ownership:       ownership,
+		Annotations:     t.GetAnnotations(),
+		Labels:          t.Status.WorkloadLabels,
+		NamespaceLabels: t.Status.NamespaceLabels,
+		Snapshot:        snapshot,
 	}
 }
 
@@ -363,6 +377,7 @@ func toDomainPolicy(p *v1alpha1.PowerPolicy) domain.PolicySpec {
 		Namespace: p.Namespace,
 		Scope: domain.Scope{
 			Namespaces:      p.Spec.Scope.Namespaces,
+			NamespaceGroups: p.Spec.Scope.NamespaceGroups,
 			NamespaceLabels: p.Spec.Scope.NamespaceLabels,
 			WorkloadNames:   p.Spec.Scope.WorkloadNames,
 			WorkloadLabels:  p.Spec.Scope.WorkloadLabels,
@@ -383,6 +398,7 @@ func toDomainOverride(o *v1alpha1.PowerOverride) domain.OverrideSpec {
 		Namespace: o.Namespace,
 		Scope: domain.Scope{
 			Namespaces:      o.Spec.Scope.Namespaces,
+			NamespaceGroups: o.Spec.Scope.NamespaceGroups,
 			NamespaceLabels: o.Spec.Scope.NamespaceLabels,
 			WorkloadNames:   o.Spec.Scope.WorkloadNames,
 			WorkloadLabels:  o.Spec.Scope.WorkloadLabels,

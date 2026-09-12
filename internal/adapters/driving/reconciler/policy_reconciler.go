@@ -8,6 +8,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	v1alpha1 "github.com/weauratech/aura-power/api/v1alpha1"
+	"github.com/weauratech/aura-power/internal/adapters/selection"
 	"github.com/weauratech/aura-power/internal/core/domain"
 	"github.com/weauratech/aura-power/internal/ports"
 )
@@ -57,6 +58,11 @@ func (r *PolicyReconciler) countAffectedTargets(ctx context.Context, policy *v1a
 
 	count := 0
 	domainPolicy := toDomainPolicy(policy)
+	resolved, err := selection.ResolveScope(ctx, r.Client, policy.Namespace, policy.Spec.Scope)
+	if err != nil {
+		return 0, err
+	}
+	domainPolicy.Scope = resolved
 	for _, t := range targets.Items {
 		domainTarget := toDomainTarget(&t)
 		if matchesPolicyScope(domainTarget, domainPolicy) {
