@@ -2,7 +2,12 @@ import { expect, type Page } from '@playwright/test';
 
 export async function openPage(page: Page, navigationName: string, heading: string) {
   await page.goto('/');
-  if (navigationName !== 'Dashboard') await page.getByRole('link', { name: navigationName, exact: true }).click();
+  if (navigationName !== 'Dashboard') {
+    if ((page.viewportSize()?.width ?? 1280) < 900) {
+      await page.getByRole('button', { name: 'Open navigation' }).click();
+    }
+    await page.getByRole('link', { name: navigationName, exact: true }).click();
+  }
   await expect(page.getByRole('heading', { name: heading, exact: true })).toBeVisible();
 }
 

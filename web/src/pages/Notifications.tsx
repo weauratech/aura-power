@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState, type KeyboardEvent } from 'react';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import Button from '@mui/material/Button';
@@ -65,7 +65,16 @@ const EVENT_OPTIONS = [
   'override.expired',
 ];
 
+function activateRow(event: KeyboardEvent<HTMLTableRowElement>, action: () => void) {
+  if (event.target !== event.currentTarget) return;
+  if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault();
+    action();
+  }
+}
+
 export function Notifications() {
+  const drawerTitleId = useId();
   const { data, isLoading, error } = useNotificationChannels();
   const queryClient = useQueryClient();
   const notify = useNotify();
@@ -202,7 +211,15 @@ export function Notifications() {
             </TableHead>
             <TableBody>
               {data.items?.map((ch) => (
-                <TableRow key={`${ch.metadata.namespace}/${ch.metadata.name}`} hover sx={{ cursor: 'pointer' }} onClick={() => openEdit(ch)}>
+                <TableRow
+                  key={`${ch.metadata.namespace}/${ch.metadata.name}`}
+                  hover
+                  tabIndex={0}
+                  aria-label={`Edit notification channel ${ch.metadata.name}`}
+                  sx={{ cursor: 'pointer' }}
+                  onClick={() => openEdit(ch)}
+                  onKeyDown={(event) => activateRow(event, () => openEdit(ch))}
+                >
                   <TableCell>
                     <Typography variant="subtitle2">{ch.metadata.name}</Typography>
                   </TableCell>
@@ -238,7 +255,14 @@ export function Notifications() {
                   </TableCell>
                   <TableCell align="right">
                     <Tooltip title="Delete">
-                      <IconButton size="small" onClick={() => setDeleteTarget({ name: ch.metadata.name, namespace: ch.metadata.namespace })}>
+                      <IconButton
+                        size="small"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setDeleteTarget({ name: ch.metadata.name, namespace: ch.metadata.namespace });
+                        }}
+                        aria-label={`Delete notification channel ${ch.metadata.name}`}
+                      >
                         <DeleteIcon fontSize="small" />
                       </IconButton>
                     </Tooltip>
@@ -251,11 +275,17 @@ export function Notifications() {
       )}
 
       {/* Create Channel Drawer */}
-      <Drawer anchor="right" open={drawerOpen} onClose={() => setDrawerOpen(false)} sx={{ '& .MuiDrawer-paper': { width: 400, p: 0 } }}>
+      <Drawer
+        anchor="right"
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        PaperProps={{ role: 'dialog', 'aria-modal': true, 'aria-labelledby': drawerTitleId }}
+        sx={{ '& .MuiDrawer-paper': { width: 400, maxWidth: '100vw', p: 0 } }}
+      >
         <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
           <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ px: 3, py: 2.5, borderBottom: 1, borderColor: 'divider' }}>
-            <Typography variant="h5">{editingChannel ? 'Edit Channel' : 'New Channel'}</Typography>
-            <IconButton onClick={() => setDrawerOpen(false)} size="small"><CloseIcon /></IconButton>
+            <Typography id={drawerTitleId} variant="h5">{editingChannel ? 'Edit Channel' : 'New Channel'}</Typography>
+            <IconButton onClick={() => setDrawerOpen(false)} size="small" aria-label="Close notification channel drawer" autoFocus><CloseIcon /></IconButton>
           </Stack>
 
           <Box sx={{ flex: 1, overflow: 'auto', px: 3, py: 3 }}>

@@ -221,7 +221,12 @@ export function Targets() {
                       <TableCell><Typography variant="caption" color="text.secondary">{relativeTime(t.status.lastTransition)}</Typography></TableCell>
                       <TableCell align="right"><Typography variant="code">{t.status.observedState.replicas}</Typography></TableCell>
                       <TableCell align="right" sx={{ width: 40 }}>
-                        <Button size="small" sx={{ minWidth: 0, px: 1 }} onClick={() => openDrawerForWorkload(t.spec.targetRef)}>
+                        <Button
+                          size="small"
+                          sx={{ minWidth: 0, px: 1 }}
+                          onClick={() => openDrawerForWorkload(t.spec.targetRef)}
+                          aria-label={`Create schedule for ${t.spec.targetRef.namespace}/${t.spec.targetRef.kind}/${t.spec.targetRef.name}`}
+                        >
                           <ScheduleIcon fontSize="small" />
                         </Button>
                       </TableCell>

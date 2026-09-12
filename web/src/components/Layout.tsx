@@ -141,7 +141,7 @@ export function Layout({ user, onLogout }: LayoutProps) {
               <Chip label={user.role} size="small" sx={{ mt: 0.5, height: 20, fontSize: 11 }} />
             </Box>
             <Tooltip title="Sign out">
-              <IconButton size="small" onClick={onLogout}>
+              <IconButton size="small" onClick={onLogout} aria-label="Sign out">
                 <LogoutIcon fontSize="small" />
               </IconButton>
             </Tooltip>
@@ -163,7 +163,7 @@ export function Layout({ user, onLogout }: LayoutProps) {
       {isMobile && (
         <AppBar position="fixed" sx={{ zIndex: theme.zIndex.drawer + 1 }}>
           <Toolbar sx={{ minHeight: 56 }}>
-            <IconButton edge="start" onClick={() => setMobileOpen(true)} sx={{ mr: 2 }}>
+            <IconButton edge="start" onClick={() => setMobileOpen(true)} sx={{ mr: 2 }} aria-label="Open navigation">
               <MenuIcon />
             </IconButton>
             <Box
@@ -173,7 +173,7 @@ export function Layout({ user, onLogout }: LayoutProps) {
               sx={{ height: 22 }}
             />
             <Box sx={{ flex: 1 }} />
-            <IconButton onClick={toggleMode} size="small">
+            <IconButton onClick={toggleMode} size="small" aria-label={`Switch to ${mode === 'dark' ? 'light' : 'dark'} theme`}>
               {mode === 'dark' ? <LightModeIcon /> : <DarkModeIcon />}
             </IconButton>
           </Toolbar>
@@ -185,6 +185,7 @@ export function Layout({ user, onLogout }: LayoutProps) {
         variant={isMobile ? 'temporary' : 'permanent'}
         open={isMobile ? mobileOpen : true}
         onClose={() => setMobileOpen(false)}
+        PaperProps={{ component: 'nav', 'aria-label': 'Primary navigation' }}
         sx={{
           width: DRAWER_WIDTH,
           flexShrink: 0,
@@ -209,7 +210,7 @@ export function Layout({ user, onLogout }: LayoutProps) {
         {/* Desktop top bar — just the theme toggle */}
         {!isMobile && (
           <Box sx={{ display: 'flex', justifyContent: 'flex-end', px: 3, py: 1.5, borderBottom: 1, borderColor: 'divider' }}>
-            <IconButton onClick={toggleMode} size="small">
+            <IconButton onClick={toggleMode} size="small" aria-label={`Switch to ${mode === 'dark' ? 'light' : 'dark'} theme`}>
               {mode === 'dark' ? <LightModeIcon fontSize="small" /> : <DarkModeIcon fontSize="small" />}
             </IconButton>
           </Box>

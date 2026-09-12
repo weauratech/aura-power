@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useId } from 'react';
 import Box from '@mui/material/Box';
 import Drawer from '@mui/material/Drawer';
 import Typography from '@mui/material/Typography';
@@ -53,6 +53,7 @@ interface PreviewResult {
 }
 
 export function ScheduleDrawer({ open, onClose, onSuccess, prefill, editPolicy }: ScheduleDrawerProps) {
+  const titleId = useId();
   const queryClient = useQueryClient();
   const { data: nsData } = useNamespaces();
   const { data: targetsData } = useTargets();
@@ -249,12 +250,18 @@ export function ScheduleDrawer({ open, onClose, onSuccess, prefill, editPolicy }
   ) && (!isOverride || reason.length >= 3);
 
   return (
-    <Drawer anchor="right" open={open} onClose={onClose} sx={{ '& .MuiDrawer-paper': { width: 440, p: 0 } }}>
+    <Drawer
+      anchor="right"
+      open={open}
+      onClose={onClose}
+      PaperProps={{ role: 'dialog', 'aria-modal': true, 'aria-labelledby': titleId }}
+      sx={{ '& .MuiDrawer-paper': { width: 440, maxWidth: '100vw', p: 0 } }}
+    >
       <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
         {/* Header */}
         <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ px: 3, py: 2.5, borderBottom: 1, borderColor: 'divider' }}>
-          <Typography variant="h5">{editPolicy ? 'Edit Schedule' : 'New Schedule'}</Typography>
-          <IconButton onClick={onClose} size="small"><CloseIcon /></IconButton>
+          <Typography id={titleId} variant="h5">{editPolicy ? 'Edit Schedule' : 'New Schedule'}</Typography>
+          <IconButton onClick={onClose} size="small" aria-label="Close schedule drawer" autoFocus><CloseIcon /></IconButton>
         </Stack>
 
         {/* Body */}

@@ -179,7 +179,7 @@ export function Overrides() {
                       </TableCell>
                       <TableCell align="right">
                         <Tooltip title="Delete">
-                          <IconButton size="small" onClick={() => handleDelete(o)}>
+                          <IconButton size="small" onClick={() => handleDelete(o)} aria-label={`Delete override ${o.metadata.name}`}>
                             <DeleteIcon fontSize="small" />
                           </IconButton>
                         </Tooltip>

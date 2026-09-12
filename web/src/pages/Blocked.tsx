@@ -20,11 +20,18 @@ import type { PowerTarget } from '../types';
 
 function BlockedRow({ target }: { target: PowerTarget }) {
   const [open, setOpen] = useState(false);
+  const detailsId = `blocked-details-${target.spec.targetRef.namespace}-${target.spec.targetRef.kind}-${target.spec.targetRef.name}`.replace(/[^a-zA-Z0-9_-]/g, '-');
   return (
     <>
       <TableRow hover sx={{ '& td': { borderBottom: open ? 0 : undefined } }}>
         <TableCell sx={{ width: 40 }}>
-          <IconButton size="small" onClick={() => setOpen(!open)}>
+          <IconButton
+            size="small"
+            onClick={() => setOpen(!open)}
+            aria-label={`${open ? 'Collapse' : 'Expand'} block reasons for ${target.spec.targetRef.namespace}/${target.spec.targetRef.kind}/${target.spec.targetRef.name}`}
+            aria-expanded={open}
+            aria-controls={detailsId}
+          >
             {open ? <KeyboardArrowDownIcon fontSize="small" /> : <KeyboardArrowRightIcon fontSize="small" />}
           </IconButton>
         </TableCell>
@@ -37,7 +44,7 @@ function BlockedRow({ target }: { target: PowerTarget }) {
       </TableRow>
       <TableRow>
         <TableCell colSpan={5} sx={{ py: 0, px: 0 }}>
-          <Collapse in={open} timeout="auto" unmountOnExit>
+          <Collapse id={detailsId} in={open} timeout="auto" unmountOnExit>
             <Box sx={{ py: 2, px: 6 }}>
               <Typography variant="overline" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>Block Reasons</Typography>
               <Stack spacing={1.5}>

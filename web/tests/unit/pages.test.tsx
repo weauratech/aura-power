@@ -5,10 +5,81 @@ import { http, HttpResponse } from 'msw';
 import { AuditLog } from '../../src/pages/AuditLog';
 import { PendingApprovals } from '../../src/pages/PendingApprovals';
 import { Targets } from '../../src/pages/Targets';
+import { Schedule } from '../../src/pages/Schedule';
+import { Notifications as NotificationsPage } from '../../src/pages/Notifications';
+import { Blocked } from '../../src/pages/Blocked';
+import { Layout } from '../../src/components/Layout';
 import { origin, server } from '../server';
 import { renderUI, target } from '../helpers';
 
 describe('operational pages', () => {
+  it('gives global icon actions stable accessible names', () => {
+    renderUI(<Layout user={{ username: 'alice', role: 'admin' }} onLogout={() => undefined} />);
+    expect(screen.getByRole('button', { name: 'Sign out' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Switch to dark theme' })).toBeVisible();
+  });
+
+  it('exposes expandable block reasons with state and ownership', async () => {
+    const blocked = target('database');
+    blocked.status.blocked = true;
+    blocked.status.blockReasons = [{ type: 'protected-namespace', message: 'Protected by policy', waivable: false }];
+    server.use(http.get(`${origin}/targets`, () => HttpResponse.json({ targets: [blocked], count: 1 })));
+    renderUI(<Blocked />);
+
+    const expand = await screen.findByRole('button', { name: 'Expand block reasons for fixture-a/Deployment/database' });
+    expect(expand).toHaveAttribute('aria-expanded', 'false');
+    await userEvent.click(expand);
+    expect(screen.getByRole('button', { name: 'Collapse block reasons for fixture-a/Deployment/database' })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText('Protected by policy')).toBeVisible();
+  });
+
+  it('opens a schedule row with Enter and exposes contextual icon names', async () => {
+    server.use(
+      http.get(`${origin}/policies`, () => HttpResponse.json({
+        items: [{
+          metadata: { name: 'nightly', namespace: 'aura-system' },
+          spec: {
+            scope: { namespaces: ['fixture-a'] },
+            schedule: { desiredState: 'off', windows: [{ start: '20:00', end: '08:00', timezone: 'UTC' }] },
+            priority: 100,
+          },
+          status: { affectedTargets: 1 },
+        }], count: 1,
+      })),
+      http.get(`${origin}/overrides`, () => HttpResponse.json({ items: [], count: 0 })),
+    );
+    renderUI(<Schedule />);
+
+    const row = await screen.findByRole('row', { name: 'Edit schedule nightly' });
+    expect(screen.getByRole('button', { name: 'Delete schedule nightly' })).toBeVisible();
+    row.focus();
+    await userEvent.keyboard('{Enter}');
+
+    expect(await screen.findByRole('dialog', { name: 'Edit Schedule' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Close schedule drawer' })).toHaveFocus();
+  });
+
+  it('opens a notification row with Space and keeps delete separate from editing', async () => {
+    const channel = {
+      metadata: { name: 'operations', namespace: 'aura-system' },
+      spec: { type: 'generic', url: 'https://example.invalid/hook', events: [], namespaceFilter: [], throttle: '5m', enabled: true },
+    };
+    server.use(http.get(`${origin}/notification-channels`, () => HttpResponse.json({ items: [channel], count: 1 })));
+    const view = renderUI(<NotificationsPage />);
+
+    const row = await screen.findByRole('row', { name: 'Edit notification channel operations' });
+    row.focus();
+    await userEvent.keyboard(' ');
+    expect(await screen.findByRole('dialog', { name: 'Edit Channel' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Close notification channel drawer' })).toHaveFocus();
+
+    view.unmount();
+    renderUI(<NotificationsPage />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Delete notification channel operations' }));
+    expect(await screen.findByRole('dialog', { name: 'Delete Notification Channel' })).toBeVisible();
+    expect(screen.queryByRole('dialog', { name: 'Edit Channel' })).not.toBeInTheDocument();
+  });
+
   it('filters targets by a value the operator can see', async () => {
     server.use(http.get(`${origin}/targets`, () => HttpResponse.json({
       targets: [target('payments'), target('checkout', 'off', 'fixture-b')], count: 2,
@@ -20,6 +91,7 @@ describe('operational pages', () => {
 
     const table = screen.getByRole('table');
     expect(within(table).getByText('checkout')).toBeVisible();
+    expect(within(table).getByRole('button', { name: 'Create schedule for fixture-b/Deployment/checkout' })).toBeVisible();
     expect(within(table).queryByText('payments')).not.toBeInTheDocument();
     expect(screen.getByText('1 workloads (filtered)')).toBeVisible();
   });

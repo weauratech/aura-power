@@ -1,4 +1,5 @@
 import { screen, waitFor } from '@testing-library/react';
+import { useState } from 'react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { http, HttpResponse } from 'msw';
@@ -8,6 +9,28 @@ import { renderUI } from '../helpers';
 import { target } from '../helpers';
 
 describe('schedule form contracts', () => {
+  it('traps focus, closes with Escape, and returns focus to its trigger', async () => {
+    function Harness() {
+      const [open, setOpen] = useState(false);
+      return <>
+        <button onClick={() => setOpen(true)}>Open schedule</button>
+        <ScheduleDrawer open={open} onClose={() => setOpen(false)} />
+      </>;
+    }
+
+    renderUI(<Harness />);
+    const user = userEvent.setup();
+    const trigger = screen.getByRole('button', { name: 'Open schedule' });
+    await user.click(trigger);
+
+    expect(await screen.findByRole('dialog', { name: 'New Schedule' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Close schedule drawer' })).toHaveFocus();
+    await user.keyboard('{Escape}');
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'New Schedule' })).not.toBeInTheDocument());
+    expect(trigger).toHaveFocus();
+  });
+
   it('submits an explicit namespace scope exactly once and reports completion', async () => {
     const received = vi.fn();
     server.use(http.post(`${origin}/policies`, async ({ request }) => {
