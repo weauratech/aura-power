@@ -118,6 +118,9 @@ self-signed fallback produces different certificate material in a fresh render.
 | `networkPolicy.enabled` | Create NetworkPolicies | `false` |
 | `networkPolicy.additionalServerEgressPorts` | Extra TCP egress ports for providers/webhooks | `[]` |
 
+When an externally managed auth Secret is rotated, restart the server so its
+environment receives the new values: `kubectl rollout restart statefulset/aura-power-server -n aura-system`.
+
 ## CRDs
 
 CRDs are included in `crds/` and installed automatically on first `helm install`. Helm does not upgrade CRDs on subsequent `helm upgrade` — apply them manually:
