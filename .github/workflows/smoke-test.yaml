@@ -1,10 +1,7 @@
 name: Smoke Tests
 
-# NOTE: These tests require network access to the target URL (power.int.weaura.tech).
-# The default target is behind a Cloudflare WARP tunnel and not reachable from GitHub-hosted runners.
-# Use a self-hosted runner with VPN access, or run locally:
-#   ./scripts/smoke-test.sh https://power.int.weaura.tech admin admin123
-#   go test -tags=e2e ./tests/e2e/ -base-url=https://power.int.weaura.tech
+# No target or credential defaults. Jobs require an explicit mutation
+# acknowledgement and environment-protected credentials.
 
 on:
   workflow_dispatch:
@@ -12,53 +9,46 @@ on:
       base_url:
         description: 'Target URL for smoke tests'
         required: true
-        default: 'https://power.int.weaura.tech'
       username:
         description: 'Admin username'
         required: true
-        default: 'admin'
-      password:
-        description: 'Admin password'
+      fixture_namespace:
+        description: 'Dedicated fixture namespace admitted for this run'
         required: true
-        default: 'admin123'
+      mutation_ack:
+        description: 'Type I_ACKNOWLEDGE_DEDICATED_FIXTURE_MUTATIONS'
+        required: true
 
 permissions:
   contents: read
 
 jobs:
-  api-smoke:
-    name: API Smoke Tests (Go)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-      - name: Create panelassets placeholder
-        run: mkdir -p cmd/server/panelassets && echo '<html></html>' > cmd/server/panelassets/index.html
-      - name: Run E2E API tests
-        run: |
-          go test -tags=e2e -v -count=1 -timeout=120s ./tests/e2e/ \
-            -base-url=${{ inputs.base_url }} \
-            -username=${{ inputs.username }} \
-            -password=${{ inputs.password }}
-
-  api-smoke-shell:
-    name: API Smoke Tests (Shell)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Run shell smoke tests
-        run: ./scripts/smoke-test.sh ${{ inputs.base_url }} ${{ inputs.username }} ${{ inputs.password }}
-
   frontend-smoke:
     name: Frontend Smoke Tests (Playwright)
     runs-on: ubuntu-latest
+    if: inputs.mutation_ack == 'I_ACKNOWLEDGE_DEDICATED_FIXTURE_MUTATIONS'
+    environment: aura-power-smoke
+    env:
+      INPUT_BASE_URL: ${{ inputs.base_url }}
+      INPUT_USERNAME: ${{ inputs.username }}
+      ALLOWED_BASE_URL: ${{ secrets.AURA_POWER_SMOKE_ALLOWED_ORIGIN }}
+      INPUT_FIXTURE_NAMESPACE: ${{ inputs.fixture_namespace }}
+      ALLOWED_FIXTURE_NAMESPACE: ${{ secrets.AURA_POWER_SMOKE_ALLOWED_NAMESPACE }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+      - name: Validate protected target
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "$ALLOWED_BASE_URL" ]]
+          [[ -n "$ALLOWED_FIXTURE_NAMESPACE" ]]
+          [[ "$INPUT_BASE_URL" == "$ALLOWED_BASE_URL" ]]
+          [[ "$INPUT_BASE_URL" == https://* ]]
+          [[ "$INPUT_FIXTURE_NAMESPACE" == "$ALLOWED_FIXTURE_NAMESPACE" ]]
+          [[ "$INPUT_FIXTURE_NAMESPACE" =~ ^aura-power-e2e-[a-z0-9-]+$ ]]
       - name: Install dependencies
         run: cd tests/e2e/playwright && npm ci
       - name: Install Playwright browsers
@@ -66,9 +56,11 @@ jobs:
       - name: Run Playwright tests
         run: cd tests/e2e/playwright && npx playwright test
         env:
-          BASE_URL: ${{ inputs.base_url }}
-          ADMIN_USER: ${{ inputs.username }}
-          ADMIN_PASS: ${{ inputs.password }}
+          AURA_E2E_BASE_URL: ${{ env.INPUT_BASE_URL }}
+          AURA_E2E_ADMIN_USER: ${{ env.INPUT_USERNAME }}
+          AURA_E2E_ADMIN_PASSWORD: ${{ secrets.AURA_POWER_SMOKE_PASSWORD }}
+          AURA_E2E_FIXTURE_NAMESPACE: ${{ env.INPUT_FIXTURE_NAMESPACE }}
+          AURA_E2E_ALLOW_MUTATION: 'true'
       - name: Upload test report
         if: always()
         uses: actions/upload-artifact@v4

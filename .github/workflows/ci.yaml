@@ -31,8 +31,13 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Create panelassets placeholder
-        run: mkdir -p cmd/server/panelassets && echo '<html><body>placeholder</body></html>' > cmd/server/panelassets/index.html
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build embedded panel
+        run: cd web && npm ci && npm run build && cp -R dist ../cmd/server/panelassets
       - name: Run tests
         run: go test ./... -race -coverprofile=coverage.out -count=1
       - name: Upload coverage
@@ -48,8 +53,13 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Create panelassets placeholder
-        run: mkdir -p cmd/server/panelassets && echo '<html><body>placeholder</body></html>' > cmd/server/panelassets/index.html
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build embedded panel
+        run: cd web && npm ci && npm run build && cp -R dist ../cmd/server/panelassets
       - name: Build server
         run: CGO_ENABLED=0 go build -ldflags="-s -w" -o bin/aura-power-server ./cmd/server/
       - name: Build controller
@@ -73,4 +83,47 @@ jobs:
           node-version: 20
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - run: cd web && npm ci && npm run build
+      - run: cd web && npm ci && npm test && npm run build
+
+  acceptance-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Create panelassets placeholder
+        run: mkdir -p cmd/server/panelassets && echo '<html></html>' > cmd/server/panelassets/index.html
+      - name: Run violated Go contracts
+        id: go-acceptance
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          go test -tags=acceptance ./... -race -count=1 | tee acceptance-go.txt
+      - name: Run violated frontend contracts
+        id: web-acceptance
+        continue-on-error: true
+        if: always()
+        run: |
+          set -o pipefail
+          cd web
+          npm ci
+          npm run test:acceptance | tee ../acceptance-web.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: acceptance-contracts
+          path: acceptance-*.txt
+      - name: Enforce acceptance contracts
+        if: always()
+        env:
+          GO_OUTCOME: ${{ steps.go-acceptance.outcome }}
+          WEB_OUTCOME: ${{ steps.web-acceptance.outcome }}
+        run: |
+          [[ "$GO_OUTCOME" == success ]]
+          [[ "$WEB_OUTCOME" == success ]]

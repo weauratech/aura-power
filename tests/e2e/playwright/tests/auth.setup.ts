@@ -1,21 +1,14 @@
 import { test as setup, expect } from '@playwright/test';
 
-const STORAGE_STATE = 'tests/.auth/user.json';
+const username = process.env.AURA_E2E_ADMIN_USER;
+const password = process.env.AURA_E2E_ADMIN_PASSWORD;
 
-setup('authenticate', async ({ page }) => {
+setup('authenticate an isolated administrator fixture', async ({ page }) => {
+  if (!username || !password) throw new Error('AURA_E2E_ADMIN_USER and AURA_E2E_ADMIN_PASSWORD are required.');
   await page.goto('/');
-
-  // Should redirect to login or show login page
-  await page.waitForSelector('input[name="username"], input[autocomplete="username"]', { timeout: 10000 });
-
-  await page.fill('input[autocomplete="username"], input:first-of-type', process.env.ADMIN_USER || 'admin');
-  await page.fill('input[type="password"]', process.env.ADMIN_PASS || 'admin123');
-  await page.click('button[type="submit"]');
-
-  // Wait for dashboard to load
-  await page.waitForSelector('text=Cluster Overview', { timeout: 15000 });
-
-  await page.context().storageState({ path: STORAGE_STATE });
+  await page.getByLabel('Username').fill(username);
+  await page.getByLabel('Password').fill(password);
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('heading', { name: 'Cluster Overview' })).toBeVisible();
+  await page.context().storageState({ path: 'tests/.auth/admin.json' });
 });
-
-export { STORAGE_STATE };

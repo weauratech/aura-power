@@ -1,7 +1,7 @@
 //go:build e2e
 
 // Package e2e contains end-to-end smoke tests that run against a live Aura Power instance.
-// Run with: go test -tags=e2e ./tests/e2e/ -base-url=https://power.int.weaura.tech
+// Run with explicit isolated URL, credentials, and -allow-mutation=true.
 package e2e
 
 import (
@@ -12,16 +12,33 @@ import (
 	"io"
 	"net/http"
 	"net/http/cookiejar"
+	"net/url"
+	"os"
 	"strings"
 	"testing"
 	"time"
 )
 
 var (
-	baseURL  = flag.String("base-url", "https://power.int.weaura.tech", "Base URL of the Aura Power server")
-	username = flag.String("username", "admin", "Admin username")
-	password = flag.String("password", "admin123", "Admin password")
+	baseURL       = flag.String("base-url", "", "Base URL of the isolated Aura Power test server")
+	username      = flag.String("username", "", "Isolated test administrator username")
+	password      = flag.String("password", "", "Isolated test administrator password")
+	allowMutation = flag.Bool("allow-mutation", false, "explicitly allow this suite to mutate test resources")
 )
+
+func TestMain(m *testing.M) {
+	flag.Parse()
+	if *baseURL == "" || *username == "" || *password == "" || !*allowMutation {
+		fmt.Fprintln(os.Stderr, "e2e requires explicit base-url, username, password, and -allow-mutation=true")
+		os.Exit(2)
+	}
+	parsed, err := url.Parse(*baseURL)
+	if err != nil || (parsed.Hostname() != "127.0.0.1" && parsed.Hostname() != "localhost" && parsed.Hostname() != "::1") {
+		fmt.Fprintln(os.Stderr, "legacy e2e suite is limited to an isolated loopback server")
+		os.Exit(2)
+	}
+	os.Exit(m.Run())
+}
 
 type testClient struct {
 	http *http.Client

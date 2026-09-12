@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "lint": "eslint .",
     "test": "vitest run",
+    "test:acceptance": "vitest run --config vitest.acceptance.config.ts",
     "test:watch": "vitest"
   },
   "dependencies": {

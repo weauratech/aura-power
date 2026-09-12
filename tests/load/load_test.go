@@ -1,7 +1,7 @@
 //go:build load
 
 // Package load contains load tests that validate performance requirements.
-// Run with: go test -tags=load -v ./tests/load/ -base-url=https://power.int.weaura.tech -count=1
+// Run with an isolated URL, credentials, -allow-load=true, and -count=1.
 //
 // This test creates 500 PowerTarget-like entries via policies and measures reconciliation time.
 // Requires admin access to the target server.
@@ -15,16 +15,33 @@ import (
 	"io"
 	"net/http"
 	"net/http/cookiejar"
+	"net/url"
+	"os"
 	"sync"
 	"testing"
 	"time"
 )
 
 var (
-	baseURL  = flag.String("base-url", "https://power.int.weaura.tech", "Base URL")
-	username = flag.String("username", "admin", "Admin username")
-	password = flag.String("password", "admin123", "Admin password")
+	baseURL   = flag.String("base-url", "", "Base URL of an isolated load-test server")
+	username  = flag.String("username", "", "Isolated test administrator username")
+	password  = flag.String("password", "", "Isolated test administrator password")
+	allowLoad = flag.Bool("allow-load", false, "explicitly allow the mutating load suite")
 )
+
+func TestMain(m *testing.M) {
+	flag.Parse()
+	if *baseURL == "" || *username == "" || *password == "" || !*allowLoad {
+		fmt.Fprintln(os.Stderr, "load tests require explicit base-url, username, password, and -allow-load=true")
+		os.Exit(2)
+	}
+	parsed, err := url.Parse(*baseURL)
+	if err != nil || (parsed.Hostname() != "127.0.0.1" && parsed.Hostname() != "localhost" && parsed.Hostname() != "::1") {
+		fmt.Fprintln(os.Stderr, "load suite is limited to an isolated loopback server")
+		os.Exit(2)
+	}
+	os.Exit(m.Run())
+}
 
 type client struct {
 	http *http.Client
