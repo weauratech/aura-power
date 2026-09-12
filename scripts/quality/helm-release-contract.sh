@@ -13,7 +13,7 @@ done
 
 # Chart.appVersion omits the conventional Git tag prefix. The release workflow
 # must publish and sign the same unprefixed image tag used by Helm defaults.
-rg -q 'VERSION=\$\{TAG#v\}' .github/workflows/release.yaml
+rg -q 'VERSION="?\$\{TAG#v\}"?' .github/workflows/release.yaml
 rg -q 'IMAGE_SERVER.*\$\{VERSION\}' .github/workflows/release.yaml
 rg -q 'IMAGE_CONTROLLER.*\$\{VERSION\}' .github/workflows/release.yaml
 

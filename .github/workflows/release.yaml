@@ -27,7 +27,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Extract version
         id: version
-        run: echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        run: echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
       - name: Build server (amd64)
         uses: docker/build-push-action@v6
         with:
@@ -61,7 +61,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Extract version
         id: version
-        run: echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        run: echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
       - name: Build server (arm64)
         uses: docker/build-push-action@v6
         with:
@@ -94,19 +94,19 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Extract version
         id: version
-        run: echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        run: echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
       - name: Create multi-arch manifests
         run: |
-          TAG=${{ steps.version.outputs.tag }}
-          VERSION=${TAG#v}
+          TAG="${{ steps.version.outputs.tag }}"
+          VERSION="${TAG#v}"
           # Server
-          docker buildx imagetools create -t ${{ env.IMAGE_SERVER }}:${TAG} -t ${{ env.IMAGE_SERVER }}:${VERSION} -t ${{ env.IMAGE_SERVER }}:latest \
-            ${{ env.IMAGE_SERVER }}:${TAG}-amd64 \
-            ${{ env.IMAGE_SERVER }}:${TAG}-arm64
+          docker buildx imagetools create -t "${{ env.IMAGE_SERVER }}:${TAG}" -t "${{ env.IMAGE_SERVER }}:${VERSION}" -t "${{ env.IMAGE_SERVER }}:latest" \
+            "${{ env.IMAGE_SERVER }}:${TAG}-amd64" \
+            "${{ env.IMAGE_SERVER }}:${TAG}-arm64"
           # Controller
-          docker buildx imagetools create -t ${{ env.IMAGE_CONTROLLER }}:${TAG} -t ${{ env.IMAGE_CONTROLLER }}:${VERSION} -t ${{ env.IMAGE_CONTROLLER }}:latest \
-            ${{ env.IMAGE_CONTROLLER }}:${TAG}-amd64 \
-            ${{ env.IMAGE_CONTROLLER }}:${TAG}-arm64
+          docker buildx imagetools create -t "${{ env.IMAGE_CONTROLLER }}:${TAG}" -t "${{ env.IMAGE_CONTROLLER }}:${VERSION}" -t "${{ env.IMAGE_CONTROLLER }}:latest" \
+            "${{ env.IMAGE_CONTROLLER }}:${TAG}-amd64" \
+            "${{ env.IMAGE_CONTROLLER }}:${TAG}-arm64"
 
   sign:
     runs-on: ubuntu-latest
@@ -120,15 +120,15 @@ jobs:
       - uses: sigstore/cosign-installer@v3
       - name: Extract version
         id: version
-        run: echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        run: echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
       - name: Sign images
         run: |
-          cosign sign --yes ${{ env.IMAGE_SERVER }}:${{ steps.version.outputs.tag }}
-          cosign sign --yes ${{ env.IMAGE_CONTROLLER }}:${{ steps.version.outputs.tag }}
-          VERSION=${{ steps.version.outputs.tag }}
-          VERSION=${VERSION#v}
-          cosign sign --yes ${{ env.IMAGE_SERVER }}:${VERSION}
-          cosign sign --yes ${{ env.IMAGE_CONTROLLER }}:${VERSION}
+          cosign sign --yes "${{ env.IMAGE_SERVER }}:${{ steps.version.outputs.tag }}"
+          cosign sign --yes "${{ env.IMAGE_CONTROLLER }}:${{ steps.version.outputs.tag }}"
+          VERSION="${{ steps.version.outputs.tag }}"
+          VERSION="${VERSION#v}"
+          cosign sign --yes "${{ env.IMAGE_SERVER }}:${VERSION}"
+          cosign sign --yes "${{ env.IMAGE_CONTROLLER }}:${VERSION}"
 
   goreleaser:
     runs-on: ubuntu-latest
@@ -158,7 +158,7 @@ jobs:
         run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
       - name: Extract version
         id: version
-        run: echo "tag=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+        run: echo "tag=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
       - name: Package and push Helm chart
         run: |
           helm package charts/aura-power --version ${{ steps.version.outputs.tag }} --app-version ${{ steps.version.outputs.tag }}
