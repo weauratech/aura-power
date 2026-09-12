@@ -130,6 +130,34 @@ move the operation from `Applied` to `Contended` on the next observation. A
 normal transition moves from `Applied` to `Converged` after discovery observes
 the delegated field.
 
+### CronJob restoration semantics
+
+Aura Power snapshots the effective value of `spec.suspend` before changing a
+CronJob and restores that exact value. An omitted `spec.suspend` uses the
+Kubernetes default `false`, so its snapshot is restored as `false`. Restoration
+fails without changing the CronJob when the snapshot has no suspend value or
+when the workload UID differs from the UID captured by discovery. Repeated
+restoration of the same snapshot is idempotent.
+
+Suspension only stops new schedules. It does not stop Jobs that the CronJob has
+already created; their count is exposed as
+`PowerTarget.status.observedState.activeJobs`. Aura Power does not delete,
+cancel, or restart those Jobs.
+
+Kubernetes counts schedules that occur while a CronJob is suspended as missed.
+When the CronJob is resumed, jobs can be created immediately according to its
+`startingDeadlineSeconds` and the CronJob controller's missed-schedule rules.
+Set `startingDeadlineSeconds`, concurrency policy, and job history limits in the
+CronJob manifest to express the intended catch-up behavior. Aura Power preserves
+those fields and does not promise that a suspended window will be skipped.
+
+For GitOps-managed CronJobs, delegate `/spec/suspend` with both
+`ignoreDifferences` and `RespectIgnoreDifferences=true`. Git remains authoritative
+for schedule and catch-up fields; Aura Power is temporarily authoritative only
+for `spec.suspend`. The same rule applies when restoring an originally suspended
+CronJob: Git must also declare the intended baseline or it can overwrite the
+restored value.
+
 ## Flux
 
 ### The Problem

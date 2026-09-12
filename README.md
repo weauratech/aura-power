@@ -221,7 +221,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full development guide.
 
 2. **Evaluation**: For each target, the engine evaluates all active policies and overrides. The highest-priority rule wins.
 
-3. **Execution**: If the desired state is "off" and the workload is running, the controller scales it to zero (or suspends CronJobs). The original replica count is stored in a snapshot for restoration.
+3. **Execution**: If the desired state is "off" and the workload is running, the controller scales it to zero (or suspends CronJobs). The original replica count or exact CronJob suspend state is stored in a snapshot for restoration.
 
 4. **Guardrails**: Before executing, the controller checks for blocks: system namespaces, missing opt-in annotation, active HPAs, ArgoCD/Helm/Flux management. Blocked workloads are never touched.
 

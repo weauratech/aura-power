@@ -188,6 +188,10 @@ func (e *Executor) restoreStatefulSet(ctx context.Context, ref domain.WorkloadRe
 }
 
 func (e *Executor) restoreCronJob(ctx context.Context, ref domain.WorkloadRef, snapshot domain.Snapshot) error {
+	if snapshot.Suspended == nil {
+		return fmt.Errorf("snapshot missing suspend state for cronjob %s/%s", ref.Namespace, ref.Name)
+	}
+
 	var cj batchv1.CronJob
 	if err := e.client.Get(ctx, types.NamespacedName{Namespace: ref.Namespace, Name: ref.Name}, &cj); err != nil {
 		return err
@@ -196,8 +200,12 @@ func (e *Executor) restoreCronJob(ctx context.Context, ref domain.WorkloadRef, s
 		return err
 	}
 
-	falseBool := false
-	cj.Spec.Suspend = &falseBool
+	if cj.Spec.Suspend != nil && *cj.Spec.Suspend == *snapshot.Suspended {
+		return nil
+	}
+
+	restored := *snapshot.Suspended
+	cj.Spec.Suspend = &restored
 	return e.client.Update(ctx, &cj)
 }
 

@@ -86,6 +86,12 @@ export function TargetDetail() {
                     <TableCell><Typography variant="body2" color="text.secondary">Replicas</Typography></TableCell>
                     <TableCell><Typography variant="code">{target.status.observedState.replicas}</Typography></TableCell>
                   </TableRow>
+                  {target.spec.targetRef.kind === 'CronJob' && (
+                    <TableRow>
+                      <TableCell><Typography variant="body2" color="text.secondary">Active Jobs</Typography></TableCell>
+                      <TableCell><Typography variant="code">{target.status.observedState.activeJobs ?? 0}</Typography></TableCell>
+                    </TableRow>
+                  )}
                   <TableRow>
                     <TableCell><Typography variant="body2" color="text.secondary">Managed</Typography></TableCell>
                     <TableCell>{target.status.managed ? <Chip label="Yes" size="small" color="success" /> : <Chip label="No" size="small" />}</TableCell>

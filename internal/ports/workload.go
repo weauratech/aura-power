@@ -11,6 +11,7 @@ type DiscoveredWorkload struct {
 	Ref                  domain.WorkloadRef
 	Replicas             int32
 	Suspended            bool
+	ActiveJobs           int32
 	Annotations          map[string]string
 	Labels               map[string]string
 	NamespaceLabels      map[string]string

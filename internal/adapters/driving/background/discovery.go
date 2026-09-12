@@ -238,6 +238,7 @@ func (d *DiscoveryLoop) newPowerTarget(ctx context.Context, targetName string, w
 	target.Status.ObservedState = v1alpha1.ObservedStateSpec{
 		Replicas:   wl.Replicas,
 		Suspended:  wl.Suspended,
+		ActiveJobs: wl.ActiveJobs,
 		PowerState: powerState,
 	}
 	target.Status.Ownership = ownershipSpecs
@@ -280,6 +281,7 @@ func (d *DiscoveryLoop) updateObservedState(ctx context.Context, target *v1alpha
 	target.Status.ObservedState = v1alpha1.ObservedStateSpec{
 		Replicas:   wl.Replicas,
 		Suspended:  wl.Suspended,
+		ActiveJobs: wl.ActiveJobs,
 		PowerState: powerState,
 	}
 	target.Status.WorkloadLabels = copyStringMap(wl.Labels)

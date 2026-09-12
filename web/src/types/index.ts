@@ -12,6 +12,7 @@ export interface TargetRef {
 export interface ObservedState {
   replicas: number;
   suspended: boolean;
+  activeJobs?: number;
   powerState: PowerState | '';
 }
 

@@ -154,6 +154,7 @@ func (d *Discoverer) DiscoverByNamespace(ctx context.Context, namespace string) 
 		result = append(result, ports.DiscoveredWorkload{
 			Ref:         domain.WorkloadRef{APIVersion: "batch/v1", Namespace: namespace, Name: cj.Name, Kind: domain.WorkloadKindCronJob, UID: string(cj.UID)},
 			Suspended:   ptrBoolVal(cj.Spec.Suspend),
+			ActiveJobs:  int32(len(cj.Status.Active)),
 			Annotations: cj.Annotations,
 			Labels:      cj.Labels,
 			Resources:   computeCronJobResources(&cj),

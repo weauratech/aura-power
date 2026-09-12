@@ -2,6 +2,8 @@ package kubernetes
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -91,6 +93,117 @@ func TestQualityExecutorRefusesRecreatedWorkloadUID(t *testing.T) {
 	}
 	if err := executor.PowerDown(context.Background(), ref); err == nil {
 		t.Fatal("expected mutation to reject a recreated workload UID")
+	}
+}
+
+func TestQualityCronJobRestorePreservesExactSuspendState(t *testing.T) {
+	ctx := context.Background()
+	for _, original := range []bool{false, true} {
+		t.Run(fmt.Sprintf("suspended_%t", original), func(t *testing.T) {
+			current := original
+			job := &batchv1.CronJob{
+				ObjectMeta: metav1.ObjectMeta{Name: "reports", Namespace: "fixtures", UID: "cron-uid"},
+				Spec: batchv1.CronJobSpec{
+					Suspend:           &current,
+					ConcurrencyPolicy: batchv1.ForbidConcurrent,
+				},
+			}
+			c := fake.NewClientBuilder().WithScheme(qualityScheme(t)).WithObjects(job).Build()
+			executor := NewExecutor(c)
+			ref := domain.WorkloadRef{Namespace: "fixtures", Name: "reports", Kind: domain.WorkloadKindCronJob, UID: "cron-uid"}
+
+			snapshot, err := executor.CaptureSnapshot(ctx, ref)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if snapshot.Suspended == nil || *snapshot.Suspended != original {
+				t.Fatalf("captured suspend state = %v, want %t", snapshot.Suspended, original)
+			}
+			if err := executor.PowerDown(ctx, ref); err != nil {
+				t.Fatal(err)
+			}
+			if err := executor.Restore(ctx, ref, *snapshot); err != nil {
+				t.Fatal(err)
+			}
+			// A repeated reconcile must be safe and preserve the same result.
+			if err := executor.Restore(ctx, ref, *snapshot); err != nil {
+				t.Fatalf("repeated restore failed: %v", err)
+			}
+
+			var got batchv1.CronJob
+			if err := c.Get(ctx, clientKey("fixtures", "reports"), &got); err != nil {
+				t.Fatal(err)
+			}
+			if got.Spec.Suspend == nil || *got.Spec.Suspend != original {
+				t.Fatalf("restored suspend state = %v, want %t", got.Spec.Suspend, original)
+			}
+			if got.Spec.ConcurrencyPolicy != batchv1.ForbidConcurrent {
+				t.Fatalf("restore changed unrelated CronJob field: %s", got.Spec.ConcurrencyPolicy)
+			}
+		})
+	}
+}
+
+func TestQualityCronJobRestoreFailsClosedWithoutSuspendSnapshot(t *testing.T) {
+	suspended := true
+	job := &batchv1.CronJob{ObjectMeta: metav1.ObjectMeta{Name: "reports", Namespace: "fixtures"}, Spec: batchv1.CronJobSpec{Suspend: &suspended}}
+	c := fake.NewClientBuilder().WithScheme(qualityScheme(t)).WithObjects(job).Build()
+	err := NewExecutor(c).Restore(context.Background(), domain.WorkloadRef{
+		Namespace: "fixtures", Name: "reports", Kind: domain.WorkloadKindCronJob,
+	}, domain.Snapshot{})
+	if err == nil || !strings.Contains(err.Error(), "snapshot missing suspend state") {
+		t.Fatalf("expected missing snapshot error, got %v", err)
+	}
+	var got batchv1.CronJob
+	if getErr := c.Get(context.Background(), clientKey("fixtures", "reports"), &got); getErr != nil {
+		t.Fatal(getErr)
+	}
+	if got.Spec.Suspend == nil || !*got.Spec.Suspend {
+		t.Fatalf("CronJob was changed despite missing snapshot: %v", got.Spec.Suspend)
+	}
+}
+
+func TestQualityCronJobRestoreRefusesRecreatedUID(t *testing.T) {
+	suspended := true
+	restoreTo := false
+	job := &batchv1.CronJob{ObjectMeta: metav1.ObjectMeta{Name: "reports", Namespace: "fixtures", UID: "new-uid"}, Spec: batchv1.CronJobSpec{Suspend: &suspended}}
+	c := fake.NewClientBuilder().WithScheme(qualityScheme(t)).WithObjects(job).Build()
+	err := NewExecutor(c).Restore(context.Background(), domain.WorkloadRef{
+		Namespace: "fixtures", Name: "reports", Kind: domain.WorkloadKindCronJob, UID: "old-uid",
+	}, domain.Snapshot{Suspended: &restoreTo})
+	if err == nil || !strings.Contains(err.Error(), "workload UID changed") {
+		t.Fatalf("expected recreated UID error, got %v", err)
+	}
+	var got batchv1.CronJob
+	if getErr := c.Get(context.Background(), clientKey("fixtures", "reports"), &got); getErr != nil {
+		t.Fatal(getErr)
+	}
+	if got.Spec.Suspend == nil || !*got.Spec.Suspend {
+		t.Fatalf("recreated CronJob was changed: %v", got.Spec.Suspend)
+	}
+}
+
+func TestQualityCronJobNilSuspendDefaultsToFalseAndActiveJobsAreReported(t *testing.T) {
+	job := &batchv1.CronJob{
+		ObjectMeta: metav1.ObjectMeta{Name: "reports", Namespace: "fixtures", UID: "cron-uid"},
+		Status:     batchv1.CronJobStatus{Active: []corev1.ObjectReference{{Name: "reports-1"}, {Name: "reports-2"}}},
+	}
+	c := fake.NewClientBuilder().WithScheme(qualityScheme(t)).WithObjects(job).Build()
+	executor := NewExecutor(c)
+	ref := domain.WorkloadRef{Namespace: "fixtures", Name: "reports", Kind: domain.WorkloadKindCronJob, UID: "cron-uid"}
+	snapshot, err := executor.CaptureSnapshot(context.Background(), ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Suspended == nil || *snapshot.Suspended {
+		t.Fatalf("nil spec.suspend must be captured as Kubernetes default false: %v", snapshot.Suspended)
+	}
+	workloads, err := NewDiscoverer(c).DiscoverByNamespace(context.Background(), "fixtures")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(workloads) != 1 || workloads[0].ActiveJobs != 2 {
+		t.Fatalf("active Jobs were not reported separately: %+v", workloads)
 	}
 }
 

@@ -142,8 +142,12 @@ type PowerActionStatus struct {
 
 // ObservedStateSpec captures the workload's current state.
 type ObservedStateSpec struct {
-	Replicas   int32  `json:"replicas"`
-	Suspended  bool   `json:"suspended,omitempty"`
+	Replicas  int32 `json:"replicas"`
+	Suspended bool  `json:"suspended,omitempty"`
+	// ActiveJobs reports Jobs already started by a CronJob. Suspending the
+	// CronJob prevents future scheduling but does not stop these Jobs.
+	// +optional
+	ActiveJobs int32  `json:"activeJobs,omitempty"`
 	PowerState string `json:"powerState,omitempty"` // "on" or "off"
 }
 
