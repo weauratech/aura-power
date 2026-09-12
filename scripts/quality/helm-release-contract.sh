@@ -48,4 +48,13 @@ observability_render="$(helm template aura-power charts/aura-power --set network
 grep -q 'port: 9003' <<<"$observability_render"
 [[ "$(grep -c '^kind: ServiceMonitor$' <<<"$observability_render")" -eq 2 ]]
 
+external_webhook_render="$(helm template aura-power charts/aura-power --set webhook.enabled=true --set webhook.existingSecret=managed-webhook --set webhook.caBundle=Y2E=)"
+grep -q 'secretName: managed-webhook' <<<"$external_webhook_render"
+grep -q 'caBundle: Y2E=' <<<"$external_webhook_render"
+[[ "$(grep -c '^kind: Secret$' <<<"$external_webhook_render")" -eq 1 ]]
+if helm template aura-power charts/aura-power --set webhook.enabled=true --set webhook.existingSecret=managed-webhook >/dev/null 2>&1; then
+  echo "webhook.existingSecret without webhook.caBundle must be rejected" >&2
+  exit 1
+fi
+
 echo "Helm/release contract checks passed"

@@ -20,17 +20,18 @@ helm install aura-power oci://ghcr.io/weauratech/charts/aura-power \
 | `server.enabled` | Deploy the server component | `true` |
 | `server.image.repository` | Server image | `ghcr.io/weauratech/aura-power-server` |
 | `server.image.tag` | Image tag (defaults to appVersion) | `""` |
-| `server.replicas` | Number of server pods (StatefulSet) | `1` |
+| `server.replicas` | Server pods; fixed at one while auth uses local SQLite | `1` |
 | `server.port` | HTTP port | `8080` |
 | `server.resources.requests.cpu` | CPU request | `100m` |
 | `server.resources.requests.memory` | Memory request | `128Mi` |
 | `server.resources.limits.cpu` | CPU limit | `500m` |
 | `server.resources.limits.memory` | Memory limit | `256Mi` |
-| `server.auth.jwtSecret` | **Required.** Secret key for JWT signing | `""` |
+| `server.auth.existingSecret` | Existing Secret with `jwt-secret` and `admin-password` | `""` |
+| `server.auth.jwtSecret` | JWT signing key; generated once and retained when empty | `""` |
 | `server.auth.initialAdmin.username` | Initial admin username | `admin` |
-| `server.auth.initialAdmin.password` | **Required on first install.** Admin password | `""` |
+| `server.auth.initialAdmin.password` | Initial password; generated once and retained when empty | `""` |
 | `server.auth.accessTokenTTL` | Access token lifetime | `1h` |
-| `server.auth.refreshTokenTTL` | Refresh token lifetime | `7d` |
+| `server.auth.refreshTokenTTL` | Refresh token lifetime | `168h` |
 | `server.persistence.enabled` | Enable SQLite PVC | `true` |
 | `server.persistence.storageClass` | Storage class (empty = cluster default) | `""` |
 | `server.persistence.size` | PVC size | `1Gi` |
@@ -72,6 +73,8 @@ helm install aura-power oci://ghcr.io/weauratech/charts/aura-power \
 | `webhook.enabled` | Register runtime validation for policies and overrides | `false` |
 | `webhook.failurePolicy` | API server behavior when the webhook is unavailable | `Fail` |
 | `webhook.timeoutSeconds` | Admission request timeout | `5` |
+| `webhook.existingSecret` | Existing TLS Secret for deterministic GitOps rendering | `""` |
+| `webhook.caBundle` | Base64 CA bundle required with `webhook.existingSecret` | `""` |
 | `webhook.certManager.enabled` | Use cert-manager for certificate rotation | `false` |
 | `webhook.certManager.issuerRef.name` | Existing Issuer or ClusterIssuer | `""` |
 
@@ -100,6 +103,10 @@ Ready before creating or updating `PowerPolicy` and `PowerOverride` objects.
 Disabling `webhook.enabled` removes the admission resources on the next Helm
 upgrade.
 
+For Argo CD, use cert-manager or set both `webhook.existingSecret` and
+`webhook.caBundle`. Offline rendering cannot read the live Secret, so the
+self-signed fallback produces different certificate material in a fresh render.
+
 ### Global
 
 | Parameter | Description | Default |
@@ -108,6 +115,7 @@ upgrade.
 | `serviceMonitor.enabled` | Create Prometheus ServiceMonitor | `false` |
 | `serviceMonitor.interval` | Scrape interval | `30s` |
 | `networkPolicy.enabled` | Create NetworkPolicies | `false` |
+| `networkPolicy.additionalServerEgressPorts` | Extra TCP egress ports for providers/webhooks | `[]` |
 
 ## CRDs
 
@@ -128,6 +136,7 @@ CRDs and PVCs are preserved by default. To remove everything:
 ```bash
 kubectl delete crd powertargets.power.aura.sh powerpolicies.power.aura.sh \
   poweroverrides.power.aura.sh powerschedules.power.aura.sh \
-  powerauditevents.power.aura.sh powernamespacegroups.power.aura.sh
+  powerauditevents.power.aura.sh powernamespacegroups.power.aura.sh \
+  powernotificationchannels.power.aura.sh
 kubectl delete pvc -n aura-system -l app.kubernetes.io/name=aura-power
 ```

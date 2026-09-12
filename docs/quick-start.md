@@ -151,7 +151,7 @@ spec:
       - payment-service
   state: "on"
   priority: 500
-  expiresAt: "2024-01-15T06:00:00Z"
+  expiresAt: "2099-01-15T06:00:00Z"
   reason: "Release deployment window"
   reference: "JIRA-1234"
 ```
@@ -181,5 +181,6 @@ helm uninstall aura-power -n aura-system
 # To remove CRDs and all data:
 kubectl delete crd powertargets.power.aura.sh powerpolicies.power.aura.sh \
   poweroverrides.power.aura.sh powerschedules.power.aura.sh \
-  powerauditevents.power.aura.sh powernamespacegroups.power.aura.sh
+  powerauditevents.power.aura.sh powernamespacegroups.power.aura.sh \
+  powernotificationchannels.power.aura.sh
 ```

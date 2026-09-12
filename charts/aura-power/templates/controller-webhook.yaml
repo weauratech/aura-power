@@ -2,7 +2,13 @@
 {{- $serviceName := include "aura-power.webhook.fullname" . -}}
 {{- $secretName := include "aura-power.webhook.secretName" . -}}
 {{- $caBundle := "" -}}
+{{- if and .Values.webhook.certManager.enabled .Values.webhook.existingSecret -}}
+{{- fail "webhook.existingSecret and webhook.certManager.enabled are mutually exclusive" -}}
+{{- end -}}
 {{- if not .Values.webhook.certManager.enabled -}}
+{{- if .Values.webhook.existingSecret -}}
+{{- $caBundle = required "webhook.caBundle is required with webhook.existingSecret" .Values.webhook.caBundle -}}
+{{- else -}}
 {{- $existing := lookup "v1" "Secret" .Release.Namespace $secretName -}}
 {{- $tlsCrt := "" -}}
 {{- $tlsKey := "" -}}
@@ -30,6 +36,7 @@ data:
   tls.crt: {{ $tlsCrt }}
   tls.key: {{ $tlsKey }}
 ---
+{{- end }}
 {{- else }}
 apiVersion: cert-manager.io/v1
 kind: Certificate

@@ -64,6 +64,13 @@ controller:
 kubectl get powertargets --all-namespaces -o yaml > backup-powertargets.yaml
 kubectl get powerpolicies --all-namespaces -o yaml > backup-powerpolicies.yaml
 kubectl get poweroverrides --all-namespaces -o yaml > backup-poweroverrides.yaml
+kubectl get powerschedules --all-namespaces -o yaml > backup-powerschedules.yaml
+kubectl get powernamespacegroups --all-namespaces -o yaml > backup-powernamespacegroups.yaml
+kubectl get powernotificationchannels --all-namespaces -o yaml > backup-powernotificationchannels.yaml
+kubectl get powerauditevents --all-namespaces -o yaml > backup-powerauditevents.yaml
+
+# Back up the SQLite authentication database from the server StatefulSet.
+kubectl exec -n aura-system aura-power-server-0 -- cat /data/aura-power.db > backup-aura-power.db
 ```
 
 ### 2. Update CRDs
@@ -102,7 +109,7 @@ helm upgrade aura-power ./charts/aura-power \
 kubectl get pods -n aura-system
 
 # Verify server readiness
-kubectl exec -n aura-system deploy/aura-power-server -- wget -qO- http://localhost:8080/readyz
+kubectl exec -n aura-system statefulset/aura-power-server -- wget -qO- http://localhost:8080/readyz
 
 # Verify controller logs
 kubectl logs -n aura-system -l app.kubernetes.io/component=controller --tail=20

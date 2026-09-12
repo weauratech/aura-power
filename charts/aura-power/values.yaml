@@ -2,9 +2,6 @@
 # Architecture: Server (API+Panel) + Controller (Reconciler/Worker)
 
 # -- Global settings
-global:
-  namespace: ""  # defaults to release namespace
-
 nameOverride: ""
 fullnameOverride: ""
 imagePullSecrets: []
@@ -124,6 +121,10 @@ webhook:
   port: 9443
   failurePolicy: Fail
   timeoutSeconds: 5
+  # For deterministic GitOps rendering, provide a TLS Secret containing
+  # tls.crt/tls.key and the matching base64-encoded CA certificate here.
+  existingSecret: ""
+  caBundle: ""
   certificate:
     # The chart creates and retains a release-scoped self-signed certificate
     # across upgrades. Set certManager.enabled for managed rotation.

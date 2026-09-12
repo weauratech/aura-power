@@ -91,7 +91,7 @@ Controller full name
 {{- end }}
 
 {{- define "aura-power.webhook.secretName" -}}
-{{- printf "%s-tls" (include "aura-power.webhook.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- default (printf "%s-tls" (include "aura-power.webhook.fullname" .) | trunc 63 | trimSuffix "-") .Values.webhook.existingSecret }}
 {{- end }}
 
 {{/*
