@@ -198,7 +198,7 @@ func TestQualityCronJobNilSuspendDefaultsToFalseAndActiveJobsAreReported(t *test
 	if snapshot.Suspended == nil || *snapshot.Suspended {
 		t.Fatalf("nil spec.suspend must be captured as Kubernetes default false: %v", snapshot.Suspended)
 	}
-	workloads, err := NewDiscoverer(c).DiscoverByNamespace(context.Background(), "fixtures")
+	workloads, err := NewDiscoverer(c).DiscoverAll(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

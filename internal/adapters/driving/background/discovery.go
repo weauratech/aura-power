@@ -144,8 +144,10 @@ func (d *DiscoveryLoop) ensurePowerTarget(ctx context.Context, wl ports.Discover
 	err := d.Client.Get(ctx, key, &existing)
 	if err == nil {
 		if existing.Spec.TargetRef.UID != wl.Ref.UID || existing.Spec.TargetRef.Kind != string(wl.Ref.Kind) {
-			// A recreated object must never inherit the previous object's snapshot.
-			existing.Status.Snapshot = nil
+			// A recreated object is a different Kubernetes identity. It must not
+			// inherit snapshots, completed actions, failures, savings, or decision
+			// state from the deleted object.
+			existing.Status = v1alpha1.PowerTargetStatus{}
 			if err := d.Client.Status().Update(ctx, &existing); err != nil {
 				return false, fmt.Errorf("failed to clear stale target status: %w", err)
 			}

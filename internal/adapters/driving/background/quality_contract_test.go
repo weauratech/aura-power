@@ -28,7 +28,12 @@ func TestQualityDiscoveryMigratesLegacyIdentityAndClearsSnapshotOnNewUID(t *test
 	legacy := &v1alpha1.PowerTarget{
 		ObjectMeta: metav1.ObjectMeta{Name: "fixtures--api", Namespace: "aura-system"},
 		Spec:       v1alpha1.PowerTargetSpec{TargetRef: v1alpha1.TargetReference{Namespace: "fixtures", Name: "api", Kind: "Deployment"}},
-		Status:     v1alpha1.PowerTargetStatus{Snapshot: &v1alpha1.SnapshotSpec{Available: true, ReplicaCount: &replicas}},
+		Status: v1alpha1.PowerTargetStatus{
+			Snapshot:            &v1alpha1.SnapshotSpec{Available: true, ReplicaCount: &replicas},
+			Action:              &v1alpha1.PowerActionStatus{DesiredState: "off", Phase: "Converged"},
+			ConsecutiveFailures: 3,
+			Savings:             &v1alpha1.SavingsSpec{CPUHoursSaved: 12},
+		},
 	}
 	c := fake.NewClientBuilder().WithScheme(discoveryScheme(t)).WithStatusSubresource(&v1alpha1.PowerTarget{}).WithObjects(legacy).Build()
 	loop := DiscoveryLoop{Client: c, Config: DiscoveryConfig{Namespace: "aura-system", ExemptAnnotation: "aura.sh/power-exempt", OptInAnnotation: "aura.sh/power-eligible"}}
@@ -50,7 +55,7 @@ func TestQualityDiscoveryMigratesLegacyIdentityAndClearsSnapshotOnNewUID(t *test
 	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "aura-system", Name: powerTargetName(ref)}, &migrated); err != nil {
 		t.Fatal(err)
 	}
-	if migrated.Status.Snapshot != nil || migrated.Spec.TargetRef.UID != "uid-two" {
+	if migrated.Status.Snapshot != nil || migrated.Status.Action != nil || migrated.Status.ConsecutiveFailures != 0 || migrated.Status.Savings != nil || migrated.Spec.TargetRef.UID != "uid-two" {
 		t.Fatalf("recreated workload inherited stale state: %+v", migrated)
 	}
 }

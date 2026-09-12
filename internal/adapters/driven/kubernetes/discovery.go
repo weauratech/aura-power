@@ -101,7 +101,7 @@ func (d *Discoverer) DiscoverAll(ctx context.Context, namespaces []string) ([]po
 		}
 		result = append(result, ports.DiscoveredWorkload{
 			Ref:       domain.WorkloadRef{APIVersion: "batch/v1", Namespace: cj.Namespace, Name: cj.Name, Kind: domain.WorkloadKindCronJob, UID: string(cj.UID)},
-			Suspended: ptrBoolVal(cj.Spec.Suspend), Annotations: cj.Annotations, Labels: cj.Labels,
+			Suspended: ptrBoolVal(cj.Spec.Suspend), ActiveJobs: int32(len(cj.Status.Active)), Annotations: cj.Annotations, Labels: cj.Labels,
 			NamespaceAnnotations: nsAnnotations[cj.Namespace], NamespaceLabels: nsLabels[cj.Namespace],
 			Resources: computeCronJobResources(cj),
 		})
