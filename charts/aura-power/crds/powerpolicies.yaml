@@ -78,6 +78,10 @@ spec:
                     type: array
                     items:
                       type: string
+                  namespaceGroups:
+                    type: array
+                    items:
+                      type: string
                   workloadNames:
                     type: array
                     items:

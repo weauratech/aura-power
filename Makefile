@@ -76,6 +76,7 @@ quality: lint-core-deps
 	go test ./... -race -count=1
 	helm lint ./charts/aura-power
 	./scripts/quality/helm-webhook-contract.sh
+	./scripts/quality/helm-release-contract.sh
 
 quality-acceptance:
 	@set +e; \

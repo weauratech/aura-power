@@ -98,12 +98,13 @@ jobs:
       - name: Create multi-arch manifests
         run: |
           TAG=${{ steps.version.outputs.tag }}
+          VERSION=${TAG#v}
           # Server
-          docker buildx imagetools create -t ${{ env.IMAGE_SERVER }}:${TAG} -t ${{ env.IMAGE_SERVER }}:latest \
+          docker buildx imagetools create -t ${{ env.IMAGE_SERVER }}:${TAG} -t ${{ env.IMAGE_SERVER }}:${VERSION} -t ${{ env.IMAGE_SERVER }}:latest \
             ${{ env.IMAGE_SERVER }}:${TAG}-amd64 \
             ${{ env.IMAGE_SERVER }}:${TAG}-arm64
           # Controller
-          docker buildx imagetools create -t ${{ env.IMAGE_CONTROLLER }}:${TAG} -t ${{ env.IMAGE_CONTROLLER }}:latest \
+          docker buildx imagetools create -t ${{ env.IMAGE_CONTROLLER }}:${TAG} -t ${{ env.IMAGE_CONTROLLER }}:${VERSION} -t ${{ env.IMAGE_CONTROLLER }}:latest \
             ${{ env.IMAGE_CONTROLLER }}:${TAG}-amd64 \
             ${{ env.IMAGE_CONTROLLER }}:${TAG}-arm64
 
@@ -124,6 +125,10 @@ jobs:
         run: |
           cosign sign --yes ${{ env.IMAGE_SERVER }}:${{ steps.version.outputs.tag }}
           cosign sign --yes ${{ env.IMAGE_CONTROLLER }}:${{ steps.version.outputs.tag }}
+          VERSION=${{ steps.version.outputs.tag }}
+          VERSION=${VERSION#v}
+          cosign sign --yes ${{ env.IMAGE_SERVER }}:${VERSION}
+          cosign sign --yes ${{ env.IMAGE_CONTROLLER }}:${VERSION}
 
   goreleaser:
     runs-on: ubuntu-latest
