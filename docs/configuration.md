@@ -75,6 +75,7 @@ Default blocked namespaces (configurable via `controller.config.systemNamespaceB
 - kube-system
 - kube-public
 - kube-node-lease
+- aura-system
 ```
 
 Default blocked workloads (unless opted-in):
@@ -88,7 +89,9 @@ Default blocked workloads (unless opted-in):
 | Component | Port | Purpose |
 |-----------|------|---------|
 | Server | 8080 | HTTP API + Panel + Metrics |
-| Controller | 8081 | Health probes only |
+| Controller | 8080 | Prometheus metrics |
+| Controller | 8081 | Health probes |
+| Controller | 9443 | Admission webhook when enabled |
 
 ## Storage
 

@@ -43,6 +43,10 @@ if helm template aura-power charts/aura-power --set server.replicas=2 >/dev/null
   echo "server.replicas=2 must be rejected while SQLite is pod-local" >&2
   exit 1
 fi
+if helm template aura-power charts/aura-power --set controller.replicas=2 --set controller.leaderElection.enabled=false >/dev/null 2>&1; then
+  echo "multiple controllers without leader election must be rejected" >&2
+  exit 1
+fi
 
 observability_render="$(helm template aura-power charts/aura-power --set networkPolicy.enabled=true --set serviceMonitor.enabled=true)"
 grep -q 'port: 9003' <<<"$observability_render"

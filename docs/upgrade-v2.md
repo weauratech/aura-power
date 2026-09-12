@@ -69,8 +69,13 @@ kubectl get powernamespacegroups --all-namespaces -o yaml > backup-powernamespac
 kubectl get powernotificationchannels --all-namespaces -o yaml > backup-powernotificationchannels.yaml
 kubectl get powerauditevents --all-namespaces -o yaml > backup-powerauditevents.yaml
 
-# Back up the SQLite authentication database from the server StatefulSet.
-kubectl exec -n aura-system aura-power-server-0 -- cat /data/aura-power.db > backup-aura-power.db
+# Quiesce the server and snapshot its PVC with your storage provider or CSI
+# VolumeSnapshot workflow. SQLite uses WAL mode, so copying only the live .db
+# file is not a consistent backup.
+kubectl scale -n aura-system statefulset/aura-power-server --replicas=0
+kubectl get pvc -n aura-system data-aura-power-server-0
+# Create and verify the storage snapshot here, then restore the server:
+kubectl scale -n aura-system statefulset/aura-power-server --replicas=1
 ```
 
 ### 2. Update CRDs
