@@ -214,7 +214,7 @@ type OverrideSpec struct {
 
 // IsExpired returns true if the override has passed its expiration time.
 func (o OverrideSpec) IsExpired(now time.Time) bool {
-	return now.After(o.ExpiresAt)
+	return !now.Before(o.ExpiresAt)
 }
 
 // RuleKind identifies whether a rule is a policy or override.

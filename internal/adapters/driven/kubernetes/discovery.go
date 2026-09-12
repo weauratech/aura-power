@@ -128,13 +128,17 @@ func computeCronJobResources(cj *batchv1.CronJob) domain.ResourceSummary {
 func computePodResources(containers []corev1.Container, replicas int32) domain.ResourceSummary {
 	var cpuMillis, memMiB int64
 	for _, c := range containers {
-		// Prefer requests, fallback to limits
-		if req := c.Resources.Requests; req != nil {
-			cpuMillis += req.Cpu().MilliValue()
-			memMiB += req.Memory().Value() / (1024 * 1024)
-		} else if lim := c.Resources.Limits; lim != nil {
-			cpuMillis += lim.Cpu().MilliValue()
-			memMiB += lim.Memory().Value() / (1024 * 1024)
+		// Prefer requests and fall back to limits independently for each
+		// resource. Kubernetes ResourceList may contain only one of them.
+		if cpu, ok := c.Resources.Requests[corev1.ResourceCPU]; ok {
+			cpuMillis += cpu.MilliValue()
+		} else if cpu, ok := c.Resources.Limits[corev1.ResourceCPU]; ok {
+			cpuMillis += cpu.MilliValue()
+		}
+		if memory, ok := c.Resources.Requests[corev1.ResourceMemory]; ok {
+			memMiB += memory.Value() / (1024 * 1024)
+		} else if memory, ok := c.Resources.Limits[corev1.ResourceMemory]; ok {
+			memMiB += memory.Value() / (1024 * 1024)
 		}
 	}
 	return domain.ResourceSummary{
