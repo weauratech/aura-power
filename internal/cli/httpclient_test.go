@@ -221,6 +221,22 @@ func TestHTTPStatusErrorPreservesStatusAndBody(t *testing.T) {
 	}
 }
 
+func TestRequireStatusDoesNotTruncateSuccessfulResponse(t *testing.T) {
+	want := strings.Repeat("x", maxErrorBodyBytes+1024)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Status:     "200 OK",
+		Body:       io.NopCloser(strings.NewReader(want)),
+	}
+	got, err := requireStatus(resp, http.StatusOK)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != want {
+		t.Fatalf("successful response length=%d want=%d", len(got), len(want))
+	}
+}
+
 func TestRequestTimeoutIsReported(t *testing.T) {
 	setupCLIUnitTest(t)
 	requestTimeout = 10 * time.Millisecond

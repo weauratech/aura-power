@@ -245,14 +245,23 @@ func refreshTokenFlow() error {
 }
 
 func requireStatus(resp *http.Response, expected ...int) ([]byte, error) {
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes+1))
+	accepted := false
+	for _, status := range expected {
+		if resp.StatusCode == status {
+			accepted = true
+			break
+		}
+	}
+	var reader io.Reader = resp.Body
+	if !accepted {
+		reader = io.LimitReader(resp.Body, maxErrorBodyBytes+1)
+	}
+	body, err := io.ReadAll(reader)
 	if err != nil {
 		return nil, fmt.Errorf("read response body: %w", err)
 	}
-	for _, status := range expected {
-		if resp.StatusCode == status {
-			return body, nil
-		}
+	if accepted {
+		return body, nil
 	}
 	message := strings.TrimSpace(string(body))
 	if len(message) > maxErrorBodyBytes {
