@@ -12,6 +12,14 @@ type PowerTargetSpec struct {
 
 // TargetReference uniquely identifies a workload in the cluster.
 type TargetReference struct {
+	// Cluster identifies the source cluster when targets are aggregated.
+	// +optional
+	Cluster string `json:"cluster,omitempty"`
+
+	// APIVersion identifies the Kubernetes API group and version.
+	// +optional
+	APIVersion string `json:"apiVersion,omitempty"`
+
 	// Namespace of the workload.
 	Namespace string `json:"namespace"`
 
@@ -21,6 +29,10 @@ type TargetReference struct {
 	// Kind of the workload (Deployment, StatefulSet, CronJob).
 	// +kubebuilder:validation:Enum=Deployment;StatefulSet;CronJob
 	Kind string `json:"kind"`
+
+	// UID binds the target to one concrete Kubernetes object incarnation.
+	// +optional
+	UID string `json:"uid,omitempty"`
 }
 
 // PowerTargetStatus defines the observed and computed state.
@@ -91,7 +103,7 @@ type ObservedStateSpec struct {
 
 // RuleReference identifies a rule that participated in a decision.
 type RuleReference struct {
-	Kind        string `json:"kind"`                  // PowerPolicy or PowerOverride
+	Kind        string `json:"kind"` // PowerPolicy or PowerOverride
 	Name        string `json:"name"`
 	Namespace   string `json:"namespace"`
 	Priority    int32  `json:"priority"`
@@ -122,15 +134,15 @@ type ResourceSpec struct {
 
 // OwnershipSpec describes external ownership of the workload.
 type OwnershipSpec struct {
-	Type    string `json:"type"`    // ArgoCD, Flux, Helm, HPA
+	Type    string `json:"type"` // ArgoCD, Flux, Helm, HPA
 	OptedIn bool   `json:"optedIn"`
 }
 
 // SavingsSpec holds accumulated savings metrics.
 type SavingsSpec struct {
-	CPUHoursSaved    float64 `json:"cpuHoursSaved,omitempty"`
-	MemoryGiBHours   float64 `json:"memoryGiBHoursSaved,omitempty"`
-	EstimatedCost    float64 `json:"estimatedCost,omitempty"`
+	CPUHoursSaved  float64 `json:"cpuHoursSaved,omitempty"`
+	MemoryGiBHours float64 `json:"memoryGiBHoursSaved,omitempty"`
+	EstimatedCost  float64 `json:"estimatedCost,omitempty"`
 }
 
 // +kubebuilder:object:root=true

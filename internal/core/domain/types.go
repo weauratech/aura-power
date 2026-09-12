@@ -110,9 +110,12 @@ const (
 
 // WorkloadRef uniquely identifies a workload in a cluster.
 type WorkloadRef struct {
-	Namespace string
-	Name      string
-	Kind      WorkloadKind
+	Cluster    string
+	APIVersion string
+	Namespace  string
+	Name       string
+	Kind       WorkloadKind
+	UID        string
 }
 
 // ResourceSummary captures CPU and memory resource requests.
@@ -233,11 +236,11 @@ type BlockType string
 
 const (
 	BlockSystemNamespace  BlockType = "SystemNamespace"
-	BlockArgoCDManaged   BlockType = "ArgoCDManaged"
-	BlockFluxManaged     BlockType = "FluxManaged"
-	BlockHelmManaged     BlockType = "HelmManaged"
-	BlockHPAControlled   BlockType = "HPAControlled"
-	BlockSnapshotMissing BlockType = "SnapshotMissing"
+	BlockArgoCDManaged    BlockType = "ArgoCDManaged"
+	BlockFluxManaged      BlockType = "FluxManaged"
+	BlockHelmManaged      BlockType = "HelmManaged"
+	BlockHPAControlled    BlockType = "HPAControlled"
+	BlockSnapshotMissing  BlockType = "SnapshotMissing"
 	BlockInsufficientInfo BlockType = "InsufficientInfo"
 )
 

@@ -201,11 +201,11 @@ func (s *Server) handleDashboard(c *gin.Context) {
 			"activePolicies":  len(policies.Items),
 			"activeOverrides": activeOvr,
 		},
-		"efficiency":      efficiency,
+		"efficiency": efficiency,
 		"savings": gin.H{
-			"cpuHours":      totalCPUSaved,
+			"cpuHours":       totalCPUSaved,
 			"memoryGiBHours": totalMemSaved,
-			"estimatedCost": totalCostSaved,
+			"estimatedCost":  totalCostSaved,
 		},
 		"recentEvents":    recentEvents,
 		"nextTransitions": nextTransitions,
@@ -270,19 +270,39 @@ func (s *Server) handleExplainTarget(c *gin.Context) {
 	ctx := c.Request.Context()
 	ns := c.Param("namespace")
 	name := c.Param("name")
+	kind := c.Query("kind")
+	uid := c.Query("uid")
 
 	// Find target by labels
 	var targets v1alpha1.PowerTargetList
-	if err := s.client.List(ctx, &targets, client.MatchingLabels{
+	labels := map[string]string{
 		"power.aura.sh/target-namespace": ns,
 		"power.aura.sh/target-name":      name,
-	}); err != nil {
+	}
+	if err := s.client.List(ctx, &targets, client.MatchingLabels(labels)); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
+	}
+	if kind != "" || uid != "" {
+		filtered := targets.Items[:0]
+		for _, target := range targets.Items {
+			if kind != "" && target.Spec.TargetRef.Kind != kind {
+				continue
+			}
+			if uid != "" && target.Spec.TargetRef.UID != uid {
+				continue
+			}
+			filtered = append(filtered, target)
+		}
+		targets.Items = filtered
 	}
 
 	if len(targets.Items) == 0 {
 		c.JSON(http.StatusNotFound, gin.H{"error": "target not found"})
+		return
+	}
+	if len(targets.Items) > 1 {
+		c.JSON(http.StatusConflict, gin.H{"error": "target reference is ambiguous; specify kind and optionally uid", "count": len(targets.Items)})
 		return
 	}
 
@@ -569,11 +589,20 @@ func (s *Server) handleAuditList(c *gin.Context) {
 
 	targetNs := c.Query("targetNamespace")
 	targetName := c.Query("targetName")
+	targetKind := c.Query("targetKind")
+	targetUID := c.Query("targetUID")
 	if targetNs != "" && targetName != "" {
-		listOpts = append(listOpts, client.MatchingLabels{
+		labels := map[string]string{
 			"power.aura.sh/target-namespace": targetNs,
 			"power.aura.sh/target-name":      targetName,
-		})
+		}
+		if targetKind != "" {
+			labels["power.aura.sh/target-kind"] = targetKind
+		}
+		if targetUID != "" {
+			labels["power.aura.sh/target-uid"] = targetUID
+		}
+		listOpts = append(listOpts, client.MatchingLabels(labels))
 	}
 
 	if err := s.client.List(ctx, &events, listOpts...); err != nil {
@@ -803,7 +832,6 @@ func (s *Server) handleDeleteNamespaceGroup(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"deleted": name})
 }
 
-
 func (s *Server) handleListNotificationChannels(c *gin.Context) {
 	ctx := c.Request.Context()
 
@@ -853,7 +881,6 @@ func (s *Server) handleDeleteNotificationChannel(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"deleted": name})
 }
-
 
 func (s *Server) handleUpdateNotificationChannel(c *gin.Context) {
 	ctx := c.Request.Context()

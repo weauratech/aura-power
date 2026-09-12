@@ -7,8 +7,8 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/weauratech/aura-power/api/v1alpha1"
 )
@@ -28,6 +28,7 @@ type TargetRef struct {
 	Namespace string
 	Name      string
 	Kind      string
+	UID       string
 }
 
 // Dispatcher sends notifications to configured channels.
@@ -123,7 +124,7 @@ func (d *Dispatcher) dispatchBatch(ctx context.Context, batch []Event) {
 	var filtered []Event
 	seen := map[string]bool{}
 	for _, ev := range batch {
-		key := ev.Action + "/" + ev.Target.Namespace + "/" + ev.Target.Name
+		key := eventIdentity(ev)
 		if seen[key] {
 			continue
 		}
@@ -207,7 +208,7 @@ func (d *Dispatcher) dispatchBatch(ctx context.Context, batch []Event) {
 
 		// Build reason with all targets
 		if len(channelEvents) > 1 {
-			names := ""
+			names := fmt.Sprintf("%d workload(s): ", len(channelEvents))
 			for i, ev := range channelEvents {
 				if i > 4 {
 					names += fmt.Sprintf(" (+%d more)", len(channelEvents)-5)
@@ -216,7 +217,7 @@ func (d *Dispatcher) dispatchBatch(ctx context.Context, batch []Event) {
 				if i > 0 {
 					names += ", "
 				}
-				names += ev.Target.Namespace + "/" + ev.Target.Name
+				names += fmt.Sprintf("%s/%s (%s)", ev.Target.Namespace, ev.Target.Name, ev.Target.Kind)
 			}
 			batchEvent.Reason = names
 		} else {
@@ -274,7 +275,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, event Event) {
 				throttleDur = parsed
 			}
 		}
-		key := ch.Name + "/" + event.Target.Namespace + "/" + event.Target.Name
+		key := ch.Name + "/" + eventIdentity(event)
 		d.mu.Lock()
 		lastSent, exists := d.throttle[key]
 		if exists && time.Since(lastSent) < throttleDur {
@@ -320,6 +321,10 @@ func (d *Dispatcher) dispatch(ctx context.Context, event Event) {
 			log.Error(err, "failed to update channel status", "channel", ch.Name)
 		}
 	}
+}
+
+func eventIdentity(event Event) string {
+	return event.Action + "/" + event.Target.Namespace + "/" + event.Target.Kind + "/" + event.Target.Name + "/" + event.Target.UID
 }
 
 func contains(slice []string, item string) bool {

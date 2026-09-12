@@ -69,7 +69,7 @@ func (d *Discoverer) DiscoverByNamespace(ctx context.Context, namespace string) 
 	}
 	for _, dep := range deployments.Items {
 		result = append(result, ports.DiscoveredWorkload{
-			Ref:             domain.WorkloadRef{Namespace: namespace, Name: dep.Name, Kind: domain.WorkloadKindDeployment},
+			Ref:             domain.WorkloadRef{APIVersion: "apps/v1", Namespace: namespace, Name: dep.Name, Kind: domain.WorkloadKindDeployment, UID: string(dep.UID)},
 			Replicas:        ptrInt32Val(dep.Spec.Replicas),
 			Annotations:     dep.Annotations,
 			Labels:          dep.Labels,
@@ -85,7 +85,7 @@ func (d *Discoverer) DiscoverByNamespace(ctx context.Context, namespace string) 
 	}
 	for _, ss := range statefulSets.Items {
 		result = append(result, ports.DiscoveredWorkload{
-			Ref:         domain.WorkloadRef{Namespace: namespace, Name: ss.Name, Kind: domain.WorkloadKindStatefulSet},
+			Ref:         domain.WorkloadRef{APIVersion: "apps/v1", Namespace: namespace, Name: ss.Name, Kind: domain.WorkloadKindStatefulSet, UID: string(ss.UID)},
 			Replicas:    ptrInt32Val(ss.Spec.Replicas),
 			Annotations: ss.Annotations,
 			Labels:      ss.Labels,
@@ -100,7 +100,7 @@ func (d *Discoverer) DiscoverByNamespace(ctx context.Context, namespace string) 
 	}
 	for _, cj := range cronJobs.Items {
 		result = append(result, ports.DiscoveredWorkload{
-			Ref:         domain.WorkloadRef{Namespace: namespace, Name: cj.Name, Kind: domain.WorkloadKindCronJob},
+			Ref:         domain.WorkloadRef{APIVersion: "batch/v1", Namespace: namespace, Name: cj.Name, Kind: domain.WorkloadKindCronJob, UID: string(cj.UID)},
 			Suspended:   ptrBoolVal(cj.Spec.Suspend),
 			Annotations: cj.Annotations,
 			Labels:      cj.Labels,

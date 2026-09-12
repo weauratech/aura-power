@@ -33,11 +33,17 @@ spec:
                 type: string
               target:
                 properties:
+                  apiVersion:
+                    type: string
+                  cluster:
+                    type: string
                   kind:
                     type: string
                   name:
                     type: string
                   namespace:
+                    type: string
+                  uid:
                     type: string
                 type: object
               timestamp:

@@ -80,6 +80,19 @@ func TestQualityExecutorRoundTripDeploymentAndStatefulSet(t *testing.T) {
 	}
 }
 
+func TestQualityExecutorRefusesRecreatedWorkloadUID(t *testing.T) {
+	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "fixtures", UID: "actual"}, Spec: appsv1.DeploymentSpec{Replicas: int32Ptr(2)}}
+	c := fake.NewClientBuilder().WithScheme(qualityScheme(t)).WithObjects(dep).Build()
+	executor := NewExecutor(c)
+	ref := domain.WorkloadRef{Namespace: "fixtures", Name: "api", Kind: domain.WorkloadKindDeployment, UID: "stale"}
+	if _, err := executor.CaptureSnapshot(context.Background(), ref); err == nil {
+		t.Fatal("expected snapshot capture to reject a recreated workload UID")
+	}
+	if err := executor.PowerDown(context.Background(), ref); err == nil {
+		t.Fatal("expected mutation to reject a recreated workload UID")
+	}
+}
+
 func TestQualityDiscovererKeepsKindAndNamespaceMetadata(t *testing.T) {
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "fixtures", Labels: map[string]string{"environment": "test"}, Annotations: map[string]string{"owner": "quality"}}}
 	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "same", Namespace: "fixtures", Labels: map[string]string{"app": "api"}}, Spec: appsv1.DeploymentSpec{Replicas: int32Ptr(2), Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app", Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m"), corev1.ResourceMemory: resource.MustParse("64Mi")}}}}}}}}

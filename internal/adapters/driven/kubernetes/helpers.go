@@ -6,8 +6,11 @@ import v1alpha1 "github.com/weauratech/aura-power/api/v1alpha1"
 
 func fromTargetRef(ref v1alpha1.TargetReference) domain.WorkloadRef {
 	return domain.WorkloadRef{
-		Namespace: ref.Namespace,
-		Name:      ref.Name,
-		Kind:      domain.WorkloadKind(ref.Kind),
+		Cluster:    ref.Cluster,
+		APIVersion: ref.APIVersion,
+		Namespace:  ref.Namespace,
+		Name:       ref.Name,
+		Kind:       domain.WorkloadKind(ref.Kind),
+		UID:        ref.UID,
 	}
 }

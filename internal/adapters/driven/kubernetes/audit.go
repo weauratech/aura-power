@@ -16,10 +16,10 @@ import (
 )
 
 type AuditRecorder struct {
-	client       client.Client
-	recorder     record.EventRecorder
-	namespace    string
-	notifier     *notifications.Dispatcher
+	client    client.Client
+	recorder  record.EventRecorder
+	namespace string
+	notifier  *notifications.Dispatcher
 }
 
 func NewAuditRecorder(c client.Client, recorder record.EventRecorder, namespace string) *AuditRecorder {
@@ -41,6 +41,8 @@ func (a *AuditRecorder) Record(ctx context.Context, event ports.AuditEvent) erro
 				"power.aura.sh/action":           string(event.Action),
 				"power.aura.sh/target-namespace": event.Target.Namespace,
 				"power.aura.sh/target-name":      event.Target.Name,
+				"power.aura.sh/target-kind":      string(event.Target.Kind),
+				"power.aura.sh/target-uid":       event.Target.UID,
 			},
 		},
 		Spec: v1alpha1.PowerAuditEventSpec{
@@ -48,9 +50,12 @@ func (a *AuditRecorder) Record(ctx context.Context, event ports.AuditEvent) erro
 			Action:    string(event.Action),
 			Actor:     event.Actor,
 			Target: v1alpha1.TargetReference{
-				Namespace: event.Target.Namespace,
-				Name:      event.Target.Name,
-				Kind:      string(event.Target.Kind),
+				Cluster:    event.Target.Cluster,
+				APIVersion: event.Target.APIVersion,
+				Namespace:  event.Target.Namespace,
+				Name:       event.Target.Name,
+				Kind:       string(event.Target.Kind),
+				UID:        event.Target.UID,
 			},
 			Result:   event.Result,
 			Reason:   event.Reason,
@@ -66,7 +71,7 @@ func (a *AuditRecorder) Record(ctx context.Context, event ports.AuditEvent) erro
 	if a.notifier != nil && isNotifiableAction(string(event.Action)) {
 		a.notifier.Enqueue(notifications.Event{
 			Action:    string(event.Action),
-			Target:    notifications.TargetRef{Namespace: event.Target.Namespace, Name: event.Target.Name, Kind: string(event.Target.Kind)},
+			Target:    notifications.TargetRef{Namespace: event.Target.Namespace, Name: event.Target.Name, Kind: string(event.Target.Kind), UID: event.Target.UID},
 			Result:    event.Result,
 			Reason:    event.Reason,
 			RuleName:  event.RuleName,
@@ -93,10 +98,17 @@ func (a *AuditRecorder) List(ctx context.Context, opts ports.AuditListOptions) (
 	listOpts := []client.ListOption{client.InNamespace(a.namespace)}
 
 	if opts.Target != nil {
-		listOpts = append(listOpts, client.MatchingLabels{
+		labels := map[string]string{
 			"power.aura.sh/target-namespace": opts.Target.Namespace,
 			"power.aura.sh/target-name":      opts.Target.Name,
-		})
+		}
+		if opts.Target.Kind != "" {
+			labels["power.aura.sh/target-kind"] = string(opts.Target.Kind)
+		}
+		if opts.Target.UID != "" {
+			labels["power.aura.sh/target-uid"] = opts.Target.UID
+		}
+		listOpts = append(listOpts, client.MatchingLabels(labels))
 	}
 	if opts.Action != nil {
 		listOpts = append(listOpts, client.MatchingLabels{

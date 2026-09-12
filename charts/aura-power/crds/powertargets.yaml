@@ -23,6 +23,10 @@ spec:
             properties:
               targetRef:
                 properties:
+                  apiVersion:
+                    type: string
+                  cluster:
+                    type: string
                   kind:
                     enum:
                     - Deployment
@@ -32,6 +36,8 @@ spec:
                   name:
                     type: string
                   namespace:
+                    type: string
+                  uid:
                     type: string
                 type: object
             type: object

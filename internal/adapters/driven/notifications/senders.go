@@ -89,6 +89,7 @@ func (s *GenericSender) Send(ctx context.Context, url string, event Event) error
 			"namespace": event.Target.Namespace,
 			"name":      event.Target.Name,
 			"kind":      event.Target.Kind,
+			"uid":       event.Target.UID,
 		},
 		"action": map[string]string{
 			"type":     event.Action,

@@ -2,11 +2,13 @@ package background
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"strconv"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -130,17 +132,58 @@ func (d *DiscoveryLoop) ensurePowerTarget(ctx context.Context, wl ports.Discover
 		}
 	}
 
-	targetName := fmt.Sprintf("%s--%s", wl.Ref.Namespace, wl.Ref.Name)
+	targetName := powerTargetName(wl.Ref)
 	key := types.NamespacedName{Namespace: d.Config.Namespace, Name: targetName}
 
 	// Check if PowerTarget already exists
 	var existing v1alpha1.PowerTarget
 	err := d.Client.Get(ctx, key, &existing)
 	if err == nil {
+		if existing.Spec.TargetRef.UID != wl.Ref.UID || existing.Spec.TargetRef.Kind != string(wl.Ref.Kind) {
+			// A recreated object must never inherit the previous object's snapshot.
+			existing.Status.Snapshot = nil
+			if err := d.Client.Status().Update(ctx, &existing); err != nil {
+				return false, fmt.Errorf("failed to clear stale target status: %w", err)
+			}
+			existing.Spec.TargetRef = targetReference(wl.Ref)
+			if existing.Labels == nil {
+				existing.Labels = map[string]string{}
+			}
+			existing.Labels["power.aura.sh/target-kind"] = string(wl.Ref.Kind)
+			existing.Labels["power.aura.sh/target-uid"] = wl.Ref.UID
+			if err := d.Client.Update(ctx, &existing); err != nil {
+				return false, fmt.Errorf("failed to bind recreated target UID: %w", err)
+			}
+		}
 		// Exists — update observed state
 		return false, d.updateObservedState(ctx, &existing, wl)
 	}
+	if !apierrors.IsNotFound(err) {
+		return false, fmt.Errorf("failed to read PowerTarget: %w", err)
+	}
 
+	// Migrate the v2.1 target name without dropping a persisted snapshot.
+	legacyKey := types.NamespacedName{Namespace: d.Config.Namespace, Name: fmt.Sprintf("%s--%s", wl.Ref.Namespace, wl.Ref.Name)}
+	var legacy v1alpha1.PowerTarget
+	legacyErr := d.Client.Get(ctx, legacyKey, &legacy)
+	if legacyErr == nil && legacy.Spec.TargetRef.Kind == string(wl.Ref.Kind) {
+		created, createErr := d.newPowerTarget(ctx, targetName, wl, &legacy.Status)
+		if createErr != nil {
+			return false, createErr
+		}
+		if err := d.Client.Delete(ctx, &legacy); err != nil {
+			return created, fmt.Errorf("migrated target but failed to remove legacy identity: %w", err)
+		}
+		return created, nil
+	}
+	if legacyErr != nil && !apierrors.IsNotFound(legacyErr) {
+		return false, fmt.Errorf("failed to read legacy PowerTarget: %w", legacyErr)
+	}
+
+	return d.newPowerTarget(ctx, targetName, wl, nil)
+}
+
+func (d *DiscoveryLoop) newPowerTarget(ctx context.Context, targetName string, wl ports.DiscoveredWorkload, previous *v1alpha1.PowerTargetStatus) (bool, error) {
 	// Detect ownership
 	ownership := domain.DetectOwnership(wl.Annotations, wl.Labels, d.Config.OptInAnnotation, wl.NamespaceAnnotations)
 	var ownershipSpecs []v1alpha1.OwnershipSpec
@@ -168,14 +211,11 @@ func (d *DiscoveryLoop) ensurePowerTarget(ctx context.Context, wl ports.Discover
 				"power.aura.sh/target-namespace": wl.Ref.Namespace,
 				"power.aura.sh/target-name":      wl.Ref.Name,
 				"power.aura.sh/target-kind":      string(wl.Ref.Kind),
+				"power.aura.sh/target-uid":       wl.Ref.UID,
 			},
 		},
 		Spec: v1alpha1.PowerTargetSpec{
-			TargetRef: v1alpha1.TargetReference{
-				Namespace: wl.Ref.Namespace,
-				Name:      wl.Ref.Name,
-				Kind:      string(wl.Ref.Kind),
-			},
+			TargetRef: targetReference(wl.Ref),
 		},
 	}
 
@@ -184,19 +224,30 @@ func (d *DiscoveryLoop) ensurePowerTarget(ctx context.Context, wl ports.Discover
 	}
 
 	// Update status (separate call since status is a subresource)
-	target.Status = v1alpha1.PowerTargetStatus{
-		ObservedState: v1alpha1.ObservedStateSpec{
-			Replicas:   wl.Replicas,
-			Suspended:  wl.Suspended,
-			PowerState: powerState,
-		},
-		Ownership: ownershipSpecs,
+	if previous != nil {
+		previous.DeepCopyInto(&target.Status)
 	}
+	target.Status.ObservedState = v1alpha1.ObservedStateSpec{
+		Replicas:   wl.Replicas,
+		Suspended:  wl.Suspended,
+		PowerState: powerState,
+	}
+	target.Status.Ownership = ownershipSpecs
 	if err := d.Client.Status().Update(ctx, target); err != nil {
 		return true, fmt.Errorf("created target but failed to update status: %w", err)
 	}
 
 	return true, nil
+}
+
+func powerTargetName(ref domain.WorkloadRef) string {
+	identity := fmt.Sprintf("%s\x00%s\x00%s", ref.Namespace, ref.Kind, ref.Name)
+	sum := sha256.Sum256([]byte(identity))
+	return fmt.Sprintf("target-%x", sum[:16])
+}
+
+func targetReference(ref domain.WorkloadRef) v1alpha1.TargetReference {
+	return v1alpha1.TargetReference{Cluster: ref.Cluster, APIVersion: ref.APIVersion, Namespace: ref.Namespace, Name: ref.Name, Kind: string(ref.Kind), UID: ref.UID}
 }
 
 func (d *DiscoveryLoop) updateObservedState(ctx context.Context, target *v1alpha1.PowerTarget, wl ports.DiscoveredWorkload) error {
@@ -242,7 +293,7 @@ func (d *DiscoveryLoop) cleanupOrphans(ctx context.Context, currentWorkloads []p
 		if skip || wl.Annotations[d.Config.ExemptAnnotation] == "true" {
 			continue
 		}
-		expected[fmt.Sprintf("%s--%s", wl.Ref.Namespace, wl.Ref.Name)] = true
+		expected[powerTargetName(wl.Ref)] = true
 	}
 
 	// List all PowerTargets
@@ -263,7 +314,6 @@ func (d *DiscoveryLoop) cleanupOrphans(ctx context.Context, currentWorkloads []p
 
 	return deleted
 }
-
 
 // processNamespaceAnnotations reads aura.sh/default-schedule annotations from namespaces
 // and creates implicit low-priority policies for them.

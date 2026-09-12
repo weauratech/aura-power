@@ -217,9 +217,12 @@ func ruleNameFromDecision(d domain.Decision) string {
 
 func toDomainTarget(t *v1alpha1.PowerTarget) domain.Target {
 	ref := domain.WorkloadRef{
-		Namespace: t.Spec.TargetRef.Namespace,
-		Name:      t.Spec.TargetRef.Name,
-		Kind:      domain.WorkloadKind(t.Spec.TargetRef.Kind),
+		Cluster:    t.Spec.TargetRef.Cluster,
+		APIVersion: t.Spec.TargetRef.APIVersion,
+		Namespace:  t.Spec.TargetRef.Namespace,
+		Name:       t.Spec.TargetRef.Name,
+		Kind:       domain.WorkloadKind(t.Spec.TargetRef.Kind),
+		UID:        t.Spec.TargetRef.UID,
 	}
 
 	observed := domain.ObservedState{

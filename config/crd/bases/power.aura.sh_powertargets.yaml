@@ -27,9 +27,12 @@ spec:
                 targetRef:
                   type: object
                   properties:
+                    cluster: { type: string }
+                    apiVersion: { type: string }
                     namespace: { type: string }
                     name: { type: string }
                     kind: { type: string, enum: [Deployment, StatefulSet, CronJob] }
+                    uid: { type: string }
             status:
               type: object
               x-kubernetes-preserve-unknown-fields: true

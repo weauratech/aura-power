@@ -64,6 +64,9 @@ func (e *Executor) captureDeployment(ctx context.Context, ref domain.WorkloadRef
 	if err := e.client.Get(ctx, types.NamespacedName{Namespace: ref.Namespace, Name: ref.Name}, &dep); err != nil {
 		return nil, err
 	}
+	if err := verifyUID(ref, string(dep.UID)); err != nil {
+		return nil, err
+	}
 	replicas := ptrInt32Val(dep.Spec.Replicas)
 	return &domain.Snapshot{
 		ReplicaCount: &replicas,
@@ -74,6 +77,9 @@ func (e *Executor) captureDeployment(ctx context.Context, ref domain.WorkloadRef
 func (e *Executor) powerDownDeployment(ctx context.Context, ref domain.WorkloadRef) error {
 	var dep appsv1.Deployment
 	if err := e.client.Get(ctx, types.NamespacedName{Namespace: ref.Namespace, Name: ref.Name}, &dep); err != nil {
+		return err
+	}
+	if err := verifyUID(ref, string(dep.UID)); err != nil {
 		return err
 	}
 	zero := int32(0)
@@ -89,6 +95,9 @@ func (e *Executor) captureStatefulSet(ctx context.Context, ref domain.WorkloadRe
 	if err := e.client.Get(ctx, types.NamespacedName{Namespace: ref.Namespace, Name: ref.Name}, &ss); err != nil {
 		return nil, err
 	}
+	if err := verifyUID(ref, string(ss.UID)); err != nil {
+		return nil, err
+	}
 	replicas := ptrInt32Val(ss.Spec.Replicas)
 	return &domain.Snapshot{
 		ReplicaCount: &replicas,
@@ -99,6 +108,9 @@ func (e *Executor) captureStatefulSet(ctx context.Context, ref domain.WorkloadRe
 func (e *Executor) powerDownStatefulSet(ctx context.Context, ref domain.WorkloadRef) error {
 	var ss appsv1.StatefulSet
 	if err := e.client.Get(ctx, types.NamespacedName{Namespace: ref.Namespace, Name: ref.Name}, &ss); err != nil {
+		return err
+	}
+	if err := verifyUID(ref, string(ss.UID)); err != nil {
 		return err
 	}
 	zero := int32(0)
@@ -114,6 +126,9 @@ func (e *Executor) captureCronJob(ctx context.Context, ref domain.WorkloadRef) (
 	if err := e.client.Get(ctx, types.NamespacedName{Namespace: ref.Namespace, Name: ref.Name}, &cj); err != nil {
 		return nil, err
 	}
+	if err := verifyUID(ref, string(cj.UID)); err != nil {
+		return nil, err
+	}
 
 	suspended := ptrBoolVal(cj.Spec.Suspend)
 	return &domain.Snapshot{
@@ -125,6 +140,9 @@ func (e *Executor) captureCronJob(ctx context.Context, ref domain.WorkloadRef) (
 func (e *Executor) powerDownCronJob(ctx context.Context, ref domain.WorkloadRef) error {
 	var cj batchv1.CronJob
 	if err := e.client.Get(ctx, types.NamespacedName{Namespace: ref.Namespace, Name: ref.Name}, &cj); err != nil {
+		return err
+	}
+	if err := verifyUID(ref, string(cj.UID)); err != nil {
 		return err
 	}
 	trueBool := true
@@ -144,6 +162,9 @@ func (e *Executor) restoreDeployment(ctx context.Context, ref domain.WorkloadRef
 	if err := e.client.Get(ctx, types.NamespacedName{Namespace: ref.Namespace, Name: ref.Name}, &dep); err != nil {
 		return err
 	}
+	if err := verifyUID(ref, string(dep.UID)); err != nil {
+		return err
+	}
 
 	dep.Spec.Replicas = snapshot.ReplicaCount
 	return e.client.Update(ctx, &dep)
@@ -158,6 +179,9 @@ func (e *Executor) restoreStatefulSet(ctx context.Context, ref domain.WorkloadRe
 	if err := e.client.Get(ctx, types.NamespacedName{Namespace: ref.Namespace, Name: ref.Name}, &ss); err != nil {
 		return err
 	}
+	if err := verifyUID(ref, string(ss.UID)); err != nil {
+		return err
+	}
 
 	ss.Spec.Replicas = snapshot.ReplicaCount
 	return e.client.Update(ctx, &ss)
@@ -168,8 +192,18 @@ func (e *Executor) restoreCronJob(ctx context.Context, ref domain.WorkloadRef, s
 	if err := e.client.Get(ctx, types.NamespacedName{Namespace: ref.Namespace, Name: ref.Name}, &cj); err != nil {
 		return err
 	}
+	if err := verifyUID(ref, string(cj.UID)); err != nil {
+		return err
+	}
 
 	falseBool := false
 	cj.Spec.Suspend = &falseBool
 	return e.client.Update(ctx, &cj)
+}
+
+func verifyUID(ref domain.WorkloadRef, actual string) error {
+	if ref.UID != "" && ref.UID != actual {
+		return fmt.Errorf("workload UID changed for %s %s/%s: expected %s, got %s", ref.Kind, ref.Namespace, ref.Name, ref.UID, actual)
+	}
+	return nil
 }
