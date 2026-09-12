@@ -18,13 +18,20 @@ import (
 
 type AuditRecorder struct {
 	client    client.Client
+	reader    client.Reader
 	recorder  record.EventRecorder
 	namespace string
 	notifier  *notifications.Dispatcher
 }
 
 func NewAuditRecorder(c client.Client, recorder record.EventRecorder, namespace string) *AuditRecorder {
-	return &AuditRecorder{client: c, recorder: recorder, namespace: namespace}
+	return NewAuditRecorderWithReader(c, c, recorder, namespace)
+}
+
+// NewAuditRecorderWithReader keeps writes on the manager client while allowing
+// history reads to bypass its informer cache.
+func NewAuditRecorderWithReader(c client.Client, reader client.Reader, recorder record.EventRecorder, namespace string) *AuditRecorder {
+	return &AuditRecorder{client: c, reader: reader, recorder: recorder, namespace: namespace}
 }
 
 // SetNotifier attaches a notification dispatcher to the audit recorder.
@@ -95,7 +102,6 @@ func isNotifiableAction(action string) bool {
 }
 
 func (a *AuditRecorder) List(ctx context.Context, opts ports.AuditListOptions) ([]ports.AuditEvent, error) {
-	var list v1alpha1.PowerAuditEventList
 	listOpts := []client.ListOption{client.InNamespace(a.namespace)}
 
 	if opts.Target != nil {
@@ -117,34 +123,50 @@ func (a *AuditRecorder) List(ctx context.Context, opts ports.AuditListOptions) (
 		})
 	}
 
-	if err := a.client.List(ctx, &list, listOpts...); err != nil {
-		return nil, err
+	limit := opts.Limit
+	if limit <= 0 || limit > 1000 {
+		limit = 1000
 	}
-
-	var events []ports.AuditEvent
-	for _, item := range list.Items {
-		if opts.Since != nil && item.Spec.Timestamp.Time.Before(*opts.Since) {
-			continue
+	events := make([]ports.AuditEvent, 0, min(limit, 200))
+	continueToken := ""
+	for len(events) < limit {
+		var list v1alpha1.PowerAuditEventList
+		pageOpts := append([]client.ListOption{}, listOpts...)
+		pageOpts = append(pageOpts, &client.ListOptions{Raw: &metav1.ListOptions{Limit: 200, Continue: continueToken}})
+		if err := a.reader.List(ctx, &list, pageOpts...); err != nil {
+			return nil, err
 		}
-		events = append(events, ports.AuditEvent{
-			Timestamp: item.Spec.Timestamp.Time,
-			Action:    ports.AuditAction(item.Spec.Action),
-			Actor:     item.Spec.Actor,
-			Target: domain.WorkloadRef{
-				Cluster: item.Spec.Target.Cluster, APIVersion: item.Spec.Target.APIVersion,
-				Namespace: item.Spec.Target.Namespace, Name: item.Spec.Target.Name,
-				Kind: domain.WorkloadKind(item.Spec.Target.Kind), UID: item.Spec.Target.UID,
-			},
-			Result:   item.Spec.Result,
-			Reason:   item.Spec.Reason,
-			RuleName: item.Spec.RuleName,
-		})
-		if opts.Limit > 0 && len(events) >= opts.Limit {
+		for i := range list.Items {
+			item := &list.Items[i]
+			if opts.Since != nil && item.Spec.Timestamp.Time.Before(*opts.Since) {
+				continue
+			}
+			events = append(events, toDomainAuditEvent(item))
+			if len(events) >= limit {
+				break
+			}
+		}
+		continueToken = list.Continue
+		if continueToken == "" {
 			break
 		}
 	}
 
 	return events, nil
+}
+
+func toDomainAuditEvent(item *v1alpha1.PowerAuditEvent) ports.AuditEvent {
+	return ports.AuditEvent{
+		Timestamp: item.Spec.Timestamp.Time,
+		Action:    ports.AuditAction(item.Spec.Action),
+		Actor:     item.Spec.Actor,
+		Target: domain.WorkloadRef{
+			Cluster: item.Spec.Target.Cluster, APIVersion: item.Spec.Target.APIVersion,
+			Namespace: item.Spec.Target.Namespace, Name: item.Spec.Target.Name,
+			Kind: domain.WorkloadKind(item.Spec.Target.Kind), UID: item.Spec.Target.UID,
+		},
+		Result: item.Spec.Result, Reason: item.Spec.Reason, RuleName: item.Spec.RuleName,
+	}
 }
 
 // EmitKubernetesEvent emits a standard K8s Event for visibility in kubectl.
@@ -159,17 +181,32 @@ func (a *AuditRecorder) EmitKubernetesEvent(obj client.Object, eventType, reason
 func (a *AuditRecorder) CleanupExpired(ctx context.Context, retentionDays int) (int, error) {
 	cutoff := time.Now().Add(-time.Duration(retentionDays) * 24 * time.Hour)
 
-	var list v1alpha1.PowerAuditEventList
-	if err := a.client.List(ctx, &list, client.InNamespace(a.namespace)); err != nil {
-		return 0, err
-	}
-
+	const pageSize int64 = 200
+	const maxDeletesPerRun = 500
 	deleted := 0
-	for _, item := range list.Items {
-		if item.CreationTimestamp.Time.Before(cutoff) {
-			if err := a.client.Delete(ctx, &item); err == nil {
-				deleted++
+	continueToken := ""
+	for {
+		var list v1alpha1.PowerAuditEventList
+		if err := a.reader.List(ctx, &list, &client.ListOptions{
+			Namespace: a.namespace,
+			Raw:       &metav1.ListOptions{Limit: pageSize, Continue: continueToken},
+		}); err != nil {
+			return deleted, err
+		}
+		for i := range list.Items {
+			item := &list.Items[i]
+			if item.CreationTimestamp.Time.Before(cutoff) {
+				if err := a.client.Delete(ctx, item); err == nil {
+					deleted++
+					if deleted >= maxDeletesPerRun {
+						return deleted, nil
+					}
+				}
 			}
+		}
+		continueToken = list.Continue
+		if continueToken == "" {
+			break
 		}
 	}
 

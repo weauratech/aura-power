@@ -13,6 +13,8 @@ import (
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	v1alpha1 "github.com/weauratech/aura-power/api/v1alpha1"
 )
 
 // CachedClientConfig holds configuration for the cached client.
@@ -99,6 +101,12 @@ func (c *CachedClient) Get(ctx context.Context, key types.NamespacedName, obj cl
 }
 
 func (c *CachedClient) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	// Audit history is append-only and retention-bounded, but can still be much
+	// larger than operational state. Reading it directly prevents the API server
+	// process from starting an informer that retains the complete history.
+	if _, ok := list.(*v1alpha1.PowerAuditEventList); ok {
+		return c.writeClient.List(ctx, list, opts...)
+	}
 	return c.cache.List(ctx, list, opts...)
 }
 

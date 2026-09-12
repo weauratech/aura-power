@@ -1,6 +1,7 @@
 package reconciler
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
@@ -27,6 +28,25 @@ func TestQualityCRDConversionPreservesCorePolicyContract(t *testing.T) {
 	w := got.Schedule.Windows[0]
 	if w.Start.Hour != 22 || w.Start.Minute != 30 || w.End.Hour != 6 || w.End.Minute != 15 || w.Timezone != "UTC" {
 		t.Fatalf("time conversion lost meaning: %+v", w)
+	}
+}
+
+func TestQualityStableTargetStatusUsesBoundedCheckpoints(t *testing.T) {
+	base := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
+	rule := &domain.RuleRef{Kind: domain.RuleKindPolicy, Name: "office-hours", Namespace: "aura-system"}
+	decision := domain.Decision{DesiredState: domain.PowerStateOn, WinningRule: rule}
+	target := &v1alpha1.PowerTarget{}
+
+	updateTargetStatus(target, decision, base)
+	checkpoint := target.DeepCopy().Status
+	updateTargetStatus(target, decision, base.Add(30*time.Second))
+	if !reflect.DeepEqual(checkpoint, target.Status) {
+		t.Fatalf("stable reconcile changed status before checkpoint: before=%+v after=%+v", checkpoint, target.Status)
+	}
+
+	updateTargetStatus(target, decision, base.Add(statusCheckpointInterval))
+	if target.Status.LastReconciliation == nil || !target.Status.LastReconciliation.Time.Equal(base.Add(statusCheckpointInterval)) {
+		t.Fatalf("status checkpoint was not advanced: %+v", target.Status.LastReconciliation)
 	}
 }
 

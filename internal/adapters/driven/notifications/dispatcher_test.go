@@ -151,3 +151,18 @@ func TestRunHonorsCancellation(t *testing.T) {
 		t.Fatal("dispatcher did not stop during readiness wait")
 	}
 }
+
+func TestThrottleEntriesAreRemovedAfterExpiry(t *testing.T) {
+	d, _, _ := testDispatcher(t)
+	now := time.Now()
+	d.throttle["expired"] = now.Add(-time.Second)
+	d.throttle["active"] = now.Add(time.Minute)
+
+	d.pruneThrottle(now)
+	if _, ok := d.throttle["expired"]; ok {
+		t.Fatal("expired throttle entry was retained")
+	}
+	if _, ok := d.throttle["active"]; !ok {
+		t.Fatal("active throttle entry was removed")
+	}
+}

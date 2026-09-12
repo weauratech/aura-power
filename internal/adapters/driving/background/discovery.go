@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"reflect"
 	"strconv"
 	"time"
 
@@ -258,6 +259,7 @@ func targetReference(ref domain.WorkloadRef) v1alpha1.TargetReference {
 }
 
 func (d *DiscoveryLoop) updateObservedState(ctx context.Context, target *v1alpha1.PowerTarget, wl ports.DiscoveredWorkload) error {
+	previous := target.DeepCopy().Status
 	powerState := "on"
 	if wl.Ref.Kind == domain.WorkloadKindCronJob && wl.Suspended {
 		powerState = "off"
@@ -284,6 +286,9 @@ func (d *DiscoveryLoop) updateObservedState(ctx context.Context, target *v1alpha
 	target.Status.NamespaceLabels = copyStringMap(wl.NamespaceLabels)
 	target.Status.Ownership = ownershipSpecs
 
+	if reflect.DeepEqual(previous, target.Status) {
+		return nil
+	}
 	return d.Client.Status().Update(ctx, target)
 }
 

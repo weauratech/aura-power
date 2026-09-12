@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -19,14 +20,23 @@ import (
 const defaultRequeueAfter = 30 * time.Second
 const errorRequeueAfter = 10 * time.Second
 const retryActionAnnotation = "power.aura.sh/retry-action"
+const statusCheckpointInterval = 5 * time.Minute
 
 // TargetReconciler reconciles PowerTarget objects.
 type TargetReconciler struct {
 	client.Client
-	Config   domain.GuardrailConfig
-	Executor ports.WorkloadExecutor
-	Audit    ports.AuditRecorder
-	Metrics  ports.MetricsExporter
+	Config       domain.GuardrailConfig
+	Executor     ports.WorkloadExecutor
+	Audit        ports.AuditRecorder
+	Metrics      ports.MetricsExporter
+	RequeueAfter time.Duration
+}
+
+func (r *TargetReconciler) requeueAfter() time.Duration {
+	if r.RequeueAfter > 0 {
+		return r.RequeueAfter
+	}
+	return defaultRequeueAfter
 }
 
 func (r *TargetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -59,7 +69,9 @@ func (r *TargetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	now := time.Now()
 	decision := domain.ComputeDecision(domainTarget, policies, overrides, r.Config, now)
 
-	// 5. Update status
+	// 5. Update status. Keep a copy so stable reconciliations do not issue a
+	// status write and trigger another watch event.
+	previousStatus := target.DeepCopy().Status
 	updateTargetStatus(&target, decision, now)
 
 	// 6. Execute action if needed
@@ -71,7 +83,7 @@ func (r *TargetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			return ctrl.Result{RequeueAfter: errorRequeueAfter}, nil
 		}
 		if handled {
-			return ctrl.Result{RequeueAfter: defaultRequeueAfter}, nil
+			return ctrl.Result{RequeueAfter: r.requeueAfter()}, nil
 		}
 
 		if decision.DesiredState == domain.PowerStateOff && observedState == domain.PowerStateOn {
@@ -137,16 +149,18 @@ func (r *TargetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	// 7. Persist status update
-	if err := r.Status().Update(ctx, &target); err != nil {
-		logger.Error(err, "failed to update target status")
-		return ctrl.Result{RequeueAfter: errorRequeueAfter}, nil
+	if !equality.Semantic.DeepEqual(previousStatus, target.Status) {
+		if err := r.Status().Update(ctx, &target); err != nil {
+			logger.Error(err, "failed to update target status")
+			return ctrl.Result{RequeueAfter: errorRequeueAfter}, nil
+		}
 	}
 
 	duration := time.Since(start)
 	r.Metrics.RecordReconciliation(duration, nil)
 	logger.Info("reconciliation complete", "duration", duration, "desiredState", decision.DesiredState)
 
-	return ctrl.Result{RequeueAfter: defaultRequeueAfter}, nil
+	return ctrl.Result{RequeueAfter: r.requeueAfter()}, nil
 }
 
 // reconcileExistingAction makes a desired-state transition monotonic. Once a
@@ -384,17 +398,17 @@ func toDomainTarget(t *v1alpha1.PowerTarget) domain.Target {
 	}
 }
 
-func updateTargetStatus(t *v1alpha1.PowerTarget, d domain.Decision, _ time.Time) {
+func updateTargetStatus(t *v1alpha1.PowerTarget, d domain.Decision, nowTime time.Time) {
 	// Detect state transition — set LastTransition only when state changes
 	previousDesired := t.Status.DesiredState
 	newDesired := string(d.DesiredState)
 	if previousDesired != newDesired && newDesired != "" {
-		now := metav1.Now()
+		now := metav1.NewTime(nowTime)
 		t.Status.LastTransition = &now
 	}
 	// Backfill: if lastTransition is nil but state is determined, set it now
 	if t.Status.LastTransition == nil && newDesired != "" {
-		now := metav1.Now()
+		now := metav1.NewTime(nowTime)
 		t.Status.LastTransition = &now
 	}
 
@@ -403,34 +417,41 @@ func updateTargetStatus(t *v1alpha1.PowerTarget, d domain.Decision, _ time.Time)
 	t.Status.Divergent = d.Divergent
 	t.Status.Blocked = d.IsBlocked()
 
-	// Update last reconciliation time
-	now := metav1.Now()
+	// Checkpoint cumulative savings at a bounded cadence. Updating this field on
+	// every 30-second reconcile caused a write/watch feedback loop for every
+	// target even when the decision and observed state were stable.
+	checkpoint := t.Status.LastReconciliation == nil ||
+		nowTime.Sub(t.Status.LastReconciliation.Time) >= statusCheckpointInterval ||
+		previousDesired != newDesired
+	if checkpoint {
+		now := metav1.NewTime(nowTime)
 
-	// Accumulate savings when target is powered off
-	if newDesired == "off" && t.Status.ObservedState.PowerState == "off" && t.Status.LastReconciliation != nil {
-		elapsed := now.Time.Sub(t.Status.LastReconciliation.Time)
-		hours := elapsed.Hours()
-		if hours > 0 && hours < 1 { // sanity: only accumulate within reasonable interval
-			cpuCores := float64(0)
-			memGiB := float64(0)
-			if t.Status.Snapshot != nil && t.Status.Snapshot.Resources.CPUMillicores > 0 {
-				cpuCores = float64(t.Status.Snapshot.Resources.CPUMillicores) / 1000.0
-				memGiB = float64(t.Status.Snapshot.Resources.MemoryMiB) / 1024.0
-			} else {
-				// Default estimate if no resources captured
-				cpuCores = 0.25
-				memGiB = 0.5
+		// Accumulate savings when target is powered off
+		if newDesired == "off" && t.Status.ObservedState.PowerState == "off" && t.Status.LastReconciliation != nil {
+			elapsed := now.Time.Sub(t.Status.LastReconciliation.Time)
+			hours := elapsed.Hours()
+			if hours > 0 && hours < 1 { // sanity: only accumulate within reasonable interval
+				cpuCores := float64(0)
+				memGiB := float64(0)
+				if t.Status.Snapshot != nil && t.Status.Snapshot.Resources.CPUMillicores > 0 {
+					cpuCores = float64(t.Status.Snapshot.Resources.CPUMillicores) / 1000.0
+					memGiB = float64(t.Status.Snapshot.Resources.MemoryMiB) / 1024.0
+				} else {
+					// Default estimate if no resources captured
+					cpuCores = 0.25
+					memGiB = 0.5
+				}
+				if t.Status.Savings == nil {
+					t.Status.Savings = &v1alpha1.SavingsSpec{}
+				}
+				t.Status.Savings.CPUHoursSaved += cpuCores * hours
+				t.Status.Savings.MemoryGiBHours += memGiB * hours
+				t.Status.Savings.EstimatedCost += (cpuCores*0.032 + memGiB*0.004) * hours
 			}
-			if t.Status.Savings == nil {
-				t.Status.Savings = &v1alpha1.SavingsSpec{}
-			}
-			t.Status.Savings.CPUHoursSaved += cpuCores * hours
-			t.Status.Savings.MemoryGiBHours += memGiB * hours
-			t.Status.Savings.EstimatedCost += (cpuCores*0.032 + memGiB*0.004) * hours
 		}
-	}
 
-	t.Status.LastReconciliation = &now
+		t.Status.LastReconciliation = &now
+	}
 
 	if d.WinningRule != nil {
 		t.Status.WinningRule = &v1alpha1.RuleReference{

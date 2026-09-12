@@ -41,7 +41,7 @@ type Dispatcher struct {
 	senders  map[string]Sender
 	queue    chan Event
 	mu       sync.Mutex
-	throttle map[string]time.Time // key: "channel/target" → last sent
+	throttle map[string]time.Time // key: "channel/target" → expiry
 }
 
 // Sender formats and sends a notification for a given provider type.
@@ -126,6 +126,7 @@ func (d *Dispatcher) Run(ctx context.Context) {
 
 func (d *Dispatcher) dispatchBatch(ctx context.Context, batch []Event) {
 	log := ctrl.Log.WithName("notifications")
+	d.pruneThrottle(time.Now())
 
 	if len(batch) == 0 {
 		return
@@ -179,7 +180,7 @@ func (d *Dispatcher) dispatchBatch(ctx context.Context, batch []Event) {
 		// Throttle: check if any event in batch was already sent recently
 		throttleDur := 5 * time.Minute
 		if ch.Spec.Throttle != "" {
-			if parsed, err := time.ParseDuration(ch.Spec.Throttle); err == nil {
+			if parsed, err := time.ParseDuration(ch.Spec.Throttle); err == nil && parsed > 0 {
 				throttleDur = parsed
 			}
 		}
@@ -187,8 +188,8 @@ func (d *Dispatcher) dispatchBatch(ctx context.Context, batch []Event) {
 		// For batch, throttle by first target (representative)
 		key := batchThrottleKey(ch, channelEvents)
 		d.mu.Lock()
-		lastSent, exists := d.throttle[key]
-		if exists && time.Since(lastSent) < throttleDur {
+		expiresAt, exists := d.throttle[key]
+		if exists && time.Now().Before(expiresAt) {
 			d.mu.Unlock()
 			continue
 		}
@@ -241,7 +242,7 @@ func (d *Dispatcher) dispatchBatch(ctx context.Context, batch []Event) {
 			continue
 		} else {
 			d.mu.Lock()
-			d.throttle[key] = time.Now()
+			d.throttle[key] = time.Now().Add(throttleDur)
 			d.mu.Unlock()
 			now := metav1.Now()
 			ch.Status.TotalSent++
@@ -258,6 +259,7 @@ func (d *Dispatcher) dispatchBatch(ctx context.Context, batch []Event) {
 
 func (d *Dispatcher) dispatch(ctx context.Context, event Event) {
 	log := ctrl.Log.WithName("notifications")
+	d.pruneThrottle(time.Now())
 
 	// Load all channels
 	var channels v1alpha1.PowerNotificationChannelList
@@ -285,14 +287,14 @@ func (d *Dispatcher) dispatch(ctx context.Context, event Event) {
 		// Throttle check (default: 5m per target even if not configured)
 		throttleDur := 5 * time.Minute
 		if ch.Spec.Throttle != "" {
-			if parsed, err := time.ParseDuration(ch.Spec.Throttle); err == nil {
+			if parsed, err := time.ParseDuration(ch.Spec.Throttle); err == nil && parsed > 0 {
 				throttleDur = parsed
 			}
 		}
 		key := ch.Name + "/" + eventIdentity(event)
 		d.mu.Lock()
-		lastSent, exists := d.throttle[key]
-		if exists && time.Since(lastSent) < throttleDur {
+		expiresAt, exists := d.throttle[key]
+		if exists && time.Now().Before(expiresAt) {
 			d.mu.Unlock()
 			continue
 		}
@@ -318,7 +320,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, event Event) {
 			continue
 		} else {
 			d.mu.Lock()
-			d.throttle[key] = time.Now()
+			d.throttle[key] = time.Now().Add(throttleDur)
 			d.mu.Unlock()
 			now := metav1.Now()
 			ch.Status.TotalSent++
@@ -330,6 +332,16 @@ func (d *Dispatcher) dispatch(ctx context.Context, event Event) {
 		// Update status
 		if err := d.client.Status().Update(ctx, ch); err != nil {
 			log.Error(err, "failed to update channel status", "channel", ch.Name, "namespace", ch.Namespace)
+		}
+	}
+}
+
+func (d *Dispatcher) pruneThrottle(now time.Time) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for key, expiresAt := range d.throttle {
+		if !now.Before(expiresAt) {
+			delete(d.throttle, key)
 		}
 	}
 }

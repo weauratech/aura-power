@@ -11,6 +11,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/weauratech/aura-power/internal/core/domain"
@@ -117,6 +118,41 @@ func TestQualityDiscovererKeepsKindAndNamespaceMetadata(t *testing.T) {
 	}
 	if !kinds[domain.WorkloadKindDeployment] || !kinds[domain.WorkloadKindStatefulSet] {
 		t.Fatalf("kinds lost: %+v", kinds)
+	}
+}
+
+type listCountingClient struct {
+	client.Client
+	lists int
+}
+
+func (c *listCountingClient) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	c.lists++
+	return c.Client.List(ctx, list, opts...)
+}
+
+func TestQualityDiscovererUsesConstantClusterListCount(t *testing.T) {
+	scheme := qualityScheme(t)
+	objects := make([]client.Object, 0, 80)
+	for i := 0; i < 40; i++ {
+		namespace := "team-" + string(rune('a'+i%26)) + string(rune('a'+i/26))
+		objects = append(objects,
+			&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}},
+			&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: namespace}},
+		)
+	}
+	base := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
+	counting := &listCountingClient{Client: base}
+
+	got, err := NewDiscoverer(counting).DiscoverAll(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 40 {
+		t.Fatalf("discovered %d workloads, want 40", len(got))
+	}
+	if counting.lists != 4 {
+		t.Fatalf("issued %d LIST calls, want 4 regardless of namespace count", counting.lists)
 	}
 }
 

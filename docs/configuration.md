@@ -23,6 +23,9 @@ Complete reference for all environment variables and Helm values.
 | `LEADER_ELECTION_ID` | Leader election lease name | `aura-power-controller-leader.power.aura.sh` | No |
 | `AUDIT_RETENTION_DAYS` | Days to keep audit events before cleanup | `7` | No |
 | `AUDIT_CLEANUP_INTERVAL` | Interval between cleanup runs (Go duration) | `6h` | No |
+| `RECONCILIATION_INTERVAL` | Stable target reconciliation interval (Go duration) | `30s` | No |
+| `DISCOVERY_INTERVAL` | Full workload discovery interval (Go duration) | `60s` | No |
+| `GOMEMLIMIT` | Go runtime soft memory limit; set below the pod memory limit | `192MiB` (Helm) | No |
 | `EXTRA_SYSTEM_NAMESPACES` | Additional namespaces to block (comma-separated) | — | No |
 | `DEV_MODE` | Enable development logging | `false` | No |
 
@@ -38,6 +41,10 @@ Complete reference for all environment variables and Helm values.
 | `server.port` | `API_PORT` | Server |
 | `controller.leaderElection.id` | `LEADER_ELECTION_ID` | Controller |
 | `controller.config.auditRetentionDays` | `AUDIT_RETENTION_DAYS` | Controller |
+| `controller.config.auditCleanupInterval` | `AUDIT_CLEANUP_INTERVAL` | Controller |
+| `controller.config.reconciliationInterval` | `RECONCILIATION_INTERVAL` | Controller |
+| `controller.config.discoveryInterval` | `DISCOVERY_INTERVAL` | Controller |
+| `controller.config.goMemLimit` | `GOMEMLIMIT` | Controller |
 
 ## Annotations
 

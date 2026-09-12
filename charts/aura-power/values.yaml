@@ -94,6 +94,10 @@ controller:
     reconciliationInterval: "30s"
     discoveryInterval: "60s"
     auditRetentionDays: 7
+    auditCleanupInterval: "6h"
+    # Keep the Go heap below the pod limit so the runtime can collect before
+    # Kubernetes terminates the process. Adjust together with resources.limits.memory.
+    goMemLimit: "192MiB"
     systemNamespaceBlocklist:
       - kube-system
       - kube-public

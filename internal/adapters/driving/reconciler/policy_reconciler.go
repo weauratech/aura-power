@@ -37,8 +37,11 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	// Update affected target count
 	targets, err := r.countAffectedTargets(ctx, &policy)
 	if err == nil {
-		policy.Status.AffectedTargets = int32(targets)
-		_ = r.Status().Update(ctx, &policy)
+		count := int32(targets)
+		if policy.Status.AffectedTargets != count {
+			policy.Status.AffectedTargets = count
+			_ = r.Status().Update(ctx, &policy)
+		}
 	}
 
 	return ctrl.Result{}, nil

@@ -3,7 +3,6 @@ package api
 import (
 	"fmt"
 	"net/http"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -100,8 +99,11 @@ func (s *Server) handleDashboard(c *gin.Context) {
 	var overrides v1alpha1.PowerOverrideList
 	_ = s.client.List(ctx, &overrides)
 
-	var events v1alpha1.PowerAuditEventList
-	_ = s.client.List(ctx, &events)
+	recentAudit := make([]v1alpha1.PowerAuditEvent, 0, 10)
+	_, _ = visitAuditPages(ctx, s.client, nil, func(page []v1alpha1.PowerAuditEvent) error {
+		recentAudit = retainNewest(recentAudit, page, 10)
+		return nil
+	})
 
 	// Compute stats
 	var poweredOnD, poweredOffD, blockedD, divergentD, governed int
@@ -138,10 +140,7 @@ func (s *Server) handleDashboard(c *gin.Context) {
 	}
 
 	// Recent events (last 10)
-	eventItems := events.Items
-	sort.Slice(eventItems, func(i, j int) bool {
-		return eventItems[i].CreationTimestamp.After(eventItems[j].CreationTimestamp.Time)
-	})
+	eventItems := recentAudit
 	recentLimit := 10
 	if len(eventItems) < recentLimit {
 		recentLimit = len(eventItems)
@@ -537,29 +536,22 @@ func (s *Server) handleSavingsExport(c *gin.Context) {
 func (s *Server) handleAuditExport(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	var events v1alpha1.PowerAuditEventList
-	if err := s.client.List(ctx, &events); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	// Sort descending
-	items := events.Items
-	sort.Slice(items, func(i, j int) bool {
-		return items[i].CreationTimestamp.After(items[j].CreationTimestamp.Time)
-	})
-
 	c.Header("Content-Type", "text/csv")
 	c.Header("Content-Disposition", "attachment; filename=aura-power-audit.csv")
 
 	c.Writer.WriteString("timestamp,action,target_namespace,target_name,target_kind,result,reason,rule_name\n")
-	for _, e := range items {
-		line := fmt.Sprintf("%s,%s,%s,%s,%s,%s,%s,%s\n",
-			e.Spec.Timestamp, e.Spec.Action,
-			e.Spec.Target.Namespace, e.Spec.Target.Name, e.Spec.Target.Kind,
-			e.Spec.Result, csvEscape(e.Spec.Reason), e.Spec.RuleName)
-		c.Writer.WriteString(line)
-	}
+	_, _ = visitAuditPages(ctx, s.client, nil, func(page []v1alpha1.PowerAuditEvent) error {
+		for _, e := range page {
+			line := fmt.Sprintf("%s,%s,%s,%s,%s,%s,%s,%s\n",
+				e.Spec.Timestamp, e.Spec.Action,
+				e.Spec.Target.Namespace, e.Spec.Target.Name, e.Spec.Target.Kind,
+				e.Spec.Result, csvEscape(e.Spec.Reason), e.Spec.RuleName)
+			if _, err := c.Writer.WriteString(line); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func csvEscape(s string) string {
@@ -572,7 +564,6 @@ func csvEscape(s string) string {
 func (s *Server) handleAuditList(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	var events v1alpha1.PowerAuditEventList
 	listOpts := []client.ListOption{}
 
 	targetNs := c.Query("targetNamespace")
@@ -593,11 +584,6 @@ func (s *Server) handleAuditList(c *gin.Context) {
 		listOpts = append(listOpts, client.MatchingLabels(labels))
 	}
 
-	if err := s.client.List(ctx, &events, listOpts...); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
 	// Apply limit (default 50)
 	limit := 50
 	if l := c.Query("limit"); l != "" {
@@ -605,16 +591,18 @@ func (s *Server) handleAuditList(c *gin.Context) {
 			limit = parsed
 		}
 	}
+	if limit > 500 {
+		limit = 500
+	}
 
-	// Sort by creation timestamp descending (most recent first)
-	items := events.Items
-	sort.Slice(items, func(i, j int) bool {
-		return items[i].CreationTimestamp.After(items[j].CreationTimestamp.Time)
+	items := make([]v1alpha1.PowerAuditEvent, 0, limit)
+	total, err := visitAuditPages(ctx, s.client, listOpts, func(page []v1alpha1.PowerAuditEvent) error {
+		items = retainNewest(items, page, limit)
+		return nil
 	})
-
-	total := len(items)
-	if limit < total {
-		items = items[:limit]
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{"events": items, "count": len(items), "total": total})

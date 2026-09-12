@@ -82,7 +82,7 @@ func main() {
 	// Create driven adapters
 	k8sClient := mgr.GetClient()
 	executor := kubernetes.NewExecutor(k8sClient)
-	auditRecorder := kubernetes.NewAuditRecorder(k8sClient, mgr.GetEventRecorderFor("aura-power"), "aura-system")
+	auditRecorder := kubernetes.NewAuditRecorderWithReader(k8sClient, mgr.GetAPIReader(), mgr.GetEventRecorderFor("aura-power"), "aura-system")
 	metricsExporter := observability.NewPrometheusExporter()
 
 	// Create notification dispatcher
@@ -91,11 +91,12 @@ func main() {
 
 	// Register reconcilers
 	targetReconciler := &reconciler.TargetReconciler{
-		Client:   k8sClient,
-		Config:   guardrailConfig,
-		Executor: executor,
-		Audit:    auditRecorder,
-		Metrics:  metricsExporter,
+		Client:       k8sClient,
+		Config:       guardrailConfig,
+		Executor:     executor,
+		Audit:        auditRecorder,
+		Metrics:      metricsExporter,
+		RequeueAfter: durationEnv("RECONCILIATION_INTERVAL", 30*time.Second),
 	}
 	if err := targetReconciler.SetupWithManager(mgr); err != nil {
 		log.Error(err, "unable to create controller", "controller", "PowerTarget")
@@ -157,7 +158,7 @@ func main() {
 		Client:     k8sClient,
 		Discoverer: discoverer,
 		Config: background.DiscoveryConfig{
-			Interval:         60 * time.Second,
+			Interval:         durationEnv("DISCOVERY_INTERVAL", 60*time.Second),
 			Namespace:        "aura-system",
 			SystemNamespaces: guardrailConfig.SystemNamespaces,
 			OptInAnnotation:  guardrailConfig.OptInAnnotation,
@@ -187,7 +188,7 @@ func runAuditCleanup(ctx context.Context, recorder *kubernetes.AuditRecorder) {
 
 	cleanupInterval := 6 * time.Hour
 	if v := os.Getenv("AUDIT_CLEANUP_INTERVAL"); v != "" {
-		if parsed, err := time.ParseDuration(v); err == nil {
+		if parsed, err := time.ParseDuration(v); err == nil && parsed > 0 {
 			cleanupInterval = parsed
 		}
 	}
@@ -240,6 +241,15 @@ func envInt(key string, defaultValue int) int {
 		}
 	}
 	return defaultValue
+}
+
+func durationEnv(key string, fallback time.Duration) time.Duration {
+	if value := os.Getenv(key); value != "" {
+		if parsed, err := time.ParseDuration(value); err == nil && parsed > 0 {
+			return parsed
+		}
+	}
+	return fallback
 }
 
 func splitAndTrim(s string) []string {
