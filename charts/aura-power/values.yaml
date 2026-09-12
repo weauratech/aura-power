@@ -110,6 +110,26 @@ controller:
     name: ""
     annotations: {}
 
+# -- Kubernetes admission for invariants that cannot be expressed by the CRD
+# schema (for example IANA timezones and future override expiration).
+webhook:
+  enabled: false
+  port: 9443
+  failurePolicy: Fail
+  timeoutSeconds: 5
+  certificate:
+    # The chart creates and retains a release-scoped self-signed certificate
+    # across upgrades. Set certManager.enabled for managed rotation.
+    durationDays: 3650
+  certManager:
+    enabled: false
+    duration: 2160h
+    renewBefore: 360h
+    issuerRef:
+      name: ""
+      kind: ClusterIssuer
+      group: cert-manager.io
+
 # -- RBAC
 rbac:
   create: true

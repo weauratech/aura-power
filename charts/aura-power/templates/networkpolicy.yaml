@@ -60,6 +60,13 @@ spec:
       ports:
         - port: 8080
           protocol: TCP
+    {{- if .Values.webhook.enabled }}
+    # Admission requests originate from the Kubernetes API server. Managed
+    # control planes cannot be selected reliably by namespace or pod labels.
+    - ports:
+        - port: {{ .Values.webhook.port }}
+          protocol: TCP
+    {{- end }}
   egress:
     # K8s API
     - ports:

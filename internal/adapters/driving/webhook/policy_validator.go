@@ -16,6 +16,13 @@ type PolicyValidator struct {
 	decoder admission.Decoder
 }
 
+// NewPolicyValidator creates a validator with an explicit decoder. Keeping the
+// dependency explicit prevents a registered webhook from failing every request
+// because decoder injection was omitted during manager wiring.
+func NewPolicyValidator(decoder admission.Decoder) *PolicyValidator {
+	return &PolicyValidator{decoder: decoder}
+}
+
 // Handle validates the PowerPolicy resource.
 func (v *PolicyValidator) Handle(ctx context.Context, req admission.Request) admission.Response {
 	policy := &v1alpha1.PowerPolicy{}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"os"
 	"strconv"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	crwebhook "sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	v1alpha1 "github.com/weauratech/aura-power/api/v1alpha1"
 	"github.com/weauratech/aura-power/internal/adapters/driven/kubernetes"
@@ -20,6 +22,7 @@ import (
 	"github.com/weauratech/aura-power/internal/adapters/driven/observability"
 	"github.com/weauratech/aura-power/internal/adapters/driving/background"
 	"github.com/weauratech/aura-power/internal/adapters/driving/reconciler"
+	admissionwebhook "github.com/weauratech/aura-power/internal/adapters/driving/webhook"
 	"github.com/weauratech/aura-power/internal/core/domain"
 )
 
@@ -45,16 +48,35 @@ func main() {
 	}
 	leaderElectionID := getEnvOrDefault("LEADER_ELECTION_ID", "aura-power-controller-leader.power.aura.sh")
 
-	// Create manager
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+	managerOptions := ctrl.Options{
 		Scheme:                 scheme,
 		LeaderElection:         true,
 		LeaderElectionID:       leaderElectionID,
 		HealthProbeBindAddress: ":8081",
-	})
+	}
+	webhookEnabled := envBool("WEBHOOK_ENABLED", false)
+	if webhookEnabled {
+		managerOptions.WebhookServer = crwebhook.NewServer(crwebhook.Options{
+			Port:    envInt("WEBHOOK_PORT", 9443),
+			CertDir: getEnvOrDefault("WEBHOOK_CERT_DIR", "/tmp/k8s-webhook-server/serving-certs"),
+			TLSOpts: []func(*tls.Config){func(config *tls.Config) {
+				config.MinVersion = tls.VersionTLS12
+			}},
+		})
+	}
+
+	// Create manager. The webhook server is lazy when disabled, so existing
+	// installations do not require certificates until admission is opted in.
+	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), managerOptions)
 	if err != nil {
 		log.Error(err, "unable to create manager")
 		os.Exit(1)
+	}
+	if webhookEnabled {
+		admissionwebhook.Register(mgr.GetWebhookServer(), mgr.GetScheme())
+		log.Info("validation webhooks enabled")
+	} else {
+		log.Info("validation webhooks disabled")
 	}
 
 	// Create driven adapters
@@ -106,6 +128,12 @@ func main() {
 	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
 		log.Error(err, "unable to set up ready check")
 		os.Exit(1)
+	}
+	if webhookEnabled {
+		if err := mgr.AddReadyzCheck("webhook", mgr.GetWebhookServer().StartedChecker()); err != nil {
+			log.Error(err, "unable to set up webhook ready check")
+			os.Exit(1)
+		}
 	}
 
 	// Start audit cleanup (background)
@@ -190,6 +218,28 @@ func getEnvOrDefault(key, defaultVal string) string {
 		return v
 	}
 	return defaultVal
+}
+
+func envBool(key string, defaultValue bool) bool {
+	value, ok := os.LookupEnv(key)
+	if !ok {
+		return defaultValue
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return defaultValue
+	}
+	return parsed
+}
+
+func envInt(key string, defaultValue int) int {
+	if value := os.Getenv(key); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err == nil && parsed > 0 && parsed <= 65535 {
+			return parsed
+		}
+	}
+	return defaultValue
 }
 
 func splitAndTrim(s string) []string {

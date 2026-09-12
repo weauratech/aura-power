@@ -16,6 +16,11 @@ type OverrideValidator struct {
 	decoder admission.Decoder
 }
 
+// NewOverrideValidator creates a validator with an explicit decoder.
+func NewOverrideValidator(decoder admission.Decoder) *OverrideValidator {
+	return &OverrideValidator{decoder: decoder}
+}
+
 // Handle validates the PowerOverride resource.
 func (v *OverrideValidator) Handle(ctx context.Context, req admission.Request) admission.Response {
 	override := &v1alpha1.PowerOverride{}

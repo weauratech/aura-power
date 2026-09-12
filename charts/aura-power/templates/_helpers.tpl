@@ -85,6 +85,15 @@ Controller full name
 {{- printf "%s-controller" (include "aura-power.fullname" .) | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
+{{/* Admission webhook service and certificate names. */}}
+{{- define "aura-power.webhook.fullname" -}}
+{{- printf "%s-webhook" (include "aura-power.controller.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{- define "aura-power.webhook.secretName" -}}
+{{- printf "%s-tls" (include "aura-power.webhook.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
 {{/*
 Server service account name
 */}}

@@ -75,6 +75,7 @@ quality: lint-core-deps
 	rm -rf cmd/server/panelassets && cp -R web/dist cmd/server/panelassets
 	go test ./... -race -count=1
 	helm lint ./charts/aura-power
+	./scripts/quality/helm-webhook-contract.sh
 
 quality-acceptance:
 	@set +e; \

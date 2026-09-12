@@ -65,6 +65,41 @@ helm install aura-power oci://ghcr.io/weauratech/charts/aura-power \
 | `controller.config.auditRetentionDays` | Days to retain audit events | `7` |
 | `controller.config.systemNamespaceBlocklist` | Namespaces blocked by guardrails | `[kube-system, kube-public, kube-node-lease]` |
 
+### Admission validation
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `webhook.enabled` | Register runtime validation for policies and overrides | `false` |
+| `webhook.failurePolicy` | API server behavior when the webhook is unavailable | `Fail` |
+| `webhook.timeoutSeconds` | Admission request timeout | `5` |
+| `webhook.certManager.enabled` | Use cert-manager for certificate rotation | `false` |
+| `webhook.certManager.issuerRef.name` | Existing Issuer or ClusterIssuer | `""` |
+
+Runtime admission rejects invalid IANA timezones and expired overrides at the
+Kubernetes API boundary. Enable the chart-managed self-signed certificate with:
+
+```bash
+helm upgrade --install aura-power ./charts/aura-power \
+  --namespace aura-system \
+  --set webhook.enabled=true
+```
+
+The chart reuses its release-scoped TLS Secret across upgrades. For automatic
+certificate rotation, install cert-manager and reference an existing issuer:
+
+```bash
+helm upgrade --install aura-power ./charts/aura-power \
+  --namespace aura-system \
+  --set webhook.enabled=true \
+  --set webhook.certManager.enabled=true \
+  --set webhook.certManager.issuerRef.name=platform-ca
+```
+
+Admission uses `failurePolicy: Fail` by default. Confirm the controller is
+Ready before creating or updating `PowerPolicy` and `PowerOverride` objects.
+Disabling `webhook.enabled` removes the admission resources on the next Helm
+upgrade.
+
 ### Global
 
 | Parameter | Description | Default |
