@@ -27,12 +27,15 @@ server:
       memory: 256Mi
   # Auth (mandatory in v2.0)
   auth:
-    jwtSecret: ""  # Required. Set via --set or Helm Secret
+    # Reuse a pre-created Secret in GitOps environments. It must contain the
+    # keys jwt-secret and admin-password.
+    existingSecret: ""
+    jwtSecret: ""  # generated once and retained when empty
     initialAdmin:
       username: "admin"
-      password: ""  # Required on first install
+      password: ""  # generated once and retained when empty
     accessTokenTTL: "1h"
-    refreshTokenTTL: "7d"
+    refreshTokenTTL: "168h"
   # Persistence for SQLite
   persistence:
     enabled: true

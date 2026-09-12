@@ -54,19 +54,23 @@ spec:
             - name: JWT_SECRET
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "aura-power.server.fullname" . }}-secret
+                  name: {{ .Values.server.auth.existingSecret | default (printf "%s-secret" (include "aura-power.server.fullname" .)) }}
                   key: jwt-secret
             - name: AUTH_DB_PATH
               value: "/data/aura-power.db"
             - name: ADMIN_USERNAME
               value: {{ .Values.server.auth.initialAdmin.username | quote }}
-            {{- if .Values.server.auth.initialAdmin.password }}
             - name: ADMIN_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "aura-power.server.fullname" . }}-secret
+                  name: {{ .Values.server.auth.existingSecret | default (printf "%s-secret" (include "aura-power.server.fullname" .)) }}
                   key: admin-password
-            {{- end }}
+            - name: ACCESS_TOKEN_TTL
+              value: {{ .Values.server.auth.accessTokenTTL | quote }}
+            - name: REFRESH_TOKEN_TTL
+              value: {{ .Values.server.auth.refreshTokenTTL | quote }}
+            - name: CONTROL_NAMESPACE
+              value: {{ .Release.Namespace | quote }}
             {{- if .Values.server.prometheus.url }}
             - name: PROMETHEUS_URL
               value: {{ .Values.server.prometheus.url | quote }}
@@ -100,6 +104,10 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {}
+        {{- if not .Values.server.persistence.enabled }}
+        - name: data
+          emptyDir: {}
+        {{- end }}
       {{- with .Values.server.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

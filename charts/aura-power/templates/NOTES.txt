@@ -12,7 +12,11 @@ Aura Power has been installed.
 
   Default admin credentials:
     Username: {{ .Values.server.auth.initialAdmin.username }}
-    Password: (set via --set server.auth.initialAdmin.password=...)
+    {{- if .Values.server.auth.existingSecret }}
+    Password: read key admin-password from Secret {{ .Values.server.auth.existingSecret }}
+    {{- else }}
+    Password: kubectl get secret {{ include "aura-power.server.fullname" . }}-secret -n {{ .Release.Namespace }} -o jsonpath='{.data.admin-password}' | base64 -d
+    {{- end }}
 
 {{- if .Values.server.gateway.enabled }}
   Gateway API HTTPRoute created for: {{ join ", " .Values.server.gateway.hostnames }}
