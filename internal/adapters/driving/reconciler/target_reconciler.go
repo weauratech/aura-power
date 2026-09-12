@@ -307,7 +307,10 @@ func (r *TargetReconciler) loadPolicies(ctx context.Context) ([]domain.PolicySpe
 		converted := toDomainPolicy(&p)
 		resolved, err := selection.ResolveScope(ctx, r.Client, p.Namespace, p.Spec.Scope)
 		if err != nil {
-			return nil, err
+			// One malformed rule must fail closed for its own scope without
+			// preventing unrelated targets from restoring or reconciling.
+			log.FromContext(ctx).Error(err, "skipping policy with unresolved scope", "policy", client.ObjectKeyFromObject(&p))
+			continue
 		}
 		converted.Scope = resolved
 		policies = append(policies, converted)
@@ -325,7 +328,8 @@ func (r *TargetReconciler) loadOverrides(ctx context.Context) ([]domain.Override
 		converted := toDomainOverride(&o)
 		resolved, err := selection.ResolveScope(ctx, r.Client, o.Namespace, o.Spec.Scope)
 		if err != nil {
-			return nil, err
+			log.FromContext(ctx).Error(err, "skipping override with unresolved scope", "override", client.ObjectKeyFromObject(&o))
+			continue
 		}
 		converted.Scope = resolved
 		overrides = append(overrides, converted)

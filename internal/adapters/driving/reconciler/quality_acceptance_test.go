@@ -179,6 +179,33 @@ func TestAcceptanceArgoRestoredLiveStateIsNotOverwrittenByStaleSnapshot(t *testi
 	}
 }
 
+func TestAcceptanceInvalidNamespaceGroupDoesNotBlockUnrelatedRestore(t *testing.T) {
+	s := runtime.NewScheme()
+	if err := v1alpha1.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+	replicas := int32(2)
+	target := &v1alpha1.PowerTarget{
+		ObjectMeta: metav1.ObjectMeta{Name: "fixtures--api", Namespace: "aura-system"},
+		Spec:       v1alpha1.PowerTargetSpec{TargetRef: v1alpha1.TargetReference{Namespace: "fixtures", Name: "api", Kind: "Deployment"}},
+		Status: v1alpha1.PowerTargetStatus{
+			ObservedState: v1alpha1.ObservedStateSpec{Replicas: 0, PowerState: "off"},
+			Snapshot:      &v1alpha1.SnapshotSpec{Available: true, ReplicaCount: &replicas},
+		},
+	}
+	valid := &v1alpha1.PowerPolicy{ObjectMeta: metav1.ObjectMeta{Name: "restore", Namespace: "aura-system"}, Spec: v1alpha1.PowerPolicySpec{Scope: v1alpha1.PolicyScope{Namespaces: []string{"fixtures"}}, Schedule: v1alpha1.PolicySchedule{DesiredState: "on"}}}
+	invalid := &v1alpha1.PowerPolicy{ObjectMeta: metav1.ObjectMeta{Name: "broken-group", Namespace: "aura-system"}, Spec: v1alpha1.PowerPolicySpec{Scope: v1alpha1.PolicyScope{NamespaceGroups: []string{"deleted"}}, Schedule: v1alpha1.PolicySchedule{DesiredState: "off"}}}
+	c := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&v1alpha1.PowerTarget{}).WithObjects(target, valid, invalid).Build()
+	executor := &countingExecutor{}
+	r := TargetReconciler{Client: c, Config: domain.DefaultGuardrailConfig(), Executor: executor, Audit: noopAudit{}, Metrics: noopMetrics{}}
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(target)}); err != nil {
+		t.Fatal(err)
+	}
+	if executor.restores != 1 {
+		t.Fatalf("unresolved group blocked unrelated restore: restores=%d", executor.restores)
+	}
+}
+
 type statusFailingClient struct{ client.Client }
 
 func (c *statusFailingClient) Status() client.SubResourceWriter { return failingStatusWriter{} }
