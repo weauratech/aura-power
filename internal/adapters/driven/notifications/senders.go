@@ -113,7 +113,21 @@ func httpPost(ctx context.Context, url string, payload interface{}) error {
 
 	for attempt := 0; attempt < 3; attempt++ {
 		if attempt > 0 {
-			time.Sleep(time.Duration(attempt*attempt) * time.Second)
+			backoff := time.NewTimer(time.Duration(attempt*attempt) * time.Second)
+			select {
+			case <-ctx.Done():
+				if !backoff.Stop() {
+					select {
+					case <-backoff.C:
+					default:
+					}
+				}
+				return ctx.Err()
+			case <-backoff.C:
+			}
+		}
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 
 		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
@@ -143,7 +157,7 @@ func formatActionLabel(action string) string {
 	labels := map[string]string{
 		"workload.powered_down": "Workload Powered Down",
 		"workload.restored":     "Workload Restored",
-		"workload.error":        "Execution Error",
+		"execution.error":       "Execution Error",
 		"override.created":      "Override Created",
 		"override.expired":      "Override Expired",
 	}

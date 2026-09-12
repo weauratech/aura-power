@@ -20,13 +20,15 @@ import (
 type recordingSender struct {
 	mu     sync.Mutex
 	events []Event
+	urls   []string
 }
 
 func (s *recordingSender) Type() string { return "generic" }
-func (s *recordingSender) Send(_ context.Context, _ string, event Event) error {
+func (s *recordingSender) Send(_ context.Context, url string, event Event) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.events = append(s.events, event)
+	s.urls = append(s.urls, url)
 	return nil
 }
 
@@ -72,6 +74,24 @@ func TestAcceptanceNotificationResolvesSecretURL(t *testing.T) {
 	dispatcher.dispatchBatch(context.Background(), []Event{{Action: "workload.restored", Target: TargetRef{Namespace: "fixture", Name: "api", Kind: "Deployment"}}})
 	if len(sender.events) != 1 {
 		t.Fatalf("secret-backed enabled channel delivered %d notifications, want 1", len(sender.events))
+	}
+	if sender.urls[0] != "https://example.test/hook" {
+		t.Fatalf("secret-backed channel used unexpected URL %q", sender.urls[0])
+	}
+}
+
+func TestAcceptanceNotificationCannotResolveSecretFromAnotherNamespace(t *testing.T) {
+	channel := &v1alpha1.PowerNotificationChannel{
+		ObjectMeta: metav1.ObjectMeta{Name: "secret-backed", Namespace: "aura-system"},
+		Spec: v1alpha1.PowerNotificationChannelSpec{
+			Type: "generic", Enabled: true, URLFrom: &v1alpha1.SecretKeyRef{Name: "webhook", Key: "url"},
+		},
+	}
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "webhook", Namespace: "another-namespace"}, Data: map[string][]byte{"url": []byte("https://example.test/hook")}}
+	dispatcher, sender := acceptanceDispatcher(t, channel, secret)
+	dispatcher.dispatchBatch(context.Background(), []Event{{Action: "workload.restored", Target: TargetRef{Namespace: "fixture", Name: "api", Kind: "Deployment"}}})
+	if len(sender.events) != 0 {
+		t.Fatalf("channel resolved a Secret outside its namespace: %+v", sender.events)
 	}
 }
 

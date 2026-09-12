@@ -86,7 +86,7 @@ func (a *AuditRecorder) Record(ctx context.Context, event ports.AuditEvent) erro
 // isNotifiableAction returns true for events that should trigger webhook notifications.
 func isNotifiableAction(action string) bool {
 	switch action {
-	case "workload.powered_down", "workload.restored", "workload.execution_error",
+	case "workload.powered_down", "workload.restored", "execution.error",
 		"override.created", "override.expired", "policy.created", "policy.deleted":
 		return true
 	default:

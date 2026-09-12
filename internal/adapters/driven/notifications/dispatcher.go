@@ -2,10 +2,14 @@ package notifications
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -76,14 +80,21 @@ func (d *Dispatcher) Enqueue(event Event) {
 	}
 }
 
-// Run starts the dispatcher loop. Blocks until context is cancelled.
-// Uses batching: collects events for 5 seconds, then dispatches grouped.
+// Start runs the dispatcher under the controller manager after cache readiness.
+// Only the elected leader dispatches, preventing duplicate deliveries when the
+// controller has multiple replicas.
+func (d *Dispatcher) Start(ctx context.Context) error {
+	d.Run(ctx)
+	return nil
+}
+
+// NeedLeaderElection makes Dispatcher a leader-only manager runnable.
+func (d *Dispatcher) NeedLeaderElection() bool { return true }
+
+// Run starts the dispatcher loop and blocks until context is cancelled. It
+// batches events received within five seconds into one delivery per channel.
 func (d *Dispatcher) Run(ctx context.Context) {
 	log := ctrl.Log.WithName("notifications")
-
-	// Wait for cache to sync before processing
-	log.Info("notification dispatcher waiting for readiness...")
-	time.Sleep(15 * time.Second)
 	log.Info("notification dispatcher started (batch mode: 5s window)")
 
 	for {
@@ -174,25 +185,26 @@ func (d *Dispatcher) dispatchBatch(ctx context.Context, batch []Event) {
 		}
 
 		// For batch, throttle by first target (representative)
-		key := ch.Name + "/batch/" + channelEvents[0].Action
+		key := batchThrottleKey(ch, channelEvents)
 		d.mu.Lock()
 		lastSent, exists := d.throttle[key]
 		if exists && time.Since(lastSent) < throttleDur {
 			d.mu.Unlock()
 			continue
 		}
-		d.throttle[key] = time.Now()
 		d.mu.Unlock()
 
 		// Resolve URL
-		url := ch.Spec.URL
-		if url == "" {
+		url, err := d.resolveWebhookURL(ctx, ch)
+		if err != nil {
+			d.recordFailure(ctx, ch, "resolve webhook URL", err, "")
 			continue
 		}
 
 		// Find sender
 		sender, ok := d.senders[ch.Spec.Type]
 		if !ok {
+			d.recordFailure(ctx, ch, "select notification sender", fmt.Errorf("unsupported provider type %q", ch.Spec.Type), "")
 			continue
 		}
 
@@ -225,10 +237,12 @@ func (d *Dispatcher) dispatchBatch(ctx context.Context, batch []Event) {
 		}
 
 		if err := sender.Send(ctx, url, batchEvent); err != nil {
-			log.Error(err, "notification send failed", "channel", ch.Name)
-			ch.Status.TotalErrors++
-			ch.Status.LastError = err.Error()
+			d.recordFailure(ctx, ch, "send notification", err, url)
+			continue
 		} else {
+			d.mu.Lock()
+			d.throttle[key] = time.Now()
+			d.mu.Unlock()
 			now := metav1.Now()
 			ch.Status.TotalSent++
 			ch.Status.LastNotification = &now
@@ -237,7 +251,7 @@ func (d *Dispatcher) dispatchBatch(ctx context.Context, batch []Event) {
 		}
 
 		if err := d.client.Status().Update(ctx, ch); err != nil {
-			log.Error(err, "failed to update channel status", "channel", ch.Name)
+			log.Error(err, "failed to update channel status", "channel", ch.Name, "namespace", ch.Namespace)
 		}
 	}
 }
@@ -282,33 +296,30 @@ func (d *Dispatcher) dispatch(ctx context.Context, event Event) {
 			d.mu.Unlock()
 			continue
 		}
-		d.throttle[key] = time.Now()
 		d.mu.Unlock()
 
 		// Resolve URL
-		url := ch.Spec.URL
-		if url == "" && ch.Spec.URLFrom != nil {
-			// TODO: resolve from Secret
-			log.Info("urlFrom not yet implemented, skipping", "channel", ch.Name)
-			continue
-		}
-		if url == "" {
+		url, err := d.resolveWebhookURL(ctx, ch)
+		if err != nil {
+			d.recordFailure(ctx, ch, "resolve webhook URL", err, "")
 			continue
 		}
 
 		// Find sender
 		sender, ok := d.senders[ch.Spec.Type]
 		if !ok {
-			log.Info("no sender for type", "type", ch.Spec.Type, "channel", ch.Name)
+			d.recordFailure(ctx, ch, "select notification sender", fmt.Errorf("unsupported provider type %q", ch.Spec.Type), "")
 			continue
 		}
 
 		// Send
 		if err := sender.Send(ctx, url, event); err != nil {
-			log.Error(err, "notification send failed", "channel", ch.Name, "type", ch.Spec.Type)
-			ch.Status.TotalErrors++
-			ch.Status.LastError = err.Error()
+			d.recordFailure(ctx, ch, "send notification", err, url)
+			continue
 		} else {
+			d.mu.Lock()
+			d.throttle[key] = time.Now()
+			d.mu.Unlock()
 			now := metav1.Now()
 			ch.Status.TotalSent++
 			ch.Status.LastNotification = &now
@@ -318,9 +329,62 @@ func (d *Dispatcher) dispatch(ctx context.Context, event Event) {
 
 		// Update status
 		if err := d.client.Status().Update(ctx, ch); err != nil {
-			log.Error(err, "failed to update channel status", "channel", ch.Name)
+			log.Error(err, "failed to update channel status", "channel", ch.Name, "namespace", ch.Namespace)
 		}
 	}
+}
+
+func (d *Dispatcher) resolveWebhookURL(ctx context.Context, channel *v1alpha1.PowerNotificationChannel) (string, error) {
+	if channel.Spec.URL != "" {
+		return channel.Spec.URL, nil
+	}
+	if channel.Spec.URLFrom == nil {
+		return "", fmt.Errorf("channel has neither url nor urlFrom configured")
+	}
+
+	var secret corev1.Secret
+	key := client.ObjectKey{Namespace: channel.Namespace, Name: channel.Spec.URLFrom.Name}
+	if err := d.client.Get(ctx, key, &secret); err != nil {
+		return "", fmt.Errorf("read referenced Secret %s/%s: %w", key.Namespace, key.Name, err)
+	}
+	value, ok := secret.Data[channel.Spec.URLFrom.Key]
+	if !ok {
+		return "", fmt.Errorf("referenced Secret %s/%s does not contain key %q", key.Namespace, key.Name, channel.Spec.URLFrom.Key)
+	}
+	url := strings.TrimSpace(string(value))
+	if url == "" {
+		return "", fmt.Errorf("referenced Secret %s/%s contains an empty key %q", key.Namespace, key.Name, channel.Spec.URLFrom.Key)
+	}
+	return url, nil
+}
+
+func (d *Dispatcher) recordFailure(ctx context.Context, channel *v1alpha1.PowerNotificationChannel, operation string, err error, secretURL string) {
+	safeErr := redactDeliveryError(err, secretURL)
+	ctrl.Log.WithName("notifications").Error(safeErr, "notification delivery failed",
+		"operation", operation, "channel", channel.Name, "namespace", channel.Namespace, "type", channel.Spec.Type)
+	channel.Status.TotalErrors++
+	channel.Status.LastError = safeErr.Error()
+	if updateErr := d.client.Status().Update(ctx, channel); updateErr != nil {
+		ctrl.Log.WithName("notifications").Error(updateErr, "failed to update channel failure status", "channel", channel.Name, "namespace", channel.Namespace)
+	}
+}
+
+func redactDeliveryError(err error, secretURL string) error {
+	message := err.Error()
+	if secretURL != "" {
+		message = strings.ReplaceAll(message, secretURL, "<redacted>")
+	}
+	return fmt.Errorf("%s", message)
+}
+
+func batchThrottleKey(channel *v1alpha1.PowerNotificationChannel, events []Event) string {
+	identities := make([]string, 0, len(events))
+	for _, event := range events {
+		identities = append(identities, eventIdentity(event))
+	}
+	sort.Strings(identities)
+	digest := sha256.Sum256([]byte(strings.Join(identities, "\n")))
+	return fmt.Sprintf("%s/%s/batch/%x", channel.Namespace, channel.Name, digest[:16])
 }
 
 func eventIdentity(event Event) string {

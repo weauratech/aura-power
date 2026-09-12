@@ -3,10 +3,13 @@ package notifications
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/weauratech/aura-power/api/v1alpha1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -31,6 +34,9 @@ func testDispatcher(t *testing.T, objects ...client.Object) (*Dispatcher, client
 	t.Helper()
 	scheme := runtime.NewScheme()
 	if err := v1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
 	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&v1alpha1.PowerNotificationChannel{}).WithObjects(objects...).Build()
@@ -95,5 +101,53 @@ func TestDispatchBatchDeduplicatesExactEvents(t *testing.T) {
 	d.dispatchBatch(context.Background(), []Event{event, event})
 	if len(sender.events) != 1 || sender.events[0].Reason != "fixture" {
 		t.Fatalf("exact duplicate was not collapsed: %+v", sender.events)
+	}
+}
+
+func TestDispatchResolvesSecretInChannelNamespaceAndRedactsFailure(t *testing.T) {
+	const webhookURL = "https://hooks.example.test/private-token"
+	channel := &v1alpha1.PowerNotificationChannel{
+		ObjectMeta: metav1.ObjectMeta{Name: "secret", Namespace: "aura-system"},
+		Spec: v1alpha1.PowerNotificationChannelSpec{
+			Type: "fixture", Enabled: true, URLFrom: &v1alpha1.SecretKeyRef{Name: "webhook", Key: "url"},
+		},
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "webhook", Namespace: "aura-system"},
+		Data:       map[string][]byte{"url": []byte(webhookURL)},
+	}
+	d, c, sender := testDispatcher(t, channel, secret)
+	sender.err = errors.New("POST " + webhookURL + ": controlled failure")
+	d.dispatch(context.Background(), Event{Action: "execution.error", Target: TargetRef{Namespace: "team-a", Name: "api", Kind: "Deployment", UID: "uid-1"}})
+
+	var got v1alpha1.PowerNotificationChannel
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(channel), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.TotalErrors != 1 || got.Status.TotalSent != 0 {
+		t.Fatalf("unexpected failure counters: %+v", got.Status)
+	}
+	if strings.Contains(got.Status.LastError, webhookURL) || !strings.Contains(got.Status.LastError, "<redacted>") {
+		t.Fatalf("secret webhook URL was not redacted: %q", got.Status.LastError)
+	}
+	key := channel.Name + "/" + eventIdentity(Event{Action: "execution.error", Target: TargetRef{Namespace: "team-a", Name: "api", Kind: "Deployment", UID: "uid-1"}})
+	if _, throttled := d.throttle[key]; throttled {
+		t.Fatal("failed delivery was incorrectly throttled")
+	}
+}
+
+func TestRunHonorsCancellation(t *testing.T) {
+	d, _, _ := testDispatcher(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		d.Run(ctx)
+		close(done)
+	}()
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("dispatcher did not stop during readiness wait")
 	}
 }

@@ -113,7 +113,10 @@ func main() {
 	go runAuditCleanup(ctx, auditRecorder)
 
 	// Start notification dispatcher (background)
-	go notifDispatcher.Run(ctx)
+	if err := mgr.Add(notifDispatcher); err != nil {
+		log.Error(err, "unable to add notification dispatcher")
+		os.Exit(1)
+	}
 
 	// Start discovery loop (as manager runnable — starts after cache is synced)
 	discoverer := kubernetes.NewDiscoverer(k8sClient)

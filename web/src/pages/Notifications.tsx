@@ -40,8 +40,14 @@ function useNotificationChannels() {
     queryFn: async () => {
       const res = await fetch('/api/v1/notification-channels', { credentials: 'same-origin' });
       if (!res.ok) {
-        if (res.status === 504) return { items: [], count: 0 };
-        throw new Error('Failed to load channels');
+        let detail = '';
+        try {
+          const payload = await res.json();
+          detail = typeof payload?.error === 'string' ? payload.error : '';
+        } catch {
+          // The status code still gives operators an actionable failure signal.
+        }
+        throw new Error(detail ? `Failed to load channels: ${detail}` : `Failed to load channels (HTTP ${res.status})`);
       }
       const data = await res.json();
       return { items: data.items || [], count: data.count || 0 };
@@ -54,7 +60,7 @@ function useNotificationChannels() {
 const EVENT_OPTIONS = [
   'workload.powered_down',
   'workload.restored',
-  'workload.execution_error',
+  'execution.error',
   'override.created',
   'override.expired',
 ];
@@ -170,7 +176,9 @@ export function Notifications() {
       </Stack>
 
       {isLoading ? (
-        <Skeleton variant="rounded" height={200} />
+        <Box role="status" aria-label="Loading notification channels">
+          <Skeleton variant="rounded" height={200} />
+        </Box>
       ) : !data?.items?.length ? (
         <EmptyState
           title="No notification channels"
