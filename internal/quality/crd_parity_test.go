@@ -1,4 +1,4 @@
-package crds
+package quality
 
 import (
 	"os"
@@ -16,8 +16,8 @@ func TestNamespaceGroupsSchemaParity(t *testing.T) {
 		name := name
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			chart := readCRD(t, name+".yaml")
-			config := readCRD(t, filepath.Join("..", "..", "..", "config", "crd", "bases", "power.aura.sh_"+name+".yaml"))
+			chart := readCRD(t, filepath.Join("..", "..", "charts", "aura-power", "crds", name+".yaml"))
+			config := readCRD(t, filepath.Join("..", "..", "config", "crd", "bases", "power.aura.sh_"+name+".yaml"))
 
 			for source, crd := range map[string]extensionsv1.CustomResourceDefinition{"chart": chart, "config": config} {
 				schema := crd.Spec.Versions[0].Schema.OpenAPIV3Schema
