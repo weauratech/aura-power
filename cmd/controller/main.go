@@ -40,17 +40,18 @@ func main() {
 
 	// Configuration
 	guardrailConfig := domain.DefaultGuardrailConfig()
-	// Allow overriding system namespaces via env (comma-separated)
-	if extra := os.Getenv("EXTRA_SYSTEM_NAMESPACES"); extra != "" {
-		for _, ns := range splitAndTrim(extra) {
-			guardrailConfig.SystemNamespaces = append(guardrailConfig.SystemNamespaces, ns)
-		}
+	if configured := os.Getenv("SYSTEM_NAMESPACES"); configured != "" {
+		guardrailConfig.SystemNamespaces = splitAndTrim(configured)
+	} else if extra := os.Getenv("EXTRA_SYSTEM_NAMESPACES"); extra != "" {
+		guardrailConfig.SystemNamespaces = append(guardrailConfig.SystemNamespaces, splitAndTrim(extra)...)
 	}
 	leaderElectionID := getEnvOrDefault("LEADER_ELECTION_ID", "aura-power-controller-leader.power.aura.sh")
+	leaderElectionEnabled := envBool("LEADER_ELECTION_ENABLED", true)
+	controlNamespace := getEnvOrDefault("CONTROL_NAMESPACE", "aura-system")
 
 	managerOptions := ctrl.Options{
 		Scheme:                 scheme,
-		LeaderElection:         true,
+		LeaderElection:         leaderElectionEnabled,
 		LeaderElectionID:       leaderElectionID,
 		HealthProbeBindAddress: ":8081",
 	}
@@ -82,7 +83,7 @@ func main() {
 	// Create driven adapters
 	k8sClient := mgr.GetClient()
 	executor := kubernetes.NewExecutor(k8sClient)
-	auditRecorder := kubernetes.NewAuditRecorderWithReader(k8sClient, mgr.GetAPIReader(), mgr.GetEventRecorderFor("aura-power"), "aura-system")
+	auditRecorder := kubernetes.NewAuditRecorderWithReader(k8sClient, mgr.GetAPIReader(), mgr.GetEventRecorderFor("aura-power"), controlNamespace)
 	metricsExporter := observability.NewPrometheusExporter()
 
 	// Create notification dispatcher
@@ -159,7 +160,7 @@ func main() {
 		Discoverer: discoverer,
 		Config: background.DiscoveryConfig{
 			Interval:         durationEnv("DISCOVERY_INTERVAL", 60*time.Second),
-			Namespace:        "aura-system",
+			Namespace:        controlNamespace,
 			SystemNamespaces: guardrailConfig.SystemNamespaces,
 			OptInAnnotation:  guardrailConfig.OptInAnnotation,
 			ExemptAnnotation: guardrailConfig.ExemptAnnotation,
@@ -171,7 +172,7 @@ func main() {
 	}
 
 	// Start manager (blocking)
-	log.Info("starting aura-power-controller", "leaderElection", leaderElectionID)
+	log.Info("starting aura-power-controller", "leaderElection", leaderElectionEnabled, "leaderElectionID", leaderElectionID, "controlNamespace", controlNamespace)
 	if err := mgr.Start(ctx); err != nil {
 		log.Error(err, "problem running manager")
 		os.Exit(1)

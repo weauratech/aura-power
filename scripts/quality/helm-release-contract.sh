@@ -17,4 +17,31 @@ rg -q 'VERSION=\$\{TAG#v\}' .github/workflows/release.yaml
 rg -q 'IMAGE_SERVER.*\$\{VERSION\}' .github/workflows/release.yaml
 rg -q 'IMAGE_CONTROLLER.*\$\{VERSION\}' .github/workflows/release.yaml
 
+default_render="$(mktemp)"
+ephemeral_render="$(mktemp)"
+external_secret_render="$(mktemp)"
+trap 'rm -f "$default_render" "$ephemeral_render" "$external_secret_render"' EXIT
+
+helm template aura-power charts/aura-power >"$default_render"
+helm template aura-power charts/aura-power --set server.persistence.enabled=false >"$ephemeral_render"
+helm template aura-power charts/aura-power --set server.auth.existingSecret=managed-auth >"$external_secret_render"
+
+rg -q 'name: ACCESS_TOKEN_TTL' "$default_render"
+rg -q 'name: REFRESH_TOKEN_TTL' "$default_render"
+rg -q 'name: CONTROL_NAMESPACE' "$default_render"
+rg -q 'name: LEADER_ELECTION_ENABLED' "$default_render"
+rg -q 'name: SYSTEM_NAMESPACES' "$default_render"
+rg -U -q 'name: data\n[[:space:]]+emptyDir:' "$ephemeral_render"
+if rg -q '^kind: Secret$' "$external_secret_render"; then
+  echo "server.auth.existingSecret unexpectedly rendered a managed Secret" >&2
+  exit 1
+fi
+rg -U -q 'name: managed-auth\n[[:space:]]+key: jwt-secret' "$external_secret_render"
+rg -U -q 'name: managed-auth\n[[:space:]]+key: admin-password' "$external_secret_render"
+
+if helm template aura-power charts/aura-power --set server.replicas=2 >/dev/null 2>&1; then
+  echo "server.replicas=2 must be rejected while SQLite is pod-local" >&2
+  exit 1
+fi
+
 echo "Helm/release contract checks passed"

@@ -17,10 +17,18 @@ import (
 
 // ServerConfig holds configuration for the API server.
 type ServerConfig struct {
-	Port            string
-	GuardrailConfig domain.GuardrailConfig
-	CostConfig      domain.CostConfig
-	PanelAssets     embed.FS
+	Port             string
+	GuardrailConfig  domain.GuardrailConfig
+	CostConfig       domain.CostConfig
+	PanelAssets      embed.FS
+	ControlNamespace string
+}
+
+func (s *Server) controlNamespace() string {
+	if s.config.ControlNamespace != "" {
+		return s.config.ControlNamespace
+	}
+	return "aura-system"
 }
 
 // Server is the Gin HTTP server serving REST API and panel.

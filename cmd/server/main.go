@@ -67,6 +67,9 @@ func main() {
 	jwtSecret := getEnvOrDefault("JWT_SECRET", "")
 	adminUser := getEnvOrDefault("ADMIN_USERNAME", "admin")
 	adminPass := getEnvOrDefault("ADMIN_PASSWORD", "")
+	accessTokenTTL := durationEnv("ACCESS_TOKEN_TTL", time.Hour)
+	refreshTokenTTL := durationEnv("REFRESH_TOKEN_TTL", 7*24*time.Hour)
+	controlNamespace := getEnvOrDefault("CONTROL_NAMESPACE", "aura-system")
 
 	if jwtSecret == "" {
 		slog.Error("JWT_SECRET is required")
@@ -111,8 +114,8 @@ func main() {
 	// JWT service
 	jwtService := auth.NewJWTService(auth.JWTConfig{
 		SecretKey:       jwtSecret,
-		AccessTokenTTL:  time.Hour,
-		RefreshTokenTTL: 7 * 24 * time.Hour,
+		AccessTokenTTL:  accessTokenTTL,
+		RefreshTokenTTL: refreshTokenTTL,
 	})
 
 	// Create initial admin if configured (ensure role is always admin on startup)
@@ -137,10 +140,11 @@ func main() {
 
 	// Create API server
 	apiServer := api.NewServer(k8sClient, nil, api.ServerConfig{
-		Port:            port,
-		GuardrailConfig: guardrailConfig,
-		CostConfig:      costConfig,
-		PanelAssets:     panelAssets,
+		Port:             port,
+		GuardrailConfig:  guardrailConfig,
+		CostConfig:       costConfig,
+		PanelAssets:      panelAssets,
+		ControlNamespace: controlNamespace,
 	})
 
 	// Register auth (mandatory in v2.0)
@@ -185,4 +189,14 @@ func getEnvOrDefault(key, defaultVal string) string {
 		return v
 	}
 	return defaultVal
+}
+
+func durationEnv(key string, fallback time.Duration) time.Duration {
+	if value := os.Getenv(key); value != "" {
+		if parsed, err := time.ParseDuration(value); err == nil && parsed > 0 {
+			return parsed
+		}
+		slog.Warn("invalid duration; using default", "environmentVariable", key, "value", value, "default", fallback)
+	}
+	return fallback
 }

@@ -56,10 +56,14 @@ spec:
               protocol: TCP
             {{- end }}
           env:
-            {{- if .Values.controller.leaderElection.enabled }}
+            - name: LEADER_ELECTION_ENABLED
+              value: {{ .Values.controller.leaderElection.enabled | quote }}
             - name: LEADER_ELECTION_ID
               value: {{ .Values.controller.leaderElection.id | quote }}
-            {{- end }}
+            - name: CONTROL_NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+            - name: SYSTEM_NAMESPACES
+              value: {{ append .Values.controller.config.systemNamespaceBlocklist .Release.Namespace | uniq | join "," | quote }}
             - name: AUDIT_RETENTION_DAYS
               value: {{ .Values.controller.config.auditRetentionDays | default 7 | quote }}
             - name: WEBHOOK_ENABLED

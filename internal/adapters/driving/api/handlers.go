@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/weauratech/aura-power/api/v1alpha1"
@@ -325,6 +326,7 @@ func (s *Server) handleExplainTarget(c *gin.Context) {
 
 func (s *Server) handlePreviewPolicy(c *gin.Context) {
 	ctx := c.Request.Context()
+	namespace := c.DefaultQuery("namespace", s.controlNamespace())
 
 	// Parse policy from request body
 	var policySpec v1alpha1.PowerPolicySpec
@@ -339,12 +341,6 @@ func (s *Server) handlePreviewPolicy(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	resolvedScope, err := selection.ResolveScope(ctx, s.client, c.DefaultQuery("namespace", "aura-system"), policySpec.Scope)
-	if err != nil {
-		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
-		return
-	}
-
 	var policies v1alpha1.PowerPolicyList
 	if err := s.client.List(ctx, &policies); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -357,35 +353,47 @@ func (s *Server) handlePreviewPolicy(c *gin.Context) {
 		return
 	}
 
-	// Count affected/blocked
-	affectedOff := 0
-	affectedOn := 0
-	blocked := 0
-
-	for _, t := range targets.Items {
-		if !domain.MatchesScope(selection.Target(&t), resolvedScope) {
-			continue
-		}
-
-		if t.Status.Blocked {
-			blocked++
-		} else if policySpec.Schedule.DesiredState == "off" {
-			affectedOff++
-		} else {
-			affectedOn++
-		}
+	proposed := v1alpha1.PowerPolicy{ObjectMeta: metav1.ObjectMeta{Name: "preview", Namespace: namespace, CreationTimestamp: metav1.Now()}, Spec: policySpec}
+	proposedScope, err := resolvePreviewPolicyScope(ctx, s.client, namespace, &proposed)
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+		return
 	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"affectedOn":    affectedOn,
-		"affectedOff":   affectedOff,
-		"blocked":       blocked,
-		"totalAffected": affectedOn + affectedOff + blocked,
-	})
+	domainProposed := previewPolicy(&proposed)
+	domainProposed.Scope = proposedScope
+	domainPolicies := make([]domain.PolicySpec, 0, len(policies.Items))
+	for i := range policies.Items {
+		resolved, err := resolvePreviewPolicyScope(ctx, s.client, policies.Items[i].Namespace, &policies.Items[i])
+		if err != nil {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+			return
+		}
+		converted := previewPolicy(&policies.Items[i])
+		converted.Scope = resolved
+		domainPolicies = append(domainPolicies, converted)
+	}
+	domainOverrides := make([]domain.OverrideSpec, 0, len(overrides.Items))
+	for i := range overrides.Items {
+		resolved, err := resolvePreviewOverrideScope(ctx, s.client, overrides.Items[i].Namespace, &overrides.Items[i])
+		if err != nil {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+			return
+		}
+		converted := previewOverride(&overrides.Items[i])
+		converted.Scope = resolved
+		domainOverrides = append(domainOverrides, converted)
+	}
+	domainTargets := make([]domain.Target, 0, len(targets.Items))
+	for i := range targets.Items {
+		domainTargets = append(domainTargets, previewTarget(&targets.Items[i]))
+	}
+	result := domain.PreviewPolicy(domainProposed, domainTargets, domainPolicies, domainOverrides, s.config.GuardrailConfig, time.Now())
+	c.JSON(http.StatusOK, newPreviewResponse(result))
 }
 
 func (s *Server) handlePreviewOverride(c *gin.Context) {
 	ctx := c.Request.Context()
+	namespace := c.DefaultQuery("namespace", s.controlNamespace())
 
 	var overrideSpec v1alpha1.PowerOverrideSpec
 	if err := c.ShouldBindJSON(&overrideSpec); err != nil {
@@ -398,23 +406,52 @@ func (s *Server) handlePreviewOverride(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	resolvedScope, err := selection.ResolveScope(ctx, s.client, c.DefaultQuery("namespace", "aura-system"), overrideSpec.Scope)
+	var policies v1alpha1.PowerPolicyList
+	if err := s.client.List(ctx, &policies); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	var overrides v1alpha1.PowerOverrideList
+	if err := s.client.List(ctx, &overrides); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	proposed := v1alpha1.PowerOverride{ObjectMeta: metav1.ObjectMeta{Name: "preview", Namespace: namespace, CreationTimestamp: metav1.Now()}, Spec: overrideSpec}
+	proposedScope, err := resolvePreviewOverrideScope(ctx, s.client, namespace, &proposed)
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
 		return
 	}
-
-	affected := 0
-	for _, t := range targets.Items {
-		if domain.MatchesScope(selection.Target(&t), resolvedScope) {
-			affected++
+	domainProposed := previewOverride(&proposed)
+	domainProposed.Scope = proposedScope
+	domainPolicies := make([]domain.PolicySpec, 0, len(policies.Items))
+	for i := range policies.Items {
+		resolved, err := resolvePreviewPolicyScope(ctx, s.client, policies.Items[i].Namespace, &policies.Items[i])
+		if err != nil {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+			return
 		}
+		converted := previewPolicy(&policies.Items[i])
+		converted.Scope = resolved
+		domainPolicies = append(domainPolicies, converted)
 	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"state":         overrideSpec.State,
-		"totalAffected": affected,
-	})
+	domainOverrides := make([]domain.OverrideSpec, 0, len(overrides.Items))
+	for i := range overrides.Items {
+		resolved, err := resolvePreviewOverrideScope(ctx, s.client, overrides.Items[i].Namespace, &overrides.Items[i])
+		if err != nil {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+			return
+		}
+		converted := previewOverride(&overrides.Items[i])
+		converted.Scope = resolved
+		domainOverrides = append(domainOverrides, converted)
+	}
+	domainTargets := make([]domain.Target, 0, len(targets.Items))
+	for i := range targets.Items {
+		domainTargets = append(domainTargets, previewTarget(&targets.Items[i]))
+	}
+	result := domain.PreviewOverride(domainProposed, domainTargets, domainPolicies, domainOverrides, s.config.GuardrailConfig, time.Now())
+	c.JSON(http.StatusOK, newPreviewResponse(result))
 }
 
 func (s *Server) handleSavings(c *gin.Context) {
@@ -643,7 +680,7 @@ func (s *Server) handleCreatePolicy(c *gin.Context) {
 
 	// Ensure namespace is set
 	if policy.Namespace == "" {
-		policy.Namespace = "aura-system"
+		policy.Namespace = s.controlNamespace()
 	}
 	if _, err := selection.ResolveScope(ctx, s.client, policy.Namespace, policy.Spec.Scope); err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
@@ -720,7 +757,7 @@ func (s *Server) handleCreateOverride(c *gin.Context) {
 	}
 
 	if override.Namespace == "" {
-		override.Namespace = "aura-system"
+		override.Namespace = s.controlNamespace()
 	}
 	if _, err := selection.ResolveScope(ctx, s.client, override.Namespace, override.Spec.Scope); err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
@@ -792,7 +829,7 @@ func (s *Server) handleCreateNamespaceGroup(c *gin.Context) {
 	}
 
 	if group.Namespace == "" {
-		group.Namespace = "aura-system"
+		group.Namespace = s.controlNamespace()
 	}
 
 	if err := s.client.Create(ctx, &group); err != nil {
@@ -842,7 +879,7 @@ func (s *Server) handleCreateNotificationChannel(c *gin.Context) {
 	}
 
 	if channel.Namespace == "" {
-		channel.Namespace = "aura-system"
+		channel.Namespace = s.controlNamespace()
 	}
 
 	if err := s.client.Create(ctx, &channel); err != nil {
