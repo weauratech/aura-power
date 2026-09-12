@@ -114,6 +114,7 @@ self-signed fallback produces different certificate material in a fresh render.
 | `imagePullSecrets` | Image pull secrets | `[]` |
 | `serviceMonitor.enabled` | Create Prometheus ServiceMonitor | `false` |
 | `serviceMonitor.interval` | Scrape interval | `30s` |
+| `serviceMonitor.namespace` | Namespace in which to create ServiceMonitors | `""` |
 | `networkPolicy.enabled` | Create NetworkPolicies | `false` |
 | `networkPolicy.additionalServerEgressPorts` | Extra TCP egress ports for providers/webhooks | `[]` |
 

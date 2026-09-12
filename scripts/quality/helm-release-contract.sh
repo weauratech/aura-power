@@ -48,9 +48,11 @@ if helm template aura-power charts/aura-power --set controller.replicas=2 --set 
   exit 1
 fi
 
-observability_render="$(helm template aura-power charts/aura-power --set networkPolicy.enabled=true --set serviceMonitor.enabled=true)"
+observability_render="$(helm template aura-power charts/aura-power --namespace aura-system --set networkPolicy.enabled=true --set serviceMonitor.enabled=true --set serviceMonitor.namespace=monitoring)"
 grep -q 'port: 9003' <<<"$observability_render"
 [[ "$(grep -c '^kind: ServiceMonitor$' <<<"$observability_render")" -eq 2 ]]
+[[ "$(grep -c '^  namespace: monitoring$' <<<"$observability_render")" -eq 2 ]]
+[[ "$(grep -c '^      - aura-system$' <<<"$observability_render")" -eq 2 ]]
 
 external_webhook_render="$(helm template aura-power charts/aura-power --set webhook.enabled=true --set webhook.existingSecret=managed-webhook --set webhook.caBundle=Y2E=)"
 grep -q 'secretName: managed-webhook' <<<"$external_webhook_render"

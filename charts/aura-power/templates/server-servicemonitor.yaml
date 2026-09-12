@@ -3,17 +3,18 @@ apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
   name: {{ include "aura-power.fullname" . }}-server
+  {{- if .Values.serviceMonitor.namespace }}
+  namespace: {{ .Values.serviceMonitor.namespace }}
+  {{- end }}
   labels:
     {{- include "aura-power.labels" . | nindent 4 }}
     {{- with .Values.serviceMonitor.labels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
 spec:
-  {{- if .Values.serviceMonitor.namespace }}
   namespaceSelector:
     matchNames:
-      - {{ .Values.serviceMonitor.namespace }}
-  {{- end }}
+      - {{ .Release.Namespace }}
   selector:
     matchLabels:
       app.kubernetes.io/name: {{ include "aura-power.name" . }}
@@ -29,17 +30,18 @@ apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
   name: {{ include "aura-power.fullname" . }}-controller
+  {{- if .Values.serviceMonitor.namespace }}
+  namespace: {{ .Values.serviceMonitor.namespace }}
+  {{- end }}
   labels:
     {{- include "aura-power.labels" . | nindent 4 }}
     {{- with .Values.serviceMonitor.labels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
 spec:
-  {{- if .Values.serviceMonitor.namespace }}
   namespaceSelector:
     matchNames:
-      - {{ .Values.serviceMonitor.namespace }}
-  {{- end }}
+      - {{ .Release.Namespace }}
   selector:
     matchLabels:
       app.kubernetes.io/name: {{ include "aura-power.name" . }}
