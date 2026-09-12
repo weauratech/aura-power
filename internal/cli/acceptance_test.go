@@ -22,11 +22,13 @@ func isolatedCLI(t *testing.T) {
 	outputFormat = "json"
 	namespace = ""
 	httpClient = &http.Client{}
+	requestTimeout = 30 * time.Second
 	t.Cleanup(func() {
 		apiURL = ""
 		outputFormat = ""
 		namespace = ""
-		httpClient = &http.Client{Timeout: 30 * time.Second}
+		httpClient = &http.Client{}
+		requestTimeout = 30 * time.Second
 	})
 }
 

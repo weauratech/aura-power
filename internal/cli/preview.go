@@ -1,13 +1,14 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
-	"strings"
 
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 )
 
 func newPreviewCmd() *cobra.Command {
@@ -40,19 +41,20 @@ func runPreview(file string) error {
 		return err
 	}
 
-	resp, err := authenticatedRequest("POST", serverURL+"/api/v1/preview/policy", strings.NewReader(string(data)))
+	payload, err := policyPreviewJSON(data)
+	if err != nil {
+		return fmt.Errorf("invalid policy file %s: %w", file, err)
+	}
+
+	resp, err := authenticatedRequestBytes("POST", serverURL+"/api/v1/preview/policy", payload)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := requireStatus(resp, 200)
 	if err != nil {
-		return fmt.Errorf("failed to read response: %w", err)
-	}
-
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("server error (%d): %s", resp.StatusCode, string(body))
+		return err
 	}
 
 	if outputFormat == "json" {
@@ -74,4 +76,32 @@ func runPreview(file string) error {
 	fmt.Println()
 
 	return nil
+}
+
+// policyPreviewJSON accepts the documented YAML (or JSON) representation. A
+// full PowerPolicy resource is reduced to its spec because the preview endpoint
+// consumes PowerPolicySpec; a spec-only document is passed through unchanged.
+func policyPreviewJSON(data []byte) ([]byte, error) {
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	var document map[string]any
+	if err := decoder.Decode(&document); err != nil {
+		return nil, err
+	}
+	if len(document) == 0 {
+		return nil, fmt.Errorf("policy document is empty")
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return nil, fmt.Errorf("multiple YAML documents are not supported")
+		}
+		return nil, err
+	}
+	if spec, ok := document["spec"]; ok {
+		if _, ok := spec.(map[string]any); !ok {
+			return nil, fmt.Errorf("spec must be an object")
+		}
+		return json.Marshal(spec)
+	}
+	return json.Marshal(document)
 }

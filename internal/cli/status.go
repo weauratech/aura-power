@@ -3,7 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
-	"io"
+	"net/url"
 	"os"
 	"text/tabwriter"
 
@@ -32,29 +32,28 @@ func runStatus(stateFilter string) error {
 		return err
 	}
 
-	endpoint := serverURL + "/api/v1/targets"
-	sep := "?"
+	endpoint, err := url.Parse(serverURL + "/api/v1/targets")
+	if err != nil {
+		return fmt.Errorf("invalid server URL: %w", err)
+	}
+	query := endpoint.Query()
 	if namespace != "" {
-		endpoint += sep + "namespace=" + namespace
-		sep = "&"
+		query.Set("namespace", namespace)
 	}
 	if stateFilter != "" {
-		endpoint += sep + "state=" + stateFilter
+		query.Set("state", stateFilter)
 	}
+	endpoint.RawQuery = query.Encode()
 
-	resp, err := authenticatedGet(endpoint)
+	resp, err := authenticatedGet(endpoint.String())
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := requireStatus(resp, 200)
 	if err != nil {
-		return fmt.Errorf("failed to read response: %w", err)
-	}
-
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("server error (%d): %s", resp.StatusCode, string(body))
+		return err
 	}
 
 	if outputFormat == "json" {
@@ -72,7 +71,7 @@ func runStatus(stateFilter string) error {
 				} `json:"targetRef"`
 			} `json:"spec"`
 			Status struct {
-				DesiredState string `json:"desiredState"`
+				DesiredState  string `json:"desiredState"`
 				ObservedState struct {
 					PowerState string `json:"powerState"`
 				} `json:"observedState"`

@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"time"
+
 	"github.com/spf13/cobra"
 )
 
@@ -28,6 +30,7 @@ Use 'aura-power login --server <URL>' to authenticate with the server.`,
 	cmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "", "Output format: json, yaml (default: human-readable)")
 	cmd.PersistentFlags().StringVarP(&namespace, "namespace", "n", "", "Filter by namespace")
 	cmd.PersistentFlags().StringVar(&apiURL, "server-url", "", "Server URL (overrides stored config)")
+	cmd.PersistentFlags().DurationVar(&requestTimeout, "request-timeout", 30*time.Second, "Timeout for each server request")
 
 	// Auth commands
 	cmd.AddCommand(newLoginCmd())

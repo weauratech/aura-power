@@ -2,8 +2,9 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
+	"net/http"
 	"net/url"
 	"strings"
 
@@ -56,16 +57,13 @@ func runExplain(target, kind, uid string) error {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := requireStatus(resp, 200)
 	if err != nil {
-		return fmt.Errorf("failed to read response: %w", err)
-	}
-
-	if resp.StatusCode == 404 {
-		return fmt.Errorf("target %s/%s not found", ns, name)
-	}
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("server error (%d): %s", resp.StatusCode, string(body))
+		var statusErr *HTTPStatusError
+		if errors.As(err, &statusErr) && statusErr.StatusCode == http.StatusNotFound {
+			return fmt.Errorf("target %s/%s not found: %w", ns, name, err)
+		}
+		return err
 	}
 
 	if outputFormat == "json" {

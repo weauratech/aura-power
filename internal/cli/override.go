@@ -3,7 +3,6 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"strings"
 	"time"
 
@@ -66,7 +65,7 @@ func runOverrideCreate(target, kind, uid, state, durationStr, reason, ref string
 	// Parse target
 	parts := strings.SplitN(target, "/", 2)
 	var namespaces []string
-	var targetRefs []map[string]string
+	var targetRefs []overrideTargetReference
 	if len(parts) == 2 {
 		if kind == "" {
 			return fmt.Errorf("kind is required when target identifies a workload")
@@ -74,11 +73,7 @@ func runOverrideCreate(target, kind, uid, state, durationStr, reason, ref string
 		if !validWorkloadKind(kind) {
 			return fmt.Errorf("invalid workload kind %q", kind)
 		}
-		targetRef := map[string]string{"namespace": parts[0], "name": parts[1], "kind": kind}
-		if uid != "" {
-			targetRef["uid"] = uid
-		}
-		targetRefs = []map[string]string{targetRef}
+		targetRefs = []overrideTargetReference{{Namespace: parts[0], Name: parts[1], Kind: kind, UID: uid}}
 	} else {
 		namespaces = []string{parts[0]}
 		if kind != "" || uid != "" {
@@ -98,51 +93,41 @@ func runOverrideCreate(target, kind, uid, state, durationStr, reason, ref string
 	}
 
 	expiresAt := time.Now().Add(dur).Format(time.RFC3339)
-	scope := map[string]interface{}{}
-	if len(namespaces) > 0 {
-		scope["namespaces"] = namespaces
-	}
-	if len(targetRefs) > 0 {
-		scope["targetRefs"] = targetRefs
-	}
+	payload := overrideCreateRequest{}
+	payload.Metadata.GenerateName = "override-"
+	payload.Metadata.Namespace = "aura-system"
+	payload.Spec.Scope.Namespaces = namespaces
+	payload.Spec.Scope.TargetRefs = targetRefs
+	payload.Spec.State = state
+	payload.Spec.Priority = priority
+	payload.Spec.ExpiresAt = expiresAt
+	payload.Spec.Reason = reason
+	payload.Spec.Reference = ref
 
-	// Build JSON payload
-	payload := map[string]interface{}{
-		"metadata": map[string]interface{}{
-			"generateName": "override-",
-			"namespace":    "aura-system",
-		},
-		"spec": map[string]interface{}{
-			"scope":     scope,
-			"state":     state,
-			"priority":  priority,
-			"expiresAt": expiresAt,
-			"reason":    reason,
-			"reference": ref,
-		},
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("encode override: %w", err)
 	}
 
-	data, _ := json.Marshal(payload)
-
-	resp, err := authenticatedRequest("POST", serverURL+"/api/v1/overrides", strings.NewReader(string(data)))
+	resp, err := authenticatedRequestBytes("POST", serverURL+"/api/v1/overrides", data)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := requireStatus(resp, 201)
 	if err != nil {
-		return fmt.Errorf("failed to read response: %w", err)
+		return fmt.Errorf("failed to create override: %w", err)
 	}
 
-	if resp.StatusCode != 201 {
-		return fmt.Errorf("failed to create override (%d): %s", resp.StatusCode, string(body))
+	var result struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return fmt.Errorf("decode override response: %w", err)
 	}
 
-	var result map[string]interface{}
-	json.Unmarshal(body, &result)
-
-	fmt.Printf("Override created: %v\n", result["name"])
+	fmt.Printf("Override created: %s\n", result.Name)
 	fmt.Printf("  Target:    %s\n", target)
 	fmt.Printf("  State:     %s\n", state)
 	fmt.Printf("  Expires:   %s\n", expiresAt)
@@ -152,6 +137,31 @@ func runOverrideCreate(target, kind, uid, state, durationStr, reason, ref string
 	}
 
 	return nil
+}
+
+type overrideTargetReference struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	Kind      string `json:"kind"`
+	UID       string `json:"uid,omitempty"`
+}
+
+type overrideCreateRequest struct {
+	Metadata struct {
+		GenerateName string `json:"generateName"`
+		Namespace    string `json:"namespace"`
+	} `json:"metadata"`
+	Spec struct {
+		Scope struct {
+			Namespaces []string                  `json:"namespaces,omitempty"`
+			TargetRefs []overrideTargetReference `json:"targetRefs,omitempty"`
+		} `json:"scope"`
+		State     string `json:"state"`
+		Priority  int32  `json:"priority"`
+		ExpiresAt string `json:"expiresAt"`
+		Reason    string `json:"reason"`
+		Reference string `json:"reference,omitempty"`
+	} `json:"spec"`
 }
 
 func validWorkloadKind(kind string) bool {
