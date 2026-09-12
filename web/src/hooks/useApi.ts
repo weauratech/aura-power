@@ -169,6 +169,30 @@ export function useOverrides() {
   });
 }
 
+export interface PendingChange {
+  id: string;
+  userId: string;
+  username: string;
+  action: 'create' | 'update' | 'delete';
+  resourceKind: 'PowerPolicy' | 'PowerOverride';
+  resourceNamespace: string;
+  resourceName: string;
+  resourceVersion?: string;
+  payload: string;
+  status: 'pending' | 'approved' | 'rejected';
+  createdAt: string;
+  reviewedBy?: string;
+  reviewedAt?: string;
+}
+
+export function usePendingApprovals() {
+  return useQuery<{ items: PendingChange[]; count: number }>({
+    queryKey: ['pending'],
+    queryFn: () => fetchJSON('/pending'),
+    refetchInterval: 10000,
+  });
+}
+
 export interface PolicyResponse {
   metadata: { name: string; namespace: string; creationTimestamp: string };
   spec: {

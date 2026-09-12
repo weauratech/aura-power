@@ -36,10 +36,35 @@ describe('operational pages', () => {
     expect(screen.queryByText('No audit events')).not.toBeInTheDocument();
   });
 
-  it('labels the approvals screen honestly as a static empty state', () => {
+  it('distinguishes an empty approvals queue', async () => {
+    server.use(http.get(`${origin}/pending`, () => HttpResponse.json({ items: [], count: 0 })));
     renderUI(<PendingApprovals />);
     expect(screen.getByRole('heading', { name: 'Pending Approvals' })).toBeVisible();
-    expect(screen.getByRole('alert')).toHaveTextContent('No pending approval requests.');
+    expect(await screen.findByRole('alert')).toHaveTextContent('No pending approval requests.');
     expect(screen.queryByRole('button', { name: /approve|reject/i })).not.toBeInTheDocument();
+  });
+
+  it('shows approval details and removes a successfully approved request', async () => {
+    let pending = true;
+    server.use(
+      http.get(`${origin}/pending`, () => HttpResponse.json({
+        items: pending ? [{
+          id: 'change-1', userId: 'member-1', username: 'alice', action: 'update',
+          resourceKind: 'PowerPolicy', resourceNamespace: 'aura-system', resourceName: 'nightly',
+          resourceVersion: '42', payload: '{"spec":{"priority":10}}', status: 'pending', createdAt: new Date().toISOString(),
+        }] : [], count: pending ? 1 : 0,
+      })),
+      http.post(`${origin}/pending/change-1/approve`, () => {
+        pending = false;
+        return HttpResponse.json({ id: 'change-1', status: 'approved' });
+      }),
+    );
+    renderUI(<PendingApprovals />);
+    expect(await screen.findByText('nightly')).toBeVisible();
+    expect(screen.getByText(/revision 42/)).toBeVisible();
+    await userEvent.click(screen.getByText('Review payload'));
+    expect(screen.getByText('{"spec":{"priority":10}}')).toBeVisible();
+    await userEvent.click(screen.getByRole('button', { name: 'Approve nightly' }));
+    expect(await screen.findByText('No pending approval requests.')).toBeVisible();
   });
 });

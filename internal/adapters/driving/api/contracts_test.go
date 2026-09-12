@@ -50,7 +50,14 @@ func newContractFixture(t *testing.T, objects ...client.Object) *contractFixture
 }
 func (f *contractFixture) token(t *testing.T, role auth.Role) string {
 	t.Helper()
-	p, e := f.jwt.GenerateTokens(&auth.User{ID: auth.GenerateID(), Username: string(role), Role: role})
+	password := auth.GenerateID()
+	user, e := f.store.CreateUser(string(role)+"-"+auth.GenerateID(), password, role)
+	if e != nil {
+		// Some readiness tests intentionally close the store before building a
+		// token for unrelated malformed-request checks.
+		user = &auth.User{ID: auth.GenerateID(), Username: string(role), Role: role}
+	}
+	p, e := f.jwt.GenerateTokens(user)
 	if e != nil {
 		t.Fatal(e)
 	}

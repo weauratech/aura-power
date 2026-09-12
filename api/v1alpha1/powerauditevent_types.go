@@ -4,20 +4,31 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// AuditResourceReference identifies a workload or configuration resource
+// involved in an auditable decision.
+type AuditResourceReference struct {
+	Cluster    string `json:"cluster,omitempty"`
+	APIVersion string `json:"apiVersion,omitempty"`
+	Namespace  string `json:"namespace"`
+	Name       string `json:"name"`
+	Kind       string `json:"kind"`
+	UID        string `json:"uid,omitempty"`
+}
+
 // PowerAuditEventSpec defines a structured audit record.
 type PowerAuditEventSpec struct {
 	// Timestamp of the event.
 	Timestamp metav1.Time `json:"timestamp"`
 
 	// Action identifies the type of event.
-	// +kubebuilder:validation:Enum=policy.created;policy.modified;policy.deleted;override.created;override.expired;workload.powered_down;workload.restored;action.blocked;execution.error;divergence.detected;workload.opted_in
+	// +kubebuilder:validation:Enum=policy.created;policy.modified;policy.deleted;override.created;override.modified;override.deleted;override.expired;workload.powered_down;workload.restored;action.blocked;execution.error;divergence.detected;workload.opted_in
 	Action string `json:"action"`
 
 	// Actor identifies who/what triggered the event.
 	Actor string `json:"actor"`
 
-	// Target identifies the affected workload.
-	Target TargetReference `json:"target"`
+	// Target identifies the affected workload or configuration resource.
+	Target AuditResourceReference `json:"target"`
 
 	// Result of the action.
 	// +kubebuilder:validation:Enum=success;blocked;error

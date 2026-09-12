@@ -12,6 +12,7 @@ import (
 
 	v1alpha1 "github.com/weauratech/aura-power/api/v1alpha1"
 	"github.com/weauratech/aura-power/internal/adapters/driven/notifications"
+	"github.com/weauratech/aura-power/internal/core/domain"
 	"github.com/weauratech/aura-power/internal/ports"
 )
 
@@ -49,7 +50,7 @@ func (a *AuditRecorder) Record(ctx context.Context, event ports.AuditEvent) erro
 			Timestamp: metav1.NewTime(event.Timestamp),
 			Action:    string(event.Action),
 			Actor:     event.Actor,
-			Target: v1alpha1.TargetReference{
+			Target: v1alpha1.AuditResourceReference{
 				Cluster:    event.Target.Cluster,
 				APIVersion: event.Target.APIVersion,
 				Namespace:  event.Target.Namespace,
@@ -129,10 +130,14 @@ func (a *AuditRecorder) List(ctx context.Context, opts ports.AuditListOptions) (
 			Timestamp: item.Spec.Timestamp.Time,
 			Action:    ports.AuditAction(item.Spec.Action),
 			Actor:     item.Spec.Actor,
-			Target:    fromTargetRef(item.Spec.Target),
-			Result:    item.Spec.Result,
-			Reason:    item.Spec.Reason,
-			RuleName:  item.Spec.RuleName,
+			Target: domain.WorkloadRef{
+				Cluster: item.Spec.Target.Cluster, APIVersion: item.Spec.Target.APIVersion,
+				Namespace: item.Spec.Target.Namespace, Name: item.Spec.Target.Name,
+				Kind: domain.WorkloadKind(item.Spec.Target.Kind), UID: item.Spec.Target.UID,
+			},
+			Result:   item.Spec.Result,
+			Reason:   item.Spec.Reason,
+			RuleName: item.Spec.RuleName,
 		})
 		if opts.Limit > 0 && len(events) >= opts.Limit {
 			break
