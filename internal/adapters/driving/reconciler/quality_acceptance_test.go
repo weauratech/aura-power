@@ -63,6 +63,122 @@ func TestAcceptanceCTRL06StatusConflictCannotLoseSnapshotAndRepeatMutation(t *te
 	}
 }
 
+func TestAcceptanceArgoContentionDoesNotRepeatPowerDown(t *testing.T) {
+	s := runtime.NewScheme()
+	if err := v1alpha1.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+	replicas := int32(2)
+	target := &v1alpha1.PowerTarget{
+		ObjectMeta: metav1.ObjectMeta{Name: "fixtures--api", Namespace: "aura-system"},
+		Spec:       v1alpha1.PowerTargetSpec{TargetRef: v1alpha1.TargetReference{Namespace: "fixtures", Name: "api", Kind: "Deployment"}},
+		Status: v1alpha1.PowerTargetStatus{
+			ObservedState: v1alpha1.ObservedStateSpec{Replicas: replicas, PowerState: "on"},
+			Snapshot:      &v1alpha1.SnapshotSpec{Available: true, ReplicaCount: &replicas},
+		},
+	}
+	policy := &v1alpha1.PowerPolicy{ObjectMeta: metav1.ObjectMeta{Name: "off", Namespace: "aura-system"}, Spec: v1alpha1.PowerPolicySpec{Scope: v1alpha1.PolicyScope{Namespaces: []string{"fixtures"}}, Schedule: v1alpha1.PolicySchedule{DesiredState: "off"}}}
+	c := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&v1alpha1.PowerTarget{}).WithObjects(target, policy).Build()
+	executor := &countingExecutor{}
+	r := TargetReconciler{Client: c, Config: domain.DefaultGuardrailConfig(), Executor: executor, Audit: noopAudit{}, Metrics: noopMetrics{}}
+	req := ctrl.Request{NamespacedName: client.ObjectKey{Namespace: "aura-system", Name: "fixtures--api"}}
+
+	// The fake workload observation deliberately remains at two replicas, as it
+	// would when Argo CD self-heal immediately reclaims spec.replicas.
+	for i := 0; i < 3; i++ {
+		if _, err := r.Reconcile(context.Background(), req); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if executor.calls != 1 {
+		t.Fatalf("expected one power-down write under contention, got %d", executor.calls)
+	}
+	var got v1alpha1.PowerTarget
+	if err := c.Get(context.Background(), req.NamespacedName, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.Action == nil || got.Status.Action.Phase != "Contended" {
+		t.Fatalf("expected durable Contended action, got %+v", got.Status.Action)
+	}
+	if got.Annotations == nil {
+		got.Annotations = map[string]string{}
+	}
+	got.Annotations[retryActionAnnotation] = "ownership-fixed-1"
+	if err := c.Update(context.Background(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	if executor.calls != 2 {
+		t.Fatalf("explicit retry token should authorize exactly one new write, got %d total", executor.calls)
+	}
+}
+
+func TestAcceptanceActionIntentMustPersistBeforeMutation(t *testing.T) {
+	s := runtime.NewScheme()
+	if err := v1alpha1.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+	replicas := int32(2)
+	target := &v1alpha1.PowerTarget{
+		ObjectMeta: metav1.ObjectMeta{Name: "fixtures--api", Namespace: "aura-system"},
+		Spec:       v1alpha1.PowerTargetSpec{TargetRef: v1alpha1.TargetReference{Namespace: "fixtures", Name: "api", Kind: "Deployment"}},
+		Status: v1alpha1.PowerTargetStatus{
+			ObservedState: v1alpha1.ObservedStateSpec{Replicas: replicas, PowerState: "on"},
+			Snapshot:      &v1alpha1.SnapshotSpec{Available: true, ReplicaCount: &replicas},
+		},
+	}
+	policy := &v1alpha1.PowerPolicy{ObjectMeta: metav1.ObjectMeta{Name: "off", Namespace: "aura-system"}, Spec: v1alpha1.PowerPolicySpec{Scope: v1alpha1.PolicyScope{Namespaces: []string{"fixtures"}}, Schedule: v1alpha1.PolicySchedule{DesiredState: "off"}}}
+	base := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&v1alpha1.PowerTarget{}).WithObjects(target, policy).Build()
+	executor := &countingExecutor{}
+	r := TargetReconciler{Client: &statusFailingClient{Client: base}, Config: domain.DefaultGuardrailConfig(), Executor: executor, Audit: noopAudit{}, Metrics: noopMetrics{}}
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKey{Namespace: "aura-system", Name: "fixtures--api"}}); err != nil {
+		t.Fatal(err)
+	}
+	if executor.calls != 0 {
+		t.Fatalf("mutation executed before durable action intent: %d", executor.calls)
+	}
+}
+
+func TestAcceptanceArgoRestoredLiveStateIsNotOverwrittenByStaleSnapshot(t *testing.T) {
+	s := runtime.NewScheme()
+	if err := v1alpha1.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+	snapshotReplicas := int32(2)
+	now := metav1.Now()
+	target := &v1alpha1.PowerTarget{
+		ObjectMeta: metav1.ObjectMeta{Name: "fixtures--api", Namespace: "aura-system"},
+		Spec:       v1alpha1.PowerTargetSpec{TargetRef: v1alpha1.TargetReference{Namespace: "fixtures", Name: "api", Kind: "Deployment"}},
+		Status: v1alpha1.PowerTargetStatus{
+			ObservedState: v1alpha1.ObservedStateSpec{Replicas: 5, PowerState: "on"},
+			Snapshot:      &v1alpha1.SnapshotSpec{Available: true, ReplicaCount: &snapshotReplicas},
+			Action:        &v1alpha1.PowerActionStatus{DesiredState: "off", Phase: "Converged", AttemptedAt: &now},
+		},
+	}
+	policy := &v1alpha1.PowerPolicy{ObjectMeta: metav1.ObjectMeta{Name: "on", Namespace: "aura-system"}, Spec: v1alpha1.PowerPolicySpec{Scope: v1alpha1.PolicyScope{Namespaces: []string{"fixtures"}}, Schedule: v1alpha1.PolicySchedule{DesiredState: "on"}}}
+	c := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&v1alpha1.PowerTarget{}).WithObjects(target, policy).Build()
+	executor := &countingExecutor{}
+	r := TargetReconciler{Client: c, Config: domain.DefaultGuardrailConfig(), Executor: executor, Audit: noopAudit{}, Metrics: noopMetrics{}}
+	req := ctrl.Request{NamespacedName: client.ObjectKey{Namespace: "aura-system", Name: "fixtures--api"}}
+
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	if executor.restores != 0 {
+		t.Fatalf("existing Git-restored state must not be overwritten, got %d restore writes", executor.restores)
+	}
+	var got v1alpha1.PowerTarget
+	if err := c.Get(context.Background(), req.NamespacedName, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.Snapshot != nil || got.Status.Action == nil || got.Status.Action.DesiredState != "on" || got.Status.Action.Phase != "Converged" {
+		t.Fatalf("expected the live on-state to supersede the stale snapshot: %+v", got.Status)
+	}
+}
+
 type statusFailingClient struct{ client.Client }
 
 func (c *statusFailingClient) Status() client.SubResourceWriter { return failingStatusWriter{} }
@@ -79,7 +195,10 @@ func (failingStatusWriter) Patch(context.Context, client.Object, client.Patch, .
 	return errors.New("injected status failure")
 }
 
-type countingExecutor struct{ calls int }
+type countingExecutor struct {
+	calls    int
+	restores int
+}
 
 func (*countingExecutor) CaptureSnapshot(context.Context, domain.WorkloadRef) (*domain.Snapshot, error) {
 	replicas := int32(3)
@@ -89,7 +208,8 @@ func (e *countingExecutor) PowerDown(context.Context, domain.WorkloadRef) error 
 	e.calls++
 	return nil
 }
-func (*countingExecutor) Restore(context.Context, domain.WorkloadRef, domain.Snapshot) error {
+func (e *countingExecutor) Restore(context.Context, domain.WorkloadRef, domain.Snapshot) error {
+	e.restores++
 	return nil
 }
 

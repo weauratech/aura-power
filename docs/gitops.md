@@ -7,7 +7,7 @@ Aura Power operates safely alongside GitOps tools (ArgoCD, Flux, Helm) without c
 When Aura Power powers down a workload, it:
 1. Captures a snapshot of the current state (replica count)
 2. Scales `spec.replicas` to 0 (Deployments/StatefulSets) or sets `spec.suspend: true` (CronJobs)
-3. Annotates the workload with `aura.sh/last-action` and `aura.sh/snapshot-ref`
+3. Records the snapshot and durable action state on the corresponding `PowerTarget`
 
 This means the live state of `spec.replicas` will differ from what's in Git — which triggers GitOps sync warnings.
 
@@ -17,9 +17,17 @@ This means the live state of `spec.replicas` will differ from what's in Git — 
 
 ArgoCD detects that `spec.replicas` differs from the Git source and marks the Application as **OutOfSync**. If auto-sync is enabled, ArgoCD will immediately revert the scale-down.
 
-### Solution: ignoreDifferences
+### Supported field-ownership contract
 
-Add `ignoreDifferences` to your ArgoCD Application spec for workloads managed by Aura Power:
+Aura Power supports Argo CD coexistence only when the Application declares both
+parts of the field-ownership contract:
+
+1. `ignoreDifferences` delegates `/spec/replicas` or `/spec/suspend` to Aura Power.
+2. `RespectIgnoreDifferences=true` prevents sync and self-heal from applying those
+   delegated fields back to the Git value.
+
+Configure both on the Application (or on `spec.template.spec` in the
+ApplicationSet that generates it):
 
 ```yaml
 apiVersion: argoproj.io/v1alpha1
@@ -41,9 +49,18 @@ spec:
       kind: CronJob
       jsonPointers:
         - /spec/suspend
+  syncPolicy:
+    syncOptions:
+      - RespectIgnoreDifferences=true
 ```
 
-This tells ArgoCD to ignore replica count changes made by Aura Power.
+`ignoreDifferences` by itself only changes diff calculation and is not a
+supported configuration for self-heal. Complete Application and ApplicationSet
+examples are available in [`examples/gitops/argocd`](../examples/gitops/argocd).
+
+Argo CD applies `RespectIgnoreDifferences` only after the resource exists. Keep
+the replica/suspend value in Git for initial creation, allow the first sync to
+create the resource, and only then activate an Aura off policy.
 
 ### Per-Resource Override (more granular)
 
@@ -62,6 +79,9 @@ spec:
       namespace: staging
       jsonPointers:
         - /spec/replicas
+  syncPolicy:
+    syncOptions:
+      - RespectIgnoreDifferences=true
 ```
 
 ### Opt-In Annotation
@@ -86,9 +106,29 @@ metadata:
 
 ### Recommended Setup
 
-1. Add `ignoreDifferences` for `/spec/replicas` in your ArgoCD Application
-2. Add `aura.sh/power-eligible: "true"` to workloads you want Aura Power to manage
-3. Keep auto-sync enabled — ArgoCD will sync everything except replica count
+1. Add `ignoreDifferences` for the Aura-owned field in the Application or ApplicationSet source.
+2. Add `RespectIgnoreDifferences=true` to `syncPolicy.syncOptions` in the same source.
+3. Sync once and confirm that the workload exists before activating an off policy.
+4. Add `aura.sh/power-eligible: "true"` to workloads you want Aura Power to manage.
+5. Verify an unrelated Git change, such as an image update, still syncs.
+
+Aura Power persists an action intent before changing a workload. After one
+accepted write, a repeated divergence for the same desired state is reported as
+`status.action.phase: Contended`; the controller observes the resource without
+issuing the same mutation repeatedly. Correct the Application/ApplicationSet
+field ownership, then explicitly authorize one retry by changing the target's
+retry token:
+
+```bash
+kubectl annotate powertarget -n aura-system TARGET_NAME \
+  power.aura.sh/retry-action="$(date +%s)" --overwrite
+```
+
+`Applied` means the Kubernetes API accepted Aura's write; it does not yet mean
+the discovery loop observed the desired state. A fast self-heal can therefore
+move the operation from `Applied` to `Contended` on the next observation. A
+normal transition moves from `Applied` to `Converged` after discovery observes
+the delegated field.
 
 ## Flux
 
@@ -176,7 +216,7 @@ When opted in:
 
 | Tool | Default Behavior | Opt-In | Additional Config |
 |------|-----------------|--------|-------------------|
-| ArgoCD | Blocked | `aura.sh/power-eligible: "true"` | `ignoreDifferences` on `/spec/replicas` |
+| ArgoCD | Blocked | `aura.sh/power-eligible: "true"` | `ignoreDifferences` plus `RespectIgnoreDifferences=true` |
 | Flux | Blocked | `aura.sh/power-eligible: "true"` | Remove `/spec/replicas` from patch or use driftDetection ignore |
 | Helm | Blocked | `aura.sh/power-eligible: "true"` | None needed |
 | HPA | Blocked | `aura.sh/power-eligible: "true"` | None needed |

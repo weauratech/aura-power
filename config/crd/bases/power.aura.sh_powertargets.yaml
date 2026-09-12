@@ -34,5 +34,39 @@ spec:
                     kind: { type: string, enum: [Deployment, StatefulSet, CronJob] }
                     uid: { type: string }
             status:
+              properties:
+                action:
+                  description: Durable state of the current power transition.
+                  properties:
+                    attemptedAt:
+                      format: date-time
+                      type: string
+                    completedAt:
+                      format: date-time
+                      type: string
+                    decisionKey:
+                      type: string
+                    desiredState:
+                      enum:
+                      - "on"
+                      - "off"
+                      type: string
+                    message:
+                      type: string
+                    phase:
+                      enum:
+                      - InProgress
+                      - Applied
+                      - Converged
+                      - Contended
+                      - Failed
+                      type: string
+                    retryToken:
+                      type: string
+                  required:
+                  - decisionKey
+                  - desiredState
+                  - phase
+                  type: object
               type: object
               x-kubernetes-preserve-unknown-fields: true

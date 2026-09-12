@@ -97,9 +97,47 @@ type PowerTargetStatus struct {
 	// +optional
 	ConsecutiveFailures int `json:"consecutiveFailures,omitempty"`
 
+	// Action records the durable state of the current power transition. The
+	// controller persists InProgress before touching the workload so a repeated
+	// reconcile never blindly reapplies a successful or uncertain mutation.
+	// +optional
+	Action *PowerActionStatus `json:"action,omitempty"`
+
 	// Conditions represent the latest available observations.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
+
+// PowerActionStatus records one desired-state transition.
+type PowerActionStatus struct {
+	// DesiredState is the state this operation is trying to establish.
+	// +kubebuilder:validation:Enum=on;off
+	DesiredState string `json:"desiredState"`
+
+	// DecisionKey identifies the winning rule revision that requested the state.
+	DecisionKey string `json:"decisionKey"`
+
+	// Phase is the latest durable operation phase.
+	// +kubebuilder:validation:Enum=InProgress;Applied;Converged;Contended;Failed
+	Phase string `json:"phase"`
+
+	// AttemptedAt is set before mutating the workload. It is absent when the
+	// desired state converged without an Aura write.
+	// +optional
+	AttemptedAt *metav1.Time `json:"attemptedAt,omitempty"`
+
+	// CompletedAt is set after a successful mutation or convergence observation.
+	// +optional
+	CompletedAt *metav1.Time `json:"completedAt,omitempty"`
+
+	// Message explains failures and external-controller contention.
+	// +optional
+	Message string `json:"message,omitempty"`
+
+	// RetryToken is the value of power.aura.sh/retry-action accepted for this attempt.
+	// Changing that annotation explicitly authorizes one new attempt.
+	// +optional
+	RetryToken string `json:"retryToken,omitempty"`
 }
 
 // ObservedStateSpec captures the workload's current state.

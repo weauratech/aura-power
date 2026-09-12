@@ -248,6 +248,11 @@ func (in *PowerTargetStatus) DeepCopyInto(out *PowerTargetStatus) {
 		*out = new(SnapshotSpec)
 		(*in).DeepCopyInto(*out)
 	}
+	if in.Action != nil {
+		in, out := &in.Action, &out.Action
+		*out = new(PowerActionStatus)
+		(*in).DeepCopyInto(*out)
+	}
 	if in.Ownership != nil {
 		in, out := &in.Ownership, &out.Ownership
 		*out = make([]OwnershipSpec, len(*in))
@@ -273,6 +278,25 @@ func (in *PowerTargetStatus) DeepCopyInto(out *PowerTargetStatus) {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
 	}
+}
+
+func (in *PowerActionStatus) DeepCopyInto(out *PowerActionStatus) {
+	*out = *in
+	if in.AttemptedAt != nil {
+		in, out := &in.AttemptedAt, &out.AttemptedAt
+		*out = (*in).DeepCopy()
+	}
+	if in.CompletedAt != nil {
+		in, out := &in.CompletedAt, &out.CompletedAt
+		*out = (*in).DeepCopy()
+	}
+}
+
+func (in *PowerActionStatus) DeepCopy() *PowerActionStatus {
+	if in == nil { return nil }
+	out := new(PowerActionStatus)
+	in.DeepCopyInto(out)
+	return out
 }
 
 func (in *SnapshotSpec) DeepCopyInto(out *SnapshotSpec) {

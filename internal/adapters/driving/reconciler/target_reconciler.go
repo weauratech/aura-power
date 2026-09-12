@@ -2,6 +2,7 @@ package reconciler
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -17,6 +18,7 @@ import (
 
 const defaultRequeueAfter = 30 * time.Second
 const errorRequeueAfter = 10 * time.Second
+const retryActionAnnotation = "power.aura.sh/retry-action"
 
 // TargetReconciler reconciles PowerTarget objects.
 type TargetReconciler struct {
@@ -63,6 +65,14 @@ func (r *TargetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	// 6. Execute action if needed
 	if !decision.IsBlocked() && decision.IsManaged() {
 		observedState := domain.PowerStateFromObserved(domainTarget.ObservedState, domainTarget.Ref.Kind)
+		handled, err := r.reconcileExistingAction(ctx, &target, decision, observedState)
+		if err != nil {
+			logger.Error(err, "failed to persist action observation")
+			return ctrl.Result{RequeueAfter: errorRequeueAfter}, nil
+		}
+		if handled {
+			return ctrl.Result{RequeueAfter: defaultRequeueAfter}, nil
+		}
 
 		if decision.DesiredState == domain.PowerStateOff && observedState == domain.PowerStateOn {
 			if target.Status.Snapshot == nil || !target.Status.Snapshot.Available {
@@ -74,15 +84,21 @@ func (r *TargetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 					return ctrl.Result{RequeueAfter: errorRequeueAfter}, nil
 				}
 			}
+			if err := r.beginAction(ctx, &target, decision); err != nil {
+				logger.Error(err, "failed to persist power-down intent")
+				return ctrl.Result{RequeueAfter: errorRequeueAfter}, nil
+			}
 			if err := r.executePowerDown(ctx, &target, domainTarget.Ref); err != nil {
 				logger.Error(err, "power-down failed")
 				target.Status.ConsecutiveFailures++
+				r.failAction(&target, err)
 				r.Metrics.RecordAction(ports.ActionPowerDown, req.String(), false)
 				r.recordAudit(ctx, domainTarget.Ref, ports.AuditExecutionError, "error", err.Error(), "")
 				r.Status().Update(ctx, &target)
 				return ctrl.Result{RequeueAfter: errorRequeueAfter}, nil
 			}
 			target.Status.ConsecutiveFailures = 0
+			r.completeAction(&target, "Applied", "workload mutation accepted; waiting for observation")
 			r.Metrics.RecordAction(ports.ActionPowerDown, req.String(), true)
 			r.recordAudit(ctx, domainTarget.Ref, ports.AuditWorkloadPoweredDown, "success", "Powered down by policy", ruleNameFromDecision(decision))
 			// Requeue faster to confirm pods terminated
@@ -94,15 +110,21 @@ func (r *TargetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 
 		if decision.DesiredState == domain.PowerStateOn && observedState == domain.PowerStateOff {
+			if err := r.beginAction(ctx, &target, decision); err != nil {
+				logger.Error(err, "failed to persist restore intent")
+				return ctrl.Result{RequeueAfter: errorRequeueAfter}, nil
+			}
 			if err := r.executeRestore(ctx, &target, domainTarget.Ref); err != nil {
 				logger.Error(err, "restore failed")
 				target.Status.ConsecutiveFailures++
+				r.failAction(&target, err)
 				r.Metrics.RecordAction(ports.ActionRestore, req.String(), false)
 				r.recordAudit(ctx, domainTarget.Ref, ports.AuditExecutionError, "error", err.Error(), "")
 				r.Status().Update(ctx, &target)
 				return ctrl.Result{RequeueAfter: errorRequeueAfter}, nil
 			}
 			target.Status.ConsecutiveFailures = 0
+			r.completeAction(&target, "Applied", "workload mutation accepted; waiting for observation")
 			r.Metrics.RecordAction(ports.ActionRestore, req.String(), true)
 			r.recordAudit(ctx, domainTarget.Ref, ports.AuditWorkloadRestored, "success", "Restored from snapshot", ruleNameFromDecision(decision))
 			// Requeue faster to confirm pods started
@@ -125,6 +147,94 @@ func (r *TargetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	logger.Info("reconciliation complete", "duration", duration, "desiredState", decision.DesiredState)
 
 	return ctrl.Result{RequeueAfter: defaultRequeueAfter}, nil
+}
+
+// reconcileExistingAction makes a desired-state transition monotonic. Once a
+// mutation has been accepted (or its result is uncertain after a controller
+// crash), the controller observes convergence instead of issuing the same
+// write again. A later divergence is reported as contention. This prevents
+// write loops with Argo CD self-heal and other field managers.
+func (r *TargetReconciler) reconcileExistingAction(ctx context.Context, target *v1alpha1.PowerTarget, decision domain.Decision, observed domain.PowerState) (bool, error) {
+	desired := decision.DesiredState
+	decisionKey := powerDecisionKey(decision)
+	action := target.Status.Action
+	if desired == domain.PowerStateOn && observed == desired && target.Status.Snapshot != nil {
+		// GitOps or an operator may already have restored the workload. Do not
+		// replay the stale replica snapshot over that legitimate live state.
+		target.Status.Snapshot = nil
+		now := metav1.Now()
+		target.Status.Action = &v1alpha1.PowerActionStatus{
+			DesiredState: string(desired),
+			DecisionKey:  decisionKey,
+			Phase:        "Converged",
+			CompletedAt:  &now,
+			Message:      "desired workload state already observed",
+			RetryToken:   target.Annotations[retryActionAnnotation],
+		}
+		action = target.Status.Action
+	}
+	if action == nil || action.DesiredState != string(desired) || action.DecisionKey != decisionKey || action.Phase == "Failed" {
+		return false, nil
+	}
+	if target.Annotations[retryActionAnnotation] != action.RetryToken {
+		return false, nil
+	}
+
+	if observed == desired {
+		if action.Phase != "Converged" {
+			r.completeAction(target, "Converged", "desired workload state observed")
+		}
+		return false, nil
+	}
+
+	if action.Phase != "Contended" {
+		action.Phase = "Contended"
+		action.Message = "desired state was not retained; another controller may own the same field"
+		action.CompletedAt = nil
+		if err := r.Status().Update(ctx, target); err != nil {
+			return true, err
+		}
+	}
+	return true, nil
+}
+
+func (r *TargetReconciler) beginAction(ctx context.Context, target *v1alpha1.PowerTarget, decision domain.Decision) error {
+	now := metav1.Now()
+	target.Status.Action = &v1alpha1.PowerActionStatus{
+		DesiredState: string(decision.DesiredState),
+		DecisionKey:  powerDecisionKey(decision),
+		Phase:        "InProgress",
+		AttemptedAt:  &now,
+		RetryToken:   target.Annotations[retryActionAnnotation],
+	}
+	return r.Status().Update(ctx, target)
+}
+
+func powerDecisionKey(decision domain.Decision) string {
+	if decision.WinningRule == nil {
+		return string(decision.DesiredState)
+	}
+	rule := decision.WinningRule
+	return fmt.Sprintf("%s/%s/%s@%d:%s", rule.Kind, rule.Namespace, rule.Name, rule.CreatedAt.UnixNano(), decision.DesiredState)
+}
+
+func (r *TargetReconciler) completeAction(target *v1alpha1.PowerTarget, phase, message string) {
+	if target.Status.Action == nil {
+		return
+	}
+	now := metav1.Now()
+	target.Status.Action.Phase = phase
+	target.Status.Action.CompletedAt = &now
+	target.Status.Action.Message = message
+}
+
+func (r *TargetReconciler) failAction(target *v1alpha1.PowerTarget, err error) {
+	if target.Status.Action == nil {
+		return
+	}
+	target.Status.Action.Phase = "Failed"
+	target.Status.Action.Message = err.Error()
+	target.Status.Action.CompletedAt = nil
 }
 
 func (r *TargetReconciler) SetupWithManager(mgr ctrl.Manager) error {
