@@ -16,6 +16,8 @@ done
 rg -q 'VERSION="?\$\{TAG#v\}"?' .github/workflows/release.yaml
 rg -q 'IMAGE_SERVER.*\$\{VERSION\}' .github/workflows/release.yaml
 rg -q 'IMAGE_CONTROLLER.*\$\{VERSION\}' .github/workflows/release.yaml
+rg -q 'run: make quality' .github/workflows/release.yaml
+[[ "$(grep -c 'needs: validate' .github/workflows/release.yaml)" -eq 3 ]]
 
 default_render="$(mktemp)"
 ephemeral_render="$(mktemp)"
