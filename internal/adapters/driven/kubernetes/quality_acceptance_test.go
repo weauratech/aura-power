@@ -25,8 +25,11 @@ func TestAcceptanceCTRL01CronJobRestorePreservesOriginallySuspended(t *testing.T
 	c := fake.NewClientBuilder().WithScheme(qualityScheme(t)).WithObjects(job).Build()
 	executor := NewExecutor(c)
 	ref := domain.WorkloadRef{Namespace: "fixtures", Name: "reports", Kind: domain.WorkloadKindCronJob}
-	snapshot, err := executor.PowerDown(ctx, ref)
+	snapshot, err := executor.CaptureSnapshot(ctx, ref)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := executor.PowerDown(ctx, ref); err != nil {
 		t.Fatal(err)
 	}
 	if err := executor.Restore(ctx, ref, *snapshot); err != nil {

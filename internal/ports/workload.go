@@ -26,6 +26,7 @@ type WorkloadDiscoverer interface {
 
 // WorkloadExecutor performs power actions on workloads.
 type WorkloadExecutor interface {
-	PowerDown(ctx context.Context, ref domain.WorkloadRef) (*domain.Snapshot, error)
+	CaptureSnapshot(ctx context.Context, ref domain.WorkloadRef) (*domain.Snapshot, error)
+	PowerDown(ctx context.Context, ref domain.WorkloadRef) error
 	Restore(ctx context.Context, ref domain.WorkloadRef, snapshot domain.Snapshot) error
 }

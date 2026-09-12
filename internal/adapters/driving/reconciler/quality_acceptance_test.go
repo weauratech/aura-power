@@ -56,8 +56,8 @@ func TestAcceptanceCTRL06StatusConflictCannotLoseSnapshotAndRepeatMutation(t *te
 			t.Fatal(err)
 		}
 	}
-	if executor.calls != 1 {
-		t.Fatalf("CTRL-06: mutation repeated %d times after snapshot status write failed", executor.calls)
+	if executor.calls != 0 {
+		t.Fatalf("CTRL-06: mutation executed %d times before snapshot status persisted", executor.calls)
 	}
 }
 
@@ -79,10 +79,13 @@ func (failingStatusWriter) Patch(context.Context, client.Object, client.Patch, .
 
 type countingExecutor struct{ calls int }
 
-func (e *countingExecutor) PowerDown(context.Context, domain.WorkloadRef) (*domain.Snapshot, error) {
-	e.calls++
+func (*countingExecutor) CaptureSnapshot(context.Context, domain.WorkloadRef) (*domain.Snapshot, error) {
 	replicas := int32(3)
 	return &domain.Snapshot{ReplicaCount: &replicas}, nil
+}
+func (e *countingExecutor) PowerDown(context.Context, domain.WorkloadRef) error {
+	e.calls++
+	return nil
 }
 func (*countingExecutor) Restore(context.Context, domain.WorkloadRef, domain.Snapshot) error {
 	return nil

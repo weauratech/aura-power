@@ -46,12 +46,15 @@ func TestQualityExecutorRoundTripDeploymentAndStatefulSet(t *testing.T) {
 			c := fake.NewClientBuilder().WithScheme(qualityScheme(t)).WithRuntimeObjects(tc.object).Build()
 			executor := NewExecutor(c)
 			ref := domain.WorkloadRef{Namespace: "fixtures", Name: "same", Kind: tc.kind}
-			snapshot, err := executor.PowerDown(ctx, ref)
+			snapshot, err := executor.CaptureSnapshot(ctx, ref)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if snapshot.ReplicaCount == nil || *snapshot.ReplicaCount != tc.want {
 				t.Fatalf("unexpected snapshot: %+v", snapshot)
+			}
+			if err := executor.PowerDown(ctx, ref); err != nil {
+				t.Fatal(err)
 			}
 			if err := executor.Restore(ctx, ref, *snapshot); err != nil {
 				t.Fatal(err)

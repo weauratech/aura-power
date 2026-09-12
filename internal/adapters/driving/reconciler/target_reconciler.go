@@ -20,7 +20,7 @@ const errorRequeueAfter = 10 * time.Second
 // TargetReconciler reconciles PowerTarget objects.
 type TargetReconciler struct {
 	client.Client
-	Config  domain.GuardrailConfig
+	Config   domain.GuardrailConfig
 	Executor ports.WorkloadExecutor
 	Audit    ports.AuditRecorder
 	Metrics  ports.MetricsExporter
@@ -64,6 +64,15 @@ func (r *TargetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		observedState := domain.PowerStateFromObserved(domainTarget.ObservedState, domainTarget.Ref.Kind)
 
 		if decision.DesiredState == domain.PowerStateOff && observedState == domain.PowerStateOn {
+			if target.Status.Snapshot == nil || !target.Status.Snapshot.Available {
+				if err := r.captureAndPersistSnapshot(ctx, &target, domainTarget.Ref); err != nil {
+					logger.Error(err, "failed to capture and persist snapshot before power-down")
+					target.Status.ConsecutiveFailures++
+					r.Metrics.RecordAction(ports.ActionPowerDown, req.String(), false)
+					r.recordAudit(ctx, domainTarget.Ref, ports.AuditExecutionError, "error", err.Error(), "")
+					return ctrl.Result{RequeueAfter: errorRequeueAfter}, nil
+				}
+			}
 			if err := r.executePowerDown(ctx, &target, domainTarget.Ref); err != nil {
 				logger.Error(err, "power-down failed")
 				target.Status.ConsecutiveFailures++
@@ -124,7 +133,11 @@ func (r *TargetReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 func (r *TargetReconciler) executePowerDown(ctx context.Context, target *v1alpha1.PowerTarget, ref domain.WorkloadRef) error {
-	snapshot, err := r.Executor.PowerDown(ctx, ref)
+	return r.Executor.PowerDown(ctx, ref)
+}
+
+func (r *TargetReconciler) captureAndPersistSnapshot(ctx context.Context, target *v1alpha1.PowerTarget, ref domain.WorkloadRef) error {
+	snapshot, err := r.Executor.CaptureSnapshot(ctx, ref)
 	if err != nil {
 		return err
 	}
@@ -140,7 +153,7 @@ func (r *TargetReconciler) executePowerDown(ctx context.Context, target *v1alpha
 			MemoryMiB:     snapshot.Resources.MemoryMiB,
 		},
 	}
-	return nil
+	return r.Status().Update(ctx, target)
 }
 
 func (r *TargetReconciler) executeRestore(ctx context.Context, target *v1alpha1.PowerTarget, ref domain.WorkloadRef) error {
