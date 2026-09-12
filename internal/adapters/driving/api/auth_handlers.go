@@ -497,6 +497,7 @@ func applyPendingObject(ctx context.Context, c client.Client, change *auth.Pendi
 		if change.Action == "create" {
 			if apierrors.IsNotFound(err) {
 				desired.SetResourceVersion("")
+				clearPendingObjectStatus(desired)
 				if err := c.Create(ctx, desired); err != nil {
 					return fmt.Errorf("create approved resource: %w", err)
 				}
@@ -519,13 +520,31 @@ func applyPendingObject(ctx context.Context, c client.Client, change *auth.Pendi
 		if live.GetResourceVersion() != change.ResourceVersion {
 			return errStalePendingChange
 		}
-		desired.SetResourceVersion(change.ResourceVersion)
-		if err := c.Update(ctx, desired); err != nil {
+		applyPendingObjectSpec(live, desired)
+		if err := c.Update(ctx, live); err != nil {
 			return fmt.Errorf("update approved resource: %w", err)
 		}
 		return nil
 	default:
 		return fmt.Errorf("%w: unsupported action %q", auth.ErrInvalidPendingChange, change.Action)
+	}
+}
+
+func applyPendingObjectSpec(live, desired client.Object) {
+	switch l := live.(type) {
+	case *v1alpha1.PowerPolicy:
+		l.Spec = desired.(*v1alpha1.PowerPolicy).Spec
+	case *v1alpha1.PowerOverride:
+		l.Spec = desired.(*v1alpha1.PowerOverride).Spec
+	}
+}
+
+func clearPendingObjectStatus(object client.Object) {
+	switch item := object.(type) {
+	case *v1alpha1.PowerPolicy:
+		item.Status = v1alpha1.PowerPolicyStatus{}
+	case *v1alpha1.PowerOverride:
+		item.Status = v1alpha1.PowerOverrideStatus{}
 	}
 }
 
