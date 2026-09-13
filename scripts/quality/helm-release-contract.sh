@@ -66,6 +66,14 @@ grep -q 'port: 9003' <<<"$observability_render"
 [[ "$(grep -c '^  namespace: monitoring$' <<<"$observability_render")" -eq 2 ]]
 [[ "$(grep -c '^      - aura-system$' <<<"$observability_render")" -eq 2 ]]
 
+controller_network_render="$(helm template aura-power charts/aura-power --set networkPolicy.enabled=true --set server.enabled=false --set 'networkPolicy.additionalControllerEgressPorts[0]=8088')"
+grep -q 'port: 8088' <<<"$controller_network_render"
+server_network_render="$(helm template aura-power charts/aura-power --set networkPolicy.enabled=true --set controller.enabled=false --set 'networkPolicy.additionalControllerEgressPorts[0]=8088')"
+if grep -q 'port: 8088' <<<"$server_network_render"; then
+  echo "controller notification egress leaked into the server NetworkPolicy" >&2
+  exit 1
+fi
+
 external_webhook_render="$(helm template aura-power charts/aura-power --set webhook.enabled=true --set webhook.existingSecret=managed-webhook --set webhook.caBundle=Y2E=)"
 grep -q 'secretName: managed-webhook' <<<"$external_webhook_render"
 grep -q 'caBundle: Y2E=' <<<"$external_webhook_render"

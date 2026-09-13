@@ -21,7 +21,7 @@ test.describe('mobile navigation and drawers', () => {
     await waitForMobileNavigationClosed(page);
     await expect(page.getByRole('heading', { name: 'Schedules', exact: true })).toBeVisible();
 
-    const trigger = page.getByRole('main').getByRole('button', { name: 'New Schedule', exact: true }).first();
+    const trigger = page.getByRole('button', { name: 'Create a new schedule', exact: true });
     await trigger.click();
     const drawer = page.getByRole('dialog', { name: 'New Schedule' });
     await expect(drawer).toBeVisible();

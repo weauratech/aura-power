@@ -17,7 +17,7 @@ The installed EKS v2.1.7 result is retained separately from the candidate branch
 | Approval workflow | real server and Kind API: member submits, admin approves, one policy and audit object created, replay returns 409 | not exercised | pass-real |
 | Notifications and webhooks | controlled HTTP receiver, retry/error and bounded queue contracts; URL may come from Secret | real channel intentionally not used | pass-simulated; EKS blocked by safety boundary |
 | Frontend and accessibility | 75 live checks passed against the final Kind candidate in Chromium, Firefox, WebKit and mobile Chromium; three desktop mobile-only cases were skipped by design | not exposed | pass-real |
-| Helm install and upgrade | clean Kind install, stable auth/TLS secrets, default fail-closed admission, invalid timezone rejected | existing release observed | pass-real |
+| Helm install and upgrade | clean Kind install; explicit v2.1.7 CRD-to-candidate migration; stable auth/TLS secrets; default fail-closed admission; invalid timezone rejected | existing release observed | pass-real |
 | Argo CD coexistence | action state machine detects sustained contention after convergence grace; GitOps matrix records ownership modes | Argo present; mutation stopped after baseline restore failure | pass-simulated; full Argo matrix remains compatibility evidence, not release blocker |
 | HPA, KEDA and Flux | explicitly documented as unproven integrations | not exercised | inconclusive/non-claimed |
 | Recovery and concurrency | snapshot-before-mutation, UID validation, crash replay, status conflict, stale discovery and legacy upgrade contracts | baseline restoration failed | pass-simulated plus native transition |

@@ -62,6 +62,7 @@ type Store interface {
 	CreatePendingChange(change PendingChange) (*PendingChange, error)
 	ListPendingChanges() ([]PendingChange, error)
 	BeginPendingDecision(id, reviewerID, decision string) (*PendingChange, error)
+	CancelPendingDecision(id, reviewerID string) error
 	FinalizePendingDecision(id, reviewerID, decision string) (*PendingChange, error)
 	ApprovePendingChange(id, reviewerID string) (*PendingChange, error)
 	RejectPendingChange(id, reviewerID string) (*PendingChange, error)

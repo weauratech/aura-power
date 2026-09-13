@@ -354,6 +354,7 @@ func (h *AuthHandlers) handleApprove(c *gin.Context) {
 		return
 	}
 	if err := h.applyPendingChange(c.Request.Context(), change); err != nil {
+		_ = h.store.CancelPendingDecision(id, reviewerID)
 		status := http.StatusUnprocessableEntity
 		if errors.Is(err, errStalePendingChange) || apierrors.IsAlreadyExists(err) {
 			status = http.StatusConflict
@@ -362,6 +363,7 @@ func (h *AuthHandlers) handleApprove(c *gin.Context) {
 		return
 	}
 	if err := h.recordApprovalDecision(c.Request.Context(), change, reviewer, true); err != nil {
+		_ = h.store.CancelPendingDecision(id, reviewerID)
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error(), "status": change.Status})
 		return
 	}
@@ -399,6 +401,7 @@ func (h *AuthHandlers) handleReject(c *gin.Context) {
 		return
 	}
 	if err := h.recordApprovalDecision(c.Request.Context(), change, reviewer, false); err != nil {
+		_ = h.store.CancelPendingDecision(id, reviewerID)
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error(), "status": change.Status})
 		return
 	}

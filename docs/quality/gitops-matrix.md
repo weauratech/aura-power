@@ -21,6 +21,7 @@ pre-patch behavior applies only once the live resource exists. The acceptance
 gate therefore requires observing both the Aura transition and a later,
 unrelated Git change on the same existing resource.
 
-The successful ownership split does not repair Aura restoration. If the policy
-returns to `on`, the current zero-valued snapshot still prevents restoration;
-Argo correctly refrains from repairing the field it was told to ignore.
+The baseline ownership experiment preceded the snapshot remediation. The
+candidate now preserves and restores exact snapshots in native Kind and stops
+repeated writes after sustained external contention. The complete Argo mode
+matrix still needs to be rerun before claiming broad Argo compatibility.

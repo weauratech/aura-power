@@ -146,6 +146,38 @@ func TestSQLitePendingDecisionCannotReverseAfterDurableIntent(t *testing.T) {
 	}
 }
 
+func TestSQLitePendingDecisionCanCancelOrReclaimExpiredLease(t *testing.T) {
+	s, err := NewSQLiteStore(filepath.Join(t.TempDir(), "auth.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	change, err := s.CreatePendingChange(PendingChange{UserID: "requester", Username: "member", Action: "create", ResourceKind: "PowerPolicy", ResourceName: "nightly", Payload: `{}`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.BeginPendingDecision(change.ID, "reviewer-one", "approve"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CancelPendingDecision(change.ID, "reviewer-one"); err != nil {
+		t.Fatal(err)
+	}
+	cancelled, err := s.GetPendingChange(change.ID)
+	if err != nil || cancelled.Status != "pending" || cancelled.ReviewedBy != "" || cancelled.ReviewedAt != nil {
+		t.Fatalf("cancel did not release decision: %+v %v", cancelled, err)
+	}
+	if _, err := s.BeginPendingDecision(change.ID, "reviewer-one", "approve"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec("UPDATE pending_changes SET reviewed_at = ? WHERE id = ?", time.Now().Add(-6*time.Minute), change.ID); err != nil {
+		t.Fatal(err)
+	}
+	reclaimed, err := s.BeginPendingDecision(change.ID, "reviewer-two", "reject")
+	if err != nil || reclaimed.Status != "rejecting" || reclaimed.ReviewedBy != "reviewer-two" {
+		t.Fatalf("expired decision lease was not reclaimable: %+v %v", reclaimed, err)
+	}
+}
+
 func TestJWTConfiguredLifetimeAndInvalidTokens(t *testing.T) {
 	svc := NewJWTService(JWTConfig{AccessTokenTTL: time.Minute, RefreshTokenTTL: time.Hour})
 	pair, err := svc.GenerateTokens(&User{ID: GenerateID(), Username: "member", Role: RoleMember})

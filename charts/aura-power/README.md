@@ -77,6 +77,7 @@ helm install aura-power oci://ghcr.io/weauratech/charts/aura-power \
 | `webhook.caBundle` | Base64 CA bundle required with `webhook.existingSecret` | `""` |
 | `webhook.certManager.enabled` | Use cert-manager for certificate rotation | `false` |
 | `webhook.certManager.issuerRef.name` | Existing Issuer or ClusterIssuer | `""` |
+| `networkPolicy.additionalControllerEgressPorts` | Additional notification webhook ports allowed from the controller | `[]` |
 
 Runtime admission rejects invalid IANA timezones and expired overrides at the
 Kubernetes API boundary. The default chart-managed self-signed certificate can be installed with:

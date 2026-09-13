@@ -84,6 +84,12 @@ spec:
           protocol: TCP
         - port: 6443
           protocol: TCP
+    {{- range .Values.networkPolicy.additionalControllerEgressPorts }}
+    # Explicit non-standard notification webhook port
+    - ports:
+        - port: {{ . }}
+          protocol: TCP
+    {{- end }}
     # DNS
     - ports:
         - port: 53

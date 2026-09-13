@@ -97,8 +97,11 @@ func TestFailedApprovalPreservesPendingState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != "approving" || got.ReviewedAt != nil {
+	if got.Status != "pending" || got.ReviewedAt != nil || got.ReviewedBy != "" {
 		t.Fatalf("failed apply changed decision: %+v", got)
+	}
+	if rejected := requestContract(t, f.server.Handler(), "POST", "/api/v1/pending/"+pending.ID+"/reject", f.token(t, auth.RoleAdmin), nil); rejected.Code != 200 {
+		t.Fatalf("failed approval could not be reclaimed: %d %s", rejected.Code, rejected.Body.String())
 	}
 }
 
@@ -121,7 +124,7 @@ func TestStaleUpdateRemainsPending(t *testing.T) {
 		t.Fatalf("stale update returned %d: %s", response.Code, response.Body.String())
 	}
 	got, _ := f.store.GetPendingChange(pending.ID)
-	if got.Status != "approving" {
+	if got.Status != "pending" || got.ReviewedBy != "" || got.ReviewedAt != nil {
 		t.Fatalf("stale request status=%s", got.Status)
 	}
 	var unchanged v1alpha1.PowerPolicy

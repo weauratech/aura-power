@@ -3,11 +3,15 @@ set -Eeuo pipefail
 
 : "${KUBECONFIG:?set KUBECONFIG to the disposable Kind kubeconfig}"
 [[ "$(kubectl config current-context)" == "kind-aura-power-quality" ]] || { echo "refusing mutation: this runner is restricted to kind-aura-power-quality" >&2; exit 2; }
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "$repo_root"
 
 RUN_ID="${RUN_ID:-u$(date -u +%H%M%S)}"
 FIXTURE_NAMESPACE="ap-upgrade-${RUN_ID}"
 WORKLOAD_NAME="legacy-restore"
 LEGACY_TARGET="${FIXTURE_NAMESPACE}--${WORKLOAD_NAME}"
+EXEMPT_WORKLOAD_NAME="legacy-exempt"
+EXEMPT_LEGACY_TARGET="${FIXTURE_NAMESPACE}--${EXEMPT_WORKLOAD_NAME}"
 POLICY_NAME="upgrade-${RUN_ID}"
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-180}"
 [[ "$TIMEOUT_SECONDS" =~ ^[0-9]+$ && "$TIMEOUT_SECONDS" -le 300 ]] || { echo "TIMEOUT_SECONDS must be an integer <= 300" >&2; exit 2; }
@@ -16,9 +20,11 @@ namespace_uid=""
 cleanup() {
   local original_status=$? cleanup_status=0 actual_uid actual_run
   trap - EXIT INT TERM HUP
+  kubectl apply --server-side --force-conflicts -f charts/aura-power/crds/powertargets.yaml -f charts/aura-power/crds/powerschedules.yaml >/dev/null 2>&1 || cleanup_status=1
   kubectl scale deployment aura-power-controller -n aura-system --replicas=1 >/dev/null 2>&1 || cleanup_status=1
   kubectl delete powerpolicy "$POLICY_NAME" -n aura-system --ignore-not-found --wait=true --timeout=60s >/dev/null 2>&1 || cleanup_status=1
   kubectl delete powertarget "$LEGACY_TARGET" -n aura-system --ignore-not-found --wait=true --timeout=60s >/dev/null 2>&1 || cleanup_status=1
+  kubectl delete powertarget "$EXEMPT_LEGACY_TARGET" -n aura-system --ignore-not-found --wait=true --timeout=60s >/dev/null 2>&1 || cleanup_status=1
   if [[ -n "$namespace_uid" ]] && kubectl get namespace "$FIXTURE_NAMESPACE" >/dev/null 2>&1; then
     actual_uid="$(kubectl get namespace "$FIXTURE_NAMESPACE" -o jsonpath='{.metadata.uid}')"
     actual_run="$(kubectl get namespace "$FIXTURE_NAMESPACE" -o json | jq -r '.metadata.labels["aura-power-quality/run"] // empty')"
@@ -46,6 +52,15 @@ fi
 # one deterministic pre-upgrade baseline.
 kubectl scale deployment aura-power-controller -n aura-system --replicas=0
 kubectl rollout status deployment aura-power-controller -n aura-system --timeout=120s
+# Reproduce the supported v2.1.7 -> candidate sequence. Helm deliberately does
+# not upgrade CRDs, so the documented explicit CRD apply is part of the gate.
+for crd in powertargets powerschedules; do
+  git show "v2.1.7:charts/aura-power/crds/${crd}.yaml" | kubectl apply --server-side --force-conflicts -f - >/dev/null
+done
+if [[ -n "$(kubectl get crd powertargets.power.aura.sh -o jsonpath='{.spec.versions[?(@.name=="v1alpha1")].schema.openAPIV3Schema.properties.spec.properties.targetRef.properties.uid.type}')" ]]; then
+  echo "FAIL: v2.1.7 PowerTarget CRD unexpectedly contains UID" >&2
+  exit 6
+fi
 
 namespace_json="$(kubectl create -o json -f - <<YAML
 apiVersion: v1
@@ -80,6 +95,26 @@ spec:
         - name: pause
           image: registry.k8s.io/pause:3.10
 ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${EXEMPT_WORKLOAD_NAME}
+  namespace: ${FIXTURE_NAMESPACE}
+  annotations:
+    aura.sh/power-eligible: "true"
+    aura.sh/power-exempt: "true"
+spec:
+  replicas: 0
+  selector:
+    matchLabels: {app: ${EXEMPT_WORKLOAD_NAME}}
+  template:
+    metadata:
+      labels: {app: ${EXEMPT_WORKLOAD_NAME}}
+    spec:
+      containers:
+        - name: pause
+          image: registry.k8s.io/pause:3.10
+---
 apiVersion: power.aura.sh/v1alpha1
 kind: PowerTarget
 metadata:
@@ -87,16 +122,50 @@ metadata:
   namespace: aura-system
 spec:
   targetRef:
-    apiVersion: apps/v1
     kind: Deployment
     namespace: ${FIXTURE_NAMESPACE}
     name: ${WORKLOAD_NAME}
+---
+apiVersion: power.aura.sh/v1alpha1
+kind: PowerTarget
+metadata:
+  name: ${EXEMPT_LEGACY_TARGET}
+  namespace: aura-system
+spec:
+  targetRef:
+    kind: Deployment
+    namespace: ${FIXTURE_NAMESPACE}
+    name: ${EXEMPT_WORKLOAD_NAME}
 YAML
 kubectl patch powertarget "$LEGACY_TARGET" -n aura-system --subresource=status --type=merge \
   -p "{\"status\":{\"observedState\":{\"replicas\":0,\"powerState\":\"off\"},\"snapshot\":{\"available\":true,\"replicaCount\":3,\"capturedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}}}"
+kubectl patch powertarget "$EXEMPT_LEGACY_TARGET" -n aura-system --subresource=status --type=merge \
+  -p "{\"status\":{\"observedState\":{\"replicas\":0,\"powerState\":\"off\"},\"snapshot\":{\"available\":true,\"replicaCount\":4,\"capturedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}}}"
+
+kubectl apply --server-side --force-conflicts -f charts/aura-power/crds/powertargets.yaml -f charts/aura-power/crds/powerschedules.yaml >/dev/null
+[[ "$(kubectl get crd powertargets.power.aura.sh -o jsonpath='{.spec.versions[?(@.name=="v1alpha1")].schema.openAPIV3Schema.properties.spec.properties.targetRef.properties.uid.type}')" == "string" ]] || { echo "FAIL: candidate UID schema was not installed" >&2; exit 7; }
+schedule_enum="$(kubectl get crd powerschedules.power.aura.sh -o json | jq -r '.spec.versions[] | select(.name=="v1alpha1") | .schema.openAPIV3Schema.properties.spec.properties.desiredState.enum | join(",")')"
+[[ "$schedule_enum" == "on,off" ]] || { echo "FAIL: candidate schedule enum is ${schedule_enum:-missing}" >&2; exit 8; }
 
 kubectl scale deployment aura-power-controller -n aura-system --replicas=1
 kubectl rollout status deployment aura-power-controller -n aura-system --timeout=120s
+
+deadline=$((SECONDS + TIMEOUT_SECONDS)); exempt_replicas=""
+while (( SECONDS < deadline )); do
+  exempt_replicas="$(kubectl get deployment "$EXEMPT_WORKLOAD_NAME" -n "$FIXTURE_NAMESPACE" -o jsonpath='{.spec.replicas}')"
+  [[ "$exempt_replicas" == "4" ]] && break
+  sleep 5
+done
+[[ "$exempt_replicas" == "4" ]] || { echo "FAIL: exempt legacy snapshot was not restored" >&2; exit 9; }
+deadline=$((SECONDS + TIMEOUT_SECONDS)); exempt_record_present=true
+while (( SECONDS < deadline )); do
+  if ! kubectl get powertarget "$EXEMPT_LEGACY_TARGET" -n aura-system >/dev/null 2>&1; then
+    exempt_record_present=false
+    break
+  fi
+  sleep 2
+done
+[[ "$exempt_record_present" == "false" ]] || { echo "FAIL: exempt legacy recovery record remained after restoration was observed" >&2; exit 9; }
 
 deadline=$((SECONDS + TIMEOUT_SECONDS)); migrated=""
 while (( SECONDS < deadline )); do
@@ -136,4 +205,4 @@ while (( SECONDS < deadline )); do
   sleep 5
 done
 [[ "$replicas" == "3" ]] || { echo "FAIL: migrated snapshot did not restore replicas=3 (observed ${replicas:-unknown})" >&2; exit 13; }
-echo "kind_legacy_upgrade_journey=passed snapshot=true uid_binding=true restore=true"
+echo "kind_legacy_upgrade_journey=passed from=v2.1.7 crds_updated=true snapshot=true uid_binding=true restore=true exempt_restore=true"

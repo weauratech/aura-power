@@ -172,6 +172,48 @@ func TestQualityExemptionRestoresBeforeTargetDeletion(t *testing.T) {
 	}
 }
 
+func TestQualityExemptionMigratesAndRestoresLegacySnapshot(t *testing.T) {
+	replicas := int32(4)
+	now := metav1.Now()
+	ref := domain.WorkloadRef{APIVersion: "apps/v1", Namespace: "fixtures", Name: "legacy", Kind: domain.WorkloadKindDeployment, UID: "uid-current"}
+	legacyName := "fixtures--legacy"
+	legacy := &v1alpha1.PowerTarget{
+		ObjectMeta: metav1.ObjectMeta{Name: legacyName, Namespace: "aura-system"},
+		Spec:       v1alpha1.PowerTargetSpec{TargetRef: v1alpha1.TargetReference{APIVersion: "apps/v1", Namespace: "fixtures", Name: "legacy", Kind: "Deployment"}},
+		Status: v1alpha1.PowerTargetStatus{
+			ObservedState: v1alpha1.ObservedStateSpec{Replicas: 0, PowerState: "off"},
+			Snapshot:      &v1alpha1.SnapshotSpec{Available: true, ReplicaCount: &replicas, CapturedAt: &now},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(discoveryScheme(t)).WithStatusSubresource(&v1alpha1.PowerTarget{}).WithObjects(legacy).Build()
+	executor := &exemptionExecutor{}
+	loop := DiscoveryLoop{Client: c, Executor: executor, Config: DiscoveryConfig{Namespace: "aura-system", ExemptAnnotation: "aura.sh/power-exempt"}}
+	wl := ports.DiscoveredWorkload{Ref: ref, Replicas: 0, Annotations: map[string]string{"aura.sh/power-exempt": "true"}}
+	if _, err := loop.ensurePowerTarget(context.Background(), wl); err != nil {
+		t.Fatal(err)
+	}
+	if executor.restores != 1 {
+		t.Fatalf("legacy exempt workload was not restored: calls=%d", executor.restores)
+	}
+	var retained v1alpha1.PowerTarget
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "aura-system", Name: legacyName}, &retained); err != nil {
+		t.Fatalf("legacy recovery record was not retained until restoration is observed: %v", err)
+	}
+	if retained.Status.Snapshot == nil {
+		t.Fatal("legacy recovery snapshot was lost")
+	}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "aura-system", Name: powerTargetName(ref)}, &v1alpha1.PowerTarget{}); err == nil {
+		t.Fatal("replacement target was created before restoration was observed")
+	}
+	wl.Replicas = replicas
+	if _, err := loop.ensurePowerTarget(context.Background(), wl); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "aura-system", Name: legacyName}, &retained); err == nil {
+		t.Fatal("legacy recovery record remained after restoration was observed")
+	}
+}
+
 type exemptionExecutor struct{ restores int }
 
 func (*exemptionExecutor) CaptureSnapshot(context.Context, domain.WorkloadRef) (*domain.Snapshot, error) {

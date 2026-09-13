@@ -55,6 +55,7 @@ jobs:
           kind load docker-image --name aura-power-quality aura-power-server:release-candidate aura-power-controller:release-candidate
       - name: Install candidate and run native journey
         run: |
+          export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config}"
           helm upgrade --install aura-power charts/aura-power \
             --namespace aura-system --create-namespace --wait --timeout 5m \
             --set server.image.repository=aura-power-server \
@@ -65,8 +66,8 @@ jobs:
             --set controller.image.tag=release-candidate \
             --set controller.image.pullPolicy=Never
           ./scripts/quality/kind-helm-upgrade-admission.sh
-          ./scripts/quality/kind-core-journey.sh
           ./scripts/quality/kind-legacy-upgrade-journey.sh
+          ./scripts/quality/kind-core-journey.sh
           ./scripts/quality/kind-approval-journey.sh
       - name: Install browser test dependencies
         run: |

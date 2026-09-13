@@ -12,6 +12,8 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -127,11 +129,6 @@ func (d *DiscoveryLoop) getEligibleNamespaces(ctx context.Context) []string {
 }
 
 func (d *DiscoveryLoop) ensurePowerTarget(ctx context.Context, wl ports.DiscoveredWorkload) (bool, error) {
-	// Skip exempt workloads
-	if wl.Annotations[d.Config.ExemptAnnotation] == "true" {
-		return false, d.restoreBeforeExemption(ctx, wl)
-	}
-
 	// Skip system namespaces
 	for _, sysNs := range d.Config.SystemNamespaces {
 		if wl.Ref.Namespace == sysNs {
@@ -141,6 +138,7 @@ func (d *DiscoveryLoop) ensurePowerTarget(ctx context.Context, wl ports.Discover
 
 	targetName := powerTargetName(wl.Ref)
 	key := types.NamespacedName{Namespace: d.Config.Namespace, Name: targetName}
+	exempt := wl.Annotations[d.Config.ExemptAnnotation] == "true"
 
 	// Check if PowerTarget already exists
 	var existing v1alpha1.PowerTarget
@@ -164,6 +162,9 @@ func (d *DiscoveryLoop) ensurePowerTarget(ctx context.Context, wl ports.Discover
 				return false, fmt.Errorf("failed to bind recreated target UID: %w", err)
 			}
 		}
+		if exempt {
+			return false, d.restoreBeforeExemption(ctx, wl)
+		}
 		// Exists — update observed state
 		return false, d.updateObservedState(ctx, &existing, wl)
 	}
@@ -176,6 +177,9 @@ func (d *DiscoveryLoop) ensurePowerTarget(ctx context.Context, wl ports.Discover
 	var legacy v1alpha1.PowerTarget
 	legacyErr := d.Client.Get(ctx, legacyKey, &legacy)
 	if legacyErr == nil && legacy.Spec.TargetRef.Kind == string(wl.Ref.Kind) {
+		if exempt {
+			return false, d.restoreLegacyBeforeExemption(ctx, wl, &legacy)
+		}
 		// Legacy releases did not persist a UID. A snapshot on a workload that is
 		// still observably powered down is the only recovery record available
 		// during upgrade, so bind it once to the currently observed UID. An
@@ -199,7 +203,37 @@ func (d *DiscoveryLoop) ensurePowerTarget(ctx context.Context, wl ports.Discover
 		return false, fmt.Errorf("failed to read legacy PowerTarget: %w", legacyErr)
 	}
 
+	if exempt {
+		return false, nil
+	}
 	return d.newPowerTarget(ctx, targetName, wl, nil)
+}
+
+// restoreLegacyBeforeExemption keeps the v2.1 recovery record until discovery
+// observes that the workload is running again. Creating an empty replacement
+// first would expose a window in which another reconciliation can discard the
+// only usable snapshot.
+func (d *DiscoveryLoop) restoreLegacyBeforeExemption(ctx context.Context, wl ports.DiscoveredWorkload, legacy *v1alpha1.PowerTarget) error {
+	if legacy.Spec.TargetRef.UID != "" && legacy.Spec.TargetRef.UID != wl.Ref.UID {
+		return fmt.Errorf("refusing legacy exemption recovery for unverified workload identity %s/%s", wl.Ref.Namespace, wl.Ref.Name)
+	}
+	if !workloadIsPoweredDown(wl) {
+		return d.Client.Delete(ctx, legacy)
+	}
+	if !legacySnapshotProvesPoweredDown(legacy, wl) {
+		return fmt.Errorf("refusing exemption recovery without a verified legacy snapshot for %s/%s", wl.Ref.Namespace, wl.Ref.Name)
+	}
+	if d.Executor == nil {
+		return fmt.Errorf("cannot restore exempt workload without executor")
+	}
+	snapshot := domain.Snapshot{ReplicaCount: legacy.Status.Snapshot.ReplicaCount, Suspended: legacy.Status.Snapshot.Suspended}
+	if err := d.Executor.Restore(ctx, wl.Ref, snapshot); err != nil {
+		return fmt.Errorf("restore legacy target before exemption: %w", err)
+	}
+	if d.Audit != nil {
+		_ = d.Audit.Record(ctx, ports.AuditEvent{Timestamp: time.Now(), Action: ports.AuditWorkloadRestored, Actor: "system/exemption", Target: wl.Ref, Result: "success", Reason: "restored legacy snapshot before applying workload exemption"})
+	}
+	return nil
 }
 
 func legacySnapshotProvesPoweredDown(legacy *v1alpha1.PowerTarget, wl ports.DiscoveredWorkload) bool {
@@ -296,19 +330,32 @@ func (d *DiscoveryLoop) newPowerTarget(ctx context.Context, targetName string, w
 	// Update status (separate call since status is a subresource).
 	// Preserve execution state during the identity migration, then refresh the
 	// discovery projection from the current workload.
-	if previous != nil {
-		previous.DeepCopyInto(&target.Status)
-	}
-	target.Status.WorkloadLabels = copyStringMap(wl.Labels)
-	target.Status.NamespaceLabels = copyStringMap(wl.NamespaceLabels)
-	target.Status.ObservedState = v1alpha1.ObservedStateSpec{
-		Replicas:   wl.Replicas,
-		Suspended:  wl.Suspended,
-		ActiveJobs: wl.ActiveJobs,
-		PowerState: powerState,
-	}
-	target.Status.Ownership = ownershipSpecs
-	if err := d.Client.Status().Update(ctx, target); err != nil {
+	firstAttempt := true
+	statusBackoff := wait.Backoff{Steps: 8, Duration: 100 * time.Millisecond, Factor: 2, Jitter: 0.1}
+	if err := retry.OnError(statusBackoff, func(err error) bool {
+		return apierrors.IsConflict(err) || apierrors.IsNotFound(err)
+	}, func() error {
+		current := target.DeepCopy()
+		if !firstAttempt {
+			if err := d.Client.Get(ctx, types.NamespacedName{Namespace: target.Namespace, Name: target.Name}, current); err != nil {
+				return err
+			}
+		}
+		firstAttempt = false
+		if previous != nil {
+			previous.DeepCopyInto(&current.Status)
+		}
+		current.Status.WorkloadLabels = copyStringMap(wl.Labels)
+		current.Status.NamespaceLabels = copyStringMap(wl.NamespaceLabels)
+		current.Status.ObservedState = v1alpha1.ObservedStateSpec{
+			Replicas:   wl.Replicas,
+			Suspended:  wl.Suspended,
+			ActiveJobs: wl.ActiveJobs,
+			PowerState: powerState,
+		}
+		current.Status.Ownership = ownershipSpecs
+		return d.Client.Status().Update(ctx, current)
+	}); err != nil {
 		return true, fmt.Errorf("created target but failed to update status: %w", err)
 	}
 
@@ -392,6 +439,7 @@ func (d *DiscoveryLoop) cleanupOrphans(ctx context.Context, currentWorkloads []p
 			isOff := (wl.Ref.Kind == domain.WorkloadKindCronJob && wl.Suspended) || (wl.Ref.Kind != domain.WorkloadKindCronJob && wl.Replicas == 0)
 			if isOff {
 				expected[powerTargetName(wl.Ref)] = true
+				expected[fmt.Sprintf("%s--%s", wl.Ref.Namespace, wl.Ref.Name)] = true
 			}
 			continue
 		}
