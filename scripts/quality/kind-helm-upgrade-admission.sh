@@ -12,7 +12,7 @@ tls_after="$(kubectl get secret aura-power-controller-webhook-tls -n aura-system
 [[ "$auth_before" == "$auth_after" ]] || { echo "FAIL: Helm upgrade rotated the auth Secret" >&2; exit 10; }
 [[ "$tls_before" == "$tls_after" ]] || { echo "FAIL: Helm upgrade rotated the webhook TLS Secret" >&2; exit 11; }
 
-invalid_output="$(kubectl apply -f - 2>&1 <<'YAML' || true
+invalid_manifest="$(cat <<'YAML'
 apiVersion: power.aura.sh/v1alpha1
 kind: PowerPolicy
 metadata:
@@ -30,10 +30,28 @@ spec:
         timezone: "Mars/Olympus"
 YAML
 )"
-if kubectl get powerpolicy invalid-timezone-quality -n aura-system >/dev/null 2>&1; then
-  kubectl delete powerpolicy invalid-timezone-quality -n aura-system >/dev/null
-  echo "FAIL: admission accepted an invalid IANA timezone" >&2
-  exit 12
-fi
-grep -Eiq 'denied|invalid|timezone|time zone' <<<"$invalid_output" || { echo "FAIL: invalid timezone failed without an admission explanation" >&2; exit 13; }
+
+# Pods can be Ready a few seconds before the webhook Service has propagated
+# usable endpoints. Retry only transport/readiness failures; a successful apply
+# remains an immediate failure, and the gate passes only on the validator's
+# semantic rejection.
+deadline=$((SECONDS + 60))
+while true; do
+  invalid_output="$(kubectl apply -f - 2>&1 <<<"$invalid_manifest" || true)"
+  if kubectl get powerpolicy invalid-timezone-quality -n aura-system >/dev/null 2>&1; then
+    kubectl delete powerpolicy invalid-timezone-quality -n aura-system >/dev/null
+    echo "FAIL: admission accepted an invalid IANA timezone" >&2
+    exit 12
+  fi
+  if grep -Eiq 'denied|invalid|timezone|time zone' <<<"$invalid_output"; then
+    break
+  fi
+  if grep -Eiq 'failed calling webhook|connection refused|no endpoints available|service unavailable|context deadline exceeded|tls handshake timeout|unexpected eof|the server is currently unable to handle the request' <<<"$invalid_output"; then
+    (( SECONDS < deadline )) || { echo "FAIL: admission webhook did not become available: $invalid_output" >&2; exit 13; }
+    sleep 2
+    continue
+  fi
+  echo "FAIL: invalid timezone failed without an admission explanation: $invalid_output" >&2
+  exit 13
+done
 echo "kind_helm_upgrade_admission=passed auth_secret_stable=true webhook_tls_stable=true invalid_timezone_rejected=true"
