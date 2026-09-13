@@ -5,7 +5,7 @@ chart="${1:-charts/aura-power}"
 scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
 
-helm template aura-power "$chart" --namespace aura-system >"$scratch/disabled.yaml"
+helm template aura-power "$chart" --namespace aura-system --set webhook.enabled=false >"$scratch/disabled.yaml"
 if grep -q 'kind: ValidatingWebhookConfiguration' "$scratch/disabled.yaml"; then
   echo "webhook resources rendered while disabled" >&2
   exit 1

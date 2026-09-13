@@ -129,3 +129,71 @@ jobs:
         run: |
           [[ "$GO_OUTCOME" == success ]]
           [[ "$WEB_OUTCOME" == success ]]
+
+  kind-acceptance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tests/e2e/playwright/package-lock.json
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: aura-power-quality
+          node_image: kindest/node:v1.35.0
+          version: v0.32.0
+      - uses: azure/setup-helm@v4
+      - name: Build and load candidate images
+        run: |
+          docker build -f Dockerfile.server -t aura-power-server:ci .
+          docker build -f Dockerfile.controller -t aura-power-controller:ci .
+          kind load docker-image --name aura-power-quality aura-power-server:ci aura-power-controller:ci
+      - name: Install candidate and run native journey
+        run: |
+          helm upgrade --install aura-power charts/aura-power \
+            --namespace aura-system --create-namespace --wait --timeout 5m \
+            --set server.image.repository=aura-power-server \
+            --set server.image.tag=ci \
+            --set server.image.pullPolicy=Never \
+            --set server.persistence.enabled=false \
+            --set controller.image.repository=aura-power-controller \
+            --set controller.image.tag=ci \
+            --set controller.image.pullPolicy=Never
+          ./scripts/quality/kind-core-journey.sh
+          ./scripts/quality/kind-legacy-upgrade-journey.sh
+      - name: Install browser test dependencies
+        run: |
+          cd tests/e2e/playwright
+          npm ci
+          npx playwright install --with-deps chromium firefox webkit
+      - name: Run real multi-browser journey
+        run: |
+          kubectl create namespace aura-power-e2e-browser
+          kubectl annotate namespace aura-power-e2e-browser aura.sh/power-eligible=true
+          kubectl create deployment browser-fixture -n aura-power-e2e-browser --image=registry.k8s.io/pause:3.10 --replicas=1
+          for attempt in $(seq 1 40); do
+            kubectl get powertarget -n aura-system -l power.aura.sh/target-namespace=aura-power-e2e-browser -o name | grep -q . && break
+            sleep 5
+          done
+          kubectl get powertarget -n aura-system -l power.aura.sh/target-namespace=aura-power-e2e-browser -o name | grep -q .
+          kubectl port-forward -n aura-system statefulset/aura-power-server 19091:8080 >/tmp/aura-power-port-forward.log 2>&1 &
+          forward_pid=$!
+          trap 'kill "$forward_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do curl -fsS http://127.0.0.1:19091/api/v1/health >/dev/null && break || sleep 1; done
+          curl -fsS http://127.0.0.1:19091/api/v1/health >/dev/null
+          admin_password="$(kubectl get secret aura-power-server-secret -n aura-system -o jsonpath='{.data.admin-password}' | base64 -d)"
+          cd tests/e2e/playwright
+          CI=true AURA_E2E_BASE_URL=http://127.0.0.1:19091 AURA_E2E_ADMIN_USER=admin \
+            AURA_E2E_ADMIN_PASSWORD="$admin_password" AURA_E2E_FIXTURE_NAMESPACE=aura-power-e2e-browser \
+            AURA_E2E_ALLOW_MUTATION=true AURA_E2E_BROWSERS=all npx playwright test
+
+  load-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: make quality-load

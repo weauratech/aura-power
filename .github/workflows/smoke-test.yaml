@@ -1,7 +1,7 @@
 name: Smoke Tests
 
-# No target or credential defaults. Jobs require an explicit mutation
-# acknowledgement and environment-protected credentials.
+# No target or credential defaults. This remote smoke is read-only; mutating
+# acceptance runs only in disposable Kind or through the watchdog EKS runner.
 
 on:
   workflow_dispatch:
@@ -15,9 +15,6 @@ on:
       fixture_namespace:
         description: 'Dedicated fixture namespace admitted for this run'
         required: true
-      mutation_ack:
-        description: 'Type I_ACKNOWLEDGE_DEDICATED_FIXTURE_MUTATIONS'
-        required: true
 
 permissions:
   contents: read
@@ -26,7 +23,6 @@ jobs:
   frontend-smoke:
     name: Frontend Smoke Tests (Playwright)
     runs-on: ubuntu-latest
-    if: inputs.mutation_ack == 'I_ACKNOWLEDGE_DEDICATED_FIXTURE_MUTATIONS'
     environment: aura-power-smoke
     env:
       INPUT_BASE_URL: ${{ inputs.base_url }}
@@ -60,7 +56,6 @@ jobs:
           AURA_E2E_ADMIN_USER: ${{ env.INPUT_USERNAME }}
           AURA_E2E_ADMIN_PASSWORD: ${{ secrets.AURA_POWER_SMOKE_PASSWORD }}
           AURA_E2E_FIXTURE_NAMESPACE: ${{ env.INPUT_FIXTURE_NAMESPACE }}
-          AURA_E2E_ALLOW_MUTATION: 'true'
       - name: Upload test report
         if: always()
         uses: actions/upload-artifact@v4

@@ -16,8 +16,18 @@ done
 rg -q 'VERSION="?\$\{TAG#v\}"?' .github/workflows/release.yaml
 rg -q 'IMAGE_SERVER.*\$\{VERSION\}' .github/workflows/release.yaml
 rg -q 'IMAGE_CONTROLLER.*\$\{VERSION\}' .github/workflows/release.yaml
-rg -q 'run: make quality' .github/workflows/release.yaml
-[[ "$(grep -c 'needs: validate' .github/workflows/release.yaml)" -eq 3 ]]
+rg -q 'run: make quality quality-acceptance quality-load' .github/workflows/release.yaml
+rg -U -q 'kind-acceptance:[\s\S]*needs: validate' .github/workflows/release.yaml
+[[ "$(grep -c 'needs: kind-acceptance' .github/workflows/release.yaml)" -eq 2 ]]
+rg -U -q 'goreleaser:[\s\S]*needs: sign' .github/workflows/release.yaml
+rg -U -q 'helm:[\s\S]*needs: \[sign, goreleaser\]' .github/workflows/release.yaml
+rg -U -q 'promote-latest:[\s\S]*needs: helm' .github/workflows/release.yaml
+if sed -n '/docker-manifest:/,/^  sign:/p' .github/workflows/release.yaml | rg -q ':latest'; then
+  echo "mutable latest must not be published before signing and artifact release" >&2
+  exit 1
+fi
+rg -q 'cosign sign --yes.*@\$\{SERVER_DIGEST\}' .github/workflows/release.yaml
+rg -q 'cosign sign --yes.*@\$\{CONTROLLER_DIGEST\}' .github/workflows/release.yaml
 
 default_render="$(mktemp)"
 ephemeral_render="$(mktemp)"
@@ -34,7 +44,7 @@ rg -q 'name: CONTROL_NAMESPACE' "$default_render"
 rg -q 'name: LEADER_ELECTION_ENABLED' "$default_render"
 rg -q 'name: SYSTEM_NAMESPACES' "$default_render"
 rg -U -q 'name: data\n[[:space:]]+emptyDir:' "$ephemeral_render"
-if rg -q '^kind: Secret$' "$external_secret_render"; then
+if rg -q '# Source: aura-power/templates/server-secret.yaml' "$external_secret_render"; then
   echo "server.auth.existingSecret unexpectedly rendered a managed Secret" >&2
   exit 1
 fi

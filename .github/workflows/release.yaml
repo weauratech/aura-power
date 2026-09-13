@@ -30,11 +30,71 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - uses: azure/setup-helm@v4
       - name: Test release candidate
-        run: make quality
+        run: make quality quality-acceptance quality-load
+
+  kind-acceptance:
+    runs-on: ubuntu-latest
+    needs: validate
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tests/e2e/playwright/package-lock.json
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: aura-power-quality
+          node_image: kindest/node:v1.35.0
+          version: v0.32.0
+      - uses: azure/setup-helm@v4
+      - name: Build and load candidate images
+        run: |
+          docker build -f Dockerfile.server -t aura-power-server:release-candidate .
+          docker build -f Dockerfile.controller -t aura-power-controller:release-candidate .
+          kind load docker-image --name aura-power-quality aura-power-server:release-candidate aura-power-controller:release-candidate
+      - name: Install candidate and run native journey
+        run: |
+          helm upgrade --install aura-power charts/aura-power \
+            --namespace aura-system --create-namespace --wait --timeout 5m \
+            --set server.image.repository=aura-power-server \
+            --set server.image.tag=release-candidate \
+            --set server.image.pullPolicy=Never \
+            --set server.persistence.enabled=false \
+            --set controller.image.repository=aura-power-controller \
+            --set controller.image.tag=release-candidate \
+            --set controller.image.pullPolicy=Never
+          ./scripts/quality/kind-core-journey.sh
+          ./scripts/quality/kind-legacy-upgrade-journey.sh
+      - name: Install browser test dependencies
+        run: |
+          cd tests/e2e/playwright
+          npm ci
+          npx playwright install --with-deps chromium firefox webkit
+      - name: Run real multi-browser journey
+        run: |
+          kubectl create namespace aura-power-e2e-browser
+          kubectl annotate namespace aura-power-e2e-browser aura.sh/power-eligible=true
+          kubectl create deployment browser-fixture -n aura-power-e2e-browser --image=registry.k8s.io/pause:3.10 --replicas=1
+          for attempt in $(seq 1 40); do
+            kubectl get powertarget -n aura-system -l power.aura.sh/target-namespace=aura-power-e2e-browser -o name | grep -q . && break
+            sleep 5
+          done
+          kubectl get powertarget -n aura-system -l power.aura.sh/target-namespace=aura-power-e2e-browser -o name | grep -q .
+          kubectl port-forward -n aura-system statefulset/aura-power-server 19091:8080 >/tmp/aura-power-port-forward.log 2>&1 &
+          forward_pid=$!
+          trap 'kill "$forward_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do curl -fsS http://127.0.0.1:19091/api/v1/health >/dev/null && break || sleep 1; done
+          curl -fsS http://127.0.0.1:19091/api/v1/health >/dev/null
+          admin_password="$(kubectl get secret aura-power-server-secret -n aura-system -o jsonpath='{.data.admin-password}' | base64 -d)"
+          cd tests/e2e/playwright
+          CI=true AURA_E2E_BASE_URL=http://127.0.0.1:19091 AURA_E2E_ADMIN_USER=admin \
+            AURA_E2E_ADMIN_PASSWORD="$admin_password" AURA_E2E_FIXTURE_NAMESPACE=aura-power-e2e-browser \
+            AURA_E2E_ALLOW_MUTATION=true AURA_E2E_BROWSERS=all npx playwright test
 
   docker-amd64:
     runs-on: ubuntu-latest
-    needs: validate
+    needs: kind-acceptance
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -69,7 +129,7 @@ jobs:
 
   docker-arm64:
     runs-on: ubuntu-24.04-arm
-    needs: validate
+    needs: kind-acceptance
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -119,11 +179,11 @@ jobs:
           TAG="${{ steps.version.outputs.tag }}"
           VERSION="${TAG#v}"
           # Server
-          docker buildx imagetools create -t "${{ env.IMAGE_SERVER }}:${TAG}" -t "${{ env.IMAGE_SERVER }}:${VERSION}" -t "${{ env.IMAGE_SERVER }}:latest" \
+          docker buildx imagetools create -t "${{ env.IMAGE_SERVER }}:${TAG}" -t "${{ env.IMAGE_SERVER }}:${VERSION}" \
             "${{ env.IMAGE_SERVER }}:${TAG}-amd64" \
             "${{ env.IMAGE_SERVER }}:${TAG}-arm64"
           # Controller
-          docker buildx imagetools create -t "${{ env.IMAGE_CONTROLLER }}:${TAG}" -t "${{ env.IMAGE_CONTROLLER }}:${VERSION}" -t "${{ env.IMAGE_CONTROLLER }}:latest" \
+          docker buildx imagetools create -t "${{ env.IMAGE_CONTROLLER }}:${TAG}" -t "${{ env.IMAGE_CONTROLLER }}:${VERSION}" \
             "${{ env.IMAGE_CONTROLLER }}:${TAG}-amd64" \
             "${{ env.IMAGE_CONTROLLER }}:${TAG}-arm64"
 
@@ -142,16 +202,14 @@ jobs:
         run: echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
       - name: Sign images
         run: |
-          cosign sign --yes "${{ env.IMAGE_SERVER }}:${{ steps.version.outputs.tag }}"
-          cosign sign --yes "${{ env.IMAGE_CONTROLLER }}:${{ steps.version.outputs.tag }}"
-          VERSION="${{ steps.version.outputs.tag }}"
-          VERSION="${VERSION#v}"
-          cosign sign --yes "${{ env.IMAGE_SERVER }}:${VERSION}"
-          cosign sign --yes "${{ env.IMAGE_CONTROLLER }}:${VERSION}"
+          SERVER_DIGEST="$(docker buildx imagetools inspect "${{ env.IMAGE_SERVER }}:${{ steps.version.outputs.tag }}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+          CONTROLLER_DIGEST="$(docker buildx imagetools inspect "${{ env.IMAGE_CONTROLLER }}:${{ steps.version.outputs.tag }}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+          cosign sign --yes "${{ env.IMAGE_SERVER }}@${SERVER_DIGEST}"
+          cosign sign --yes "${{ env.IMAGE_CONTROLLER }}@${CONTROLLER_DIGEST}"
 
   goreleaser:
     runs-on: ubuntu-latest
-    needs: validate
+    needs: sign
     steps:
       - uses: actions/checkout@v4
         with:
@@ -168,7 +226,7 @@ jobs:
 
   helm:
     runs-on: ubuntu-latest
-    needs: docker-manifest
+    needs: [sign, goreleaser]
     steps:
       - uses: actions/checkout@v4
       - uses: azure/setup-helm@v4
@@ -181,3 +239,18 @@ jobs:
         run: |
           helm package charts/aura-power --version ${{ steps.version.outputs.tag }} --app-version ${{ steps.version.outputs.tag }}
           helm push aura-power-${{ steps.version.outputs.tag }}.tgz oci://ghcr.io/weauratech/charts
+
+  promote-latest:
+    runs-on: ubuntu-latest
+    needs: helm
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Promote verified images
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          docker buildx imagetools create -t "${{ env.IMAGE_SERVER }}:latest" "${{ env.IMAGE_SERVER }}:${TAG}"
+          docker buildx imagetools create -t "${{ env.IMAGE_CONTROLLER }}:latest" "${{ env.IMAGE_CONTROLLER }}:${TAG}"

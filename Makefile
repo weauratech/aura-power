@@ -83,3 +83,6 @@ quality-acceptance:
 	go test -tags=acceptance ./... -race -count=1; go_status=$$?; \
 	cd web && npm run test:acceptance; web_status=$$?; \
 	if [ $$go_status -ne 0 ] || [ $$web_status -ne 0 ]; then exit 1; fi
+
+quality-load:
+	go test -tags=load ./internal/adapters/driven/kubernetes -run TestDiscoveryMemoryBudget -count=3
