@@ -104,6 +104,20 @@ func TestDetectOwnership_ArgoCD(t *testing.T) {
 	}
 }
 
+func TestDetectOwnership_ArgoCDDefaultTrackingLabel(t *testing.T) {
+	signals := DetectOwnership(nil, map[string]string{"app.kubernetes.io/instance": "fixture-app"}, "aura.sh/power-eligible")
+	if len(signals) != 1 || signals[0].Type != OwnershipArgoCD {
+		t.Fatalf("default Argo CD tracking label was not detected: %+v", signals)
+	}
+}
+
+func TestDetectOwnership_ArgoCDCustomTrackingLabel(t *testing.T) {
+	signals := DetectOwnershipWithArgoTracking(nil, map[string]string{"gitops.example.io/app": "fixture-app"}, "aura.sh/power-eligible", []string{"gitops.example.io/app"})
+	if len(signals) != 1 || signals[0].Type != OwnershipArgoCD {
+		t.Fatalf("custom Argo CD tracking label was not detected: %+v", signals)
+	}
+}
+
 func TestDetectOwnership_Helm(t *testing.T) {
 	annotations := map[string]string{}
 	labels := map[string]string{"app.kubernetes.io/managed-by": "Helm"}

@@ -103,6 +103,8 @@ controller:
       - kube-public
       - kube-node-lease
       - aura-system
+    # Additional label keys configured as Argo CD resource tracking IDs.
+    argoTrackingLabelKeys: []
   extraEnv: []
   podLabels: {}
   podAnnotations: {}

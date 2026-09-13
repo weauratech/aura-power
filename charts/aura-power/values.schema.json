@@ -26,6 +26,12 @@
         "leaderElection": {
           "type": "object",
           "properties": { "enabled": { "type": "boolean" }, "id": { "type": "string", "minLength": 1 } }
+        },
+        "config": {
+          "type": "object",
+          "properties": {
+            "argoTrackingLabelKeys": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }
+          }
         }
       },
       "allOf": [

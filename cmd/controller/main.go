@@ -149,7 +149,9 @@ func main() {
 	}
 
 	// Start discovery loop (as manager runnable — starts after cache is synced)
-	discoverer := kubernetes.NewDiscoverer(k8sClient)
+	// Discovery uses direct API reads so cluster-wide workload lists do not
+	// create long-lived informer caches for every Deployment/StatefulSet/CronJob.
+	discoverer := kubernetes.NewDiscoverer(mgr.GetAPIReader())
 	// Configure built-in schedule timezone
 	if tz := os.Getenv("BUILTIN_SCHEDULE_TIMEZONE"); tz != "" {
 		background.DefaultTimezone = tz
@@ -158,12 +160,15 @@ func main() {
 	discoveryLoop := &background.DiscoveryLoop{
 		Client:     k8sClient,
 		Discoverer: discoverer,
+		Executor:   executor,
+		Audit:      auditRecorder,
 		Config: background.DiscoveryConfig{
-			Interval:         durationEnv("DISCOVERY_INTERVAL", 60*time.Second),
-			Namespace:        controlNamespace,
-			SystemNamespaces: guardrailConfig.SystemNamespaces,
-			OptInAnnotation:  guardrailConfig.OptInAnnotation,
-			ExemptAnnotation: guardrailConfig.ExemptAnnotation,
+			Interval:              durationEnv("DISCOVERY_INTERVAL", 60*time.Second),
+			Namespace:             controlNamespace,
+			SystemNamespaces:      guardrailConfig.SystemNamespaces,
+			OptInAnnotation:       guardrailConfig.OptInAnnotation,
+			ExemptAnnotation:      guardrailConfig.ExemptAnnotation,
+			ArgoTrackingLabelKeys: splitAndTrim(os.Getenv("ARGO_TRACKING_LABEL_KEYS")),
 		},
 	}
 	if err := mgr.Add(discoveryLoop); err != nil {

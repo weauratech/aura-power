@@ -102,7 +102,7 @@ func TestPropertyExpiredOverrideInert(t *testing.T) {
 			Name:      "expired",
 			Scope:     Scope{}, // matches all
 			State:     PowerStateOn,
-			Priority:  9999, // Would win if active
+			Priority:  9999,                // Would win if active
 			ExpiresAt: now.Add(-time.Hour), // Expired
 			CreatedAt: now.Add(-2 * time.Hour),
 		}

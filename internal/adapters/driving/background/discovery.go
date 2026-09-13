@@ -24,16 +24,19 @@ import (
 type DiscoveryLoop struct {
 	Client     client.Client
 	Discoverer ports.WorkloadDiscoverer
+	Executor   ports.WorkloadExecutor
+	Audit      ports.AuditRecorder
 	Config     DiscoveryConfig
 }
 
 // DiscoveryConfig holds configuration for the discovery loop.
 type DiscoveryConfig struct {
-	Interval         time.Duration
-	Namespace        string // Namespace where PowerTargets are created (e.g., aura-system)
-	SystemNamespaces []string
-	OptInAnnotation  string
-	ExemptAnnotation string
+	Interval              time.Duration
+	Namespace             string // Namespace where PowerTargets are created (e.g., aura-system)
+	SystemNamespaces      []string
+	OptInAnnotation       string
+	ExemptAnnotation      string
+	ArgoTrackingLabelKeys []string
 }
 
 // Run starts the discovery loop. Blocks until context is cancelled.
@@ -126,7 +129,7 @@ func (d *DiscoveryLoop) getEligibleNamespaces(ctx context.Context) []string {
 func (d *DiscoveryLoop) ensurePowerTarget(ctx context.Context, wl ports.DiscoveredWorkload) (bool, error) {
 	// Skip exempt workloads
 	if wl.Annotations[d.Config.ExemptAnnotation] == "true" {
-		return false, nil
+		return false, d.restoreBeforeExemption(ctx, wl)
 	}
 
 	// Skip system namespaces
@@ -173,7 +176,14 @@ func (d *DiscoveryLoop) ensurePowerTarget(ctx context.Context, wl ports.Discover
 	var legacy v1alpha1.PowerTarget
 	legacyErr := d.Client.Get(ctx, legacyKey, &legacy)
 	if legacyErr == nil && legacy.Spec.TargetRef.Kind == string(wl.Ref.Kind) {
-		created, createErr := d.newPowerTarget(ctx, targetName, wl, &legacy.Status)
+		// Preserve execution state only when the legacy record was already bound
+		// to this exact Kubernetes object. UID-less snapshots have no safe proof
+		// of ownership and must not be replayed onto a recreated workload.
+		var previous *v1alpha1.PowerTargetStatus
+		if legacy.Spec.TargetRef.UID != "" && legacy.Spec.TargetRef.UID == wl.Ref.UID {
+			previous = &legacy.Status
+		}
+		created, createErr := d.newPowerTarget(ctx, targetName, wl, previous)
 		if createErr != nil {
 			return false, createErr
 		}
@@ -189,9 +199,42 @@ func (d *DiscoveryLoop) ensurePowerTarget(ctx context.Context, wl ports.Discover
 	return d.newPowerTarget(ctx, targetName, wl, nil)
 }
 
+// restoreBeforeExemption guarantees that opting out cannot strand a workload
+// at zero replicas/suspended after deleting the only persisted snapshot.
+func (d *DiscoveryLoop) restoreBeforeExemption(ctx context.Context, wl ports.DiscoveredWorkload) error {
+	key := types.NamespacedName{Namespace: d.Config.Namespace, Name: powerTargetName(wl.Ref)}
+	var target v1alpha1.PowerTarget
+	if err := d.Client.Get(ctx, key, &target); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	if target.Spec.TargetRef.UID == "" || target.Spec.TargetRef.UID != wl.Ref.UID {
+		return fmt.Errorf("refusing exemption recovery for unverified workload identity %s/%s", wl.Ref.Namespace, wl.Ref.Name)
+	}
+	if target.Status.Snapshot == nil || !target.Status.Snapshot.Available {
+		return d.Client.Delete(ctx, &target)
+	}
+	isOff := (wl.Ref.Kind == domain.WorkloadKindCronJob && wl.Suspended) || (wl.Ref.Kind != domain.WorkloadKindCronJob && wl.Replicas == 0)
+	if isOff {
+		if d.Executor == nil {
+			return fmt.Errorf("cannot restore exempt workload without executor")
+		}
+		snapshot := domain.Snapshot{ReplicaCount: target.Status.Snapshot.ReplicaCount, Suspended: target.Status.Snapshot.Suspended}
+		if err := d.Executor.Restore(ctx, wl.Ref, snapshot); err != nil {
+			return fmt.Errorf("restore before exemption: %w", err)
+		}
+		if d.Audit != nil {
+			_ = d.Audit.Record(ctx, ports.AuditEvent{Timestamp: time.Now(), Action: ports.AuditWorkloadRestored, Actor: "system/exemption", Target: wl.Ref, Result: "success", Reason: "restored before applying workload exemption"})
+		}
+		return nil
+	}
+	// A later discovery observes the restored state before deleting the
+	// snapshot-bearing target, making recovery independently verifiable.
+	return d.Client.Delete(ctx, &target)
+}
+
 func (d *DiscoveryLoop) newPowerTarget(ctx context.Context, targetName string, wl ports.DiscoveredWorkload, previous *v1alpha1.PowerTargetStatus) (bool, error) {
 	// Detect ownership
-	ownership := domain.DetectOwnership(wl.Annotations, wl.Labels, d.Config.OptInAnnotation, wl.NamespaceAnnotations)
+	ownership := domain.DetectOwnershipWithArgoTracking(wl.Annotations, wl.Labels, d.Config.OptInAnnotation, d.Config.ArgoTrackingLabelKeys, wl.NamespaceAnnotations)
 	var ownershipSpecs []v1alpha1.OwnershipSpec
 	for _, o := range ownership {
 		ownershipSpecs = append(ownershipSpecs, v1alpha1.OwnershipSpec{
@@ -271,7 +314,7 @@ func (d *DiscoveryLoop) updateObservedState(ctx context.Context, target *v1alpha
 	}
 
 	// Update ownership
-	ownership := domain.DetectOwnership(wl.Annotations, wl.Labels, d.Config.OptInAnnotation, wl.NamespaceAnnotations)
+	ownership := domain.DetectOwnershipWithArgoTracking(wl.Annotations, wl.Labels, d.Config.OptInAnnotation, d.Config.ArgoTrackingLabelKeys, wl.NamespaceAnnotations)
 	var ownershipSpecs []v1alpha1.OwnershipSpec
 	for _, o := range ownership {
 		ownershipSpecs = append(ownershipSpecs, v1alpha1.OwnershipSpec{
@@ -319,7 +362,16 @@ func (d *DiscoveryLoop) cleanupOrphans(ctx context.Context, currentWorkloads []p
 				break
 			}
 		}
-		if skip || wl.Annotations[d.Config.ExemptAnnotation] == "true" {
+		if skip {
+			continue
+		}
+		if wl.Annotations[d.Config.ExemptAnnotation] == "true" {
+			// Keep the target for one more observation while an asynchronous
+			// restore converges; ensurePowerTarget deletes it once live state is on.
+			isOff := (wl.Ref.Kind == domain.WorkloadKindCronJob && wl.Suspended) || (wl.Ref.Kind != domain.WorkloadKindCronJob && wl.Replicas == 0)
+			if isOff {
+				expected[powerTargetName(wl.Ref)] = true
+			}
 			continue
 		}
 		expected[powerTargetName(wl.Ref)] = true

@@ -13,10 +13,10 @@ import (
 )
 
 type Discoverer struct {
-	client client.Client
+	client client.Reader
 }
 
-func NewDiscoverer(c client.Client) *Discoverer {
+func NewDiscoverer(c client.Reader) *Discoverer {
 	return &Discoverer{client: c}
 }
 

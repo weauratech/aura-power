@@ -64,6 +64,10 @@ func (r *TargetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	// 3. Convert CRD target to domain target
 	domainTarget := toDomainTarget(&target)
+	if domainTarget.Ref.UID == "" {
+		logger.Info("waiting for discovery to bind workload UID before mutation")
+		return ctrl.Result{RequeueAfter: errorRequeueAfter}, nil
+	}
 
 	// 4. Compute decision
 	now := time.Now()
@@ -72,7 +76,14 @@ func (r *TargetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	// 5. Update status. Keep a copy so stable reconciliations do not issue a
 	// status write and trigger another watch event.
 	previousStatus := target.DeepCopy().Status
+	previousLabels := target.DeepCopy().Labels
 	updateTargetStatus(&target, decision, now)
+	if !equality.Semantic.DeepEqual(previousLabels, target.Labels) {
+		if err := r.Update(ctx, &target); err != nil {
+			logger.Error(err, "failed to persist target state label")
+			return ctrl.Result{RequeueAfter: errorRequeueAfter}, nil
+		}
+	}
 
 	// 6. Execute action if needed
 	if !decision.IsBlocked() && decision.IsManaged() {
@@ -198,6 +209,12 @@ func (r *TargetReconciler) reconcileExistingAction(ctx context.Context, target *
 		if action.Phase != "Converged" {
 			r.completeAction(target, "Converged", "desired workload state observed")
 		}
+		return false, nil
+	}
+	if action.Phase == "InProgress" {
+		// The controller may have stopped after persisting intent. Reissuing the
+		// same UID-bound scale/suspend operation is idempotent and recovers both
+		// the before-mutation and after-mutation crash windows.
 		return false, nil
 	}
 

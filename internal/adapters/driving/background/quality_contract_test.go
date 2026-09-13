@@ -27,7 +27,7 @@ func TestQualityDiscoveryMigratesLegacyIdentityAndClearsSnapshotOnNewUID(t *test
 	replicas := int32(3)
 	legacy := &v1alpha1.PowerTarget{
 		ObjectMeta: metav1.ObjectMeta{Name: "fixtures--api", Namespace: "aura-system"},
-		Spec:       v1alpha1.PowerTargetSpec{TargetRef: v1alpha1.TargetReference{Namespace: "fixtures", Name: "api", Kind: "Deployment"}},
+		Spec:       v1alpha1.PowerTargetSpec{TargetRef: v1alpha1.TargetReference{Namespace: "fixtures", Name: "api", Kind: "Deployment", UID: "uid-one"}},
 		Status: v1alpha1.PowerTargetStatus{
 			Snapshot:            &v1alpha1.SnapshotSpec{Available: true, ReplicaCount: &replicas},
 			Action:              &v1alpha1.PowerActionStatus{DesiredState: "off", Phase: "Converged"},
@@ -60,6 +60,28 @@ func TestQualityDiscoveryMigratesLegacyIdentityAndClearsSnapshotOnNewUID(t *test
 	}
 }
 
+func TestQualityDiscoveryDoesNotMigrateSnapshotWithoutLegacyUID(t *testing.T) {
+	replicas := int32(3)
+	legacy := &v1alpha1.PowerTarget{
+		ObjectMeta: metav1.ObjectMeta{Name: "fixtures--api", Namespace: "aura-system"},
+		Spec:       v1alpha1.PowerTargetSpec{TargetRef: v1alpha1.TargetReference{Namespace: "fixtures", Name: "api", Kind: "Deployment"}},
+		Status:     v1alpha1.PowerTargetStatus{Snapshot: &v1alpha1.SnapshotSpec{Available: true, ReplicaCount: &replicas}},
+	}
+	c := fake.NewClientBuilder().WithScheme(discoveryScheme(t)).WithStatusSubresource(&v1alpha1.PowerTarget{}).WithObjects(legacy).Build()
+	loop := DiscoveryLoop{Client: c, Config: DiscoveryConfig{Namespace: "aura-system", ExemptAnnotation: "aura.sh/power-exempt", OptInAnnotation: "aura.sh/power-eligible"}}
+	ref := domain.WorkloadRef{APIVersion: "apps/v1", Namespace: "fixtures", Name: "api", Kind: domain.WorkloadKindDeployment, UID: "uid-current"}
+	if _, err := loop.ensurePowerTarget(context.Background(), ports.DiscoveredWorkload{Ref: ref, Replicas: 1}); err != nil {
+		t.Fatal(err)
+	}
+	var migrated v1alpha1.PowerTarget
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "aura-system", Name: powerTargetName(ref)}, &migrated); err != nil {
+		t.Fatal(err)
+	}
+	if migrated.Status.Snapshot != nil || migrated.Spec.TargetRef.UID != "uid-current" {
+		t.Fatalf("UID-less legacy state was trusted: %+v", migrated)
+	}
+}
+
 func TestQualityDiscoverySkipsSystemAndExemptWorkloads(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(discoveryScheme(t)).WithStatusSubresource(&v1alpha1.PowerTarget{}).Build()
 	loop := DiscoveryLoop{Client: c, Config: DiscoveryConfig{Namespace: "aura-system", SystemNamespaces: []string{"kube-system"}, ExemptAnnotation: "aura.sh/power-exempt", OptInAnnotation: "aura.sh/power-eligible"}}
@@ -79,6 +101,44 @@ func TestQualityDiscoverySkipsSystemAndExemptWorkloads(t *testing.T) {
 	if len(targets.Items) != 0 {
 		t.Fatalf("created %d protected targets", len(targets.Items))
 	}
+}
+
+func TestQualityExemptionRestoresBeforeTargetDeletion(t *testing.T) {
+	replicas := int32(3)
+	ref := domain.WorkloadRef{APIVersion: "apps/v1", Namespace: "fixtures", Name: "api", Kind: domain.WorkloadKindDeployment, UID: "uid-api"}
+	target := &v1alpha1.PowerTarget{ObjectMeta: metav1.ObjectMeta{Name: powerTargetName(ref), Namespace: "aura-system"}, Spec: v1alpha1.PowerTargetSpec{TargetRef: targetReference(ref)}, Status: v1alpha1.PowerTargetStatus{Snapshot: &v1alpha1.SnapshotSpec{Available: true, ReplicaCount: &replicas}}}
+	c := fake.NewClientBuilder().WithScheme(discoveryScheme(t)).WithStatusSubresource(&v1alpha1.PowerTarget{}).WithObjects(target).Build()
+	executor := &exemptionExecutor{}
+	loop := DiscoveryLoop{Client: c, Executor: executor, Config: DiscoveryConfig{Namespace: "aura-system", ExemptAnnotation: "aura.sh/power-exempt"}}
+	wl := ports.DiscoveredWorkload{Ref: ref, Replicas: 0, Annotations: map[string]string{"aura.sh/power-exempt": "true"}}
+	if _, err := loop.ensurePowerTarget(context.Background(), wl); err != nil {
+		t.Fatal(err)
+	}
+	if executor.restores != 1 {
+		t.Fatalf("restore calls=%d", executor.restores)
+	}
+	var retained v1alpha1.PowerTarget
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "aura-system", Name: powerTargetName(ref)}, &retained); err != nil {
+		t.Fatalf("snapshot target deleted before observing recovery: %v", err)
+	}
+	wl.Replicas = 3
+	if _, err := loop.ensurePowerTarget(context.Background(), wl); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "aura-system", Name: powerTargetName(ref)}, &retained); err == nil {
+		t.Fatal("target retained after restored workload became exempt")
+	}
+}
+
+type exemptionExecutor struct{ restores int }
+
+func (*exemptionExecutor) CaptureSnapshot(context.Context, domain.WorkloadRef) (*domain.Snapshot, error) {
+	return nil, nil
+}
+func (*exemptionExecutor) PowerDown(context.Context, domain.WorkloadRef) error { return nil }
+func (e *exemptionExecutor) Restore(context.Context, domain.WorkloadRef, domain.Snapshot) error {
+	e.restores++
+	return nil
 }
 
 func TestQualityDiscoveryPersistsSelectionLabels(t *testing.T) {

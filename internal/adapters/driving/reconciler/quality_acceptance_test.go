@@ -32,7 +32,7 @@ func TestAcceptanceCTRL04PolicyNamespaceGroupsReachDomain(t *testing.T) {
 func TestAcceptanceCTRL05WorkloadAndNamespaceLabelsReachDecisionEngine(t *testing.T) {
 	target := &v1alpha1.PowerTarget{ObjectMeta: metav1.ObjectMeta{Name: "fixtures--api", Namespace: "aura-system", Labels: map[string]string{
 		"power.aura.sh/target-namespace": "fixtures", "power.aura.sh/target-name": "api", "power.aura.sh/target-kind": "Deployment",
-	}}, Spec: v1alpha1.PowerTargetSpec{TargetRef: v1alpha1.TargetReference{Namespace: "fixtures", Name: "api", Kind: "Deployment"}}, Status: v1alpha1.PowerTargetStatus{
+	}}, Spec: v1alpha1.PowerTargetSpec{TargetRef: v1alpha1.TargetReference{Namespace: "fixtures", Name: "api", Kind: "Deployment", UID: "uid-api"}}, Status: v1alpha1.PowerTargetStatus{
 		WorkloadLabels: map[string]string{"tier": "backend"}, NamespaceLabels: map[string]string{"environment": "test"},
 	}}
 	got := toDomainTarget(target)
@@ -46,7 +46,7 @@ func TestAcceptanceCTRL06StatusConflictCannotLoseSnapshotAndRepeatMutation(t *te
 	if err := v1alpha1.AddToScheme(s); err != nil {
 		t.Fatal(err)
 	}
-	target := &v1alpha1.PowerTarget{ObjectMeta: metav1.ObjectMeta{Name: "fixtures--api", Namespace: "aura-system"}, Spec: v1alpha1.PowerTargetSpec{TargetRef: v1alpha1.TargetReference{Namespace: "fixtures", Name: "api", Kind: "Deployment"}}, Status: v1alpha1.PowerTargetStatus{ObservedState: v1alpha1.ObservedStateSpec{Replicas: 3, PowerState: "on"}}}
+	target := &v1alpha1.PowerTarget{ObjectMeta: metav1.ObjectMeta{Name: "fixtures--api", Namespace: "aura-system"}, Spec: v1alpha1.PowerTargetSpec{TargetRef: v1alpha1.TargetReference{Namespace: "fixtures", Name: "api", Kind: "Deployment", UID: "uid-api"}}, Status: v1alpha1.PowerTargetStatus{ObservedState: v1alpha1.ObservedStateSpec{Replicas: 3, PowerState: "on"}}}
 	policy := &v1alpha1.PowerPolicy{ObjectMeta: metav1.ObjectMeta{Name: "off", Namespace: "aura-system"}, Spec: v1alpha1.PowerPolicySpec{Scope: v1alpha1.PolicyScope{Namespaces: []string{"fixtures"}}, Schedule: v1alpha1.PolicySchedule{DesiredState: "off"}}}
 	base := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&v1alpha1.PowerTarget{}).WithObjects(target, policy).Build()
 	wrapped := &statusFailingClient{Client: base}
@@ -71,7 +71,7 @@ func TestAcceptanceArgoContentionDoesNotRepeatPowerDown(t *testing.T) {
 	replicas := int32(2)
 	target := &v1alpha1.PowerTarget{
 		ObjectMeta: metav1.ObjectMeta{Name: "fixtures--api", Namespace: "aura-system"},
-		Spec:       v1alpha1.PowerTargetSpec{TargetRef: v1alpha1.TargetReference{Namespace: "fixtures", Name: "api", Kind: "Deployment"}},
+		Spec:       v1alpha1.PowerTargetSpec{TargetRef: v1alpha1.TargetReference{Namespace: "fixtures", Name: "api", Kind: "Deployment", UID: "uid-api"}},
 		Status: v1alpha1.PowerTargetStatus{
 			ObservedState: v1alpha1.ObservedStateSpec{Replicas: replicas, PowerState: "on"},
 			Snapshot:      &v1alpha1.SnapshotSpec{Available: true, ReplicaCount: &replicas},
@@ -123,7 +123,7 @@ func TestAcceptanceActionIntentMustPersistBeforeMutation(t *testing.T) {
 	replicas := int32(2)
 	target := &v1alpha1.PowerTarget{
 		ObjectMeta: metav1.ObjectMeta{Name: "fixtures--api", Namespace: "aura-system"},
-		Spec:       v1alpha1.PowerTargetSpec{TargetRef: v1alpha1.TargetReference{Namespace: "fixtures", Name: "api", Kind: "Deployment"}},
+		Spec:       v1alpha1.PowerTargetSpec{TargetRef: v1alpha1.TargetReference{Namespace: "fixtures", Name: "api", Kind: "Deployment", UID: "uid-api"}},
 		Status: v1alpha1.PowerTargetStatus{
 			ObservedState: v1alpha1.ObservedStateSpec{Replicas: replicas, PowerState: "on"},
 			Snapshot:      &v1alpha1.SnapshotSpec{Available: true, ReplicaCount: &replicas},
@@ -151,7 +151,7 @@ func TestAcceptanceArgoRestoredLiveStateIsNotOverwrittenByStaleSnapshot(t *testi
 	now := metav1.Now()
 	target := &v1alpha1.PowerTarget{
 		ObjectMeta: metav1.ObjectMeta{Name: "fixtures--api", Namespace: "aura-system"},
-		Spec:       v1alpha1.PowerTargetSpec{TargetRef: v1alpha1.TargetReference{Namespace: "fixtures", Name: "api", Kind: "Deployment"}},
+		Spec:       v1alpha1.PowerTargetSpec{TargetRef: v1alpha1.TargetReference{Namespace: "fixtures", Name: "api", Kind: "Deployment", UID: "uid-api"}},
 		Status: v1alpha1.PowerTargetStatus{
 			ObservedState: v1alpha1.ObservedStateSpec{Replicas: 5, PowerState: "on"},
 			Snapshot:      &v1alpha1.SnapshotSpec{Available: true, ReplicaCount: &snapshotReplicas},
@@ -187,7 +187,7 @@ func TestAcceptanceInvalidNamespaceGroupDoesNotBlockUnrelatedRestore(t *testing.
 	replicas := int32(2)
 	target := &v1alpha1.PowerTarget{
 		ObjectMeta: metav1.ObjectMeta{Name: "fixtures--api", Namespace: "aura-system"},
-		Spec:       v1alpha1.PowerTargetSpec{TargetRef: v1alpha1.TargetReference{Namespace: "fixtures", Name: "api", Kind: "Deployment"}},
+		Spec:       v1alpha1.PowerTargetSpec{TargetRef: v1alpha1.TargetReference{Namespace: "fixtures", Name: "api", Kind: "Deployment", UID: "uid-api"}},
 		Status: v1alpha1.PowerTargetStatus{
 			ObservedState: v1alpha1.ObservedStateSpec{Replicas: 0, PowerState: "off"},
 			Snapshot:      &v1alpha1.SnapshotSpec{Available: true, ReplicaCount: &replicas},
@@ -203,6 +203,46 @@ func TestAcceptanceInvalidNamespaceGroupDoesNotBlockUnrelatedRestore(t *testing.
 	}
 	if executor.restores != 1 {
 		t.Fatalf("unresolved group blocked unrelated restore: restores=%d", executor.restores)
+	}
+}
+
+func TestAcceptanceInProgressActionRetriesAfterCrash(t *testing.T) {
+	s := runtime.NewScheme()
+	if err := v1alpha1.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+	replicas := int32(2)
+	policy := &v1alpha1.PowerPolicy{ObjectMeta: metav1.ObjectMeta{Name: "off", Namespace: "aura-system"}, Spec: v1alpha1.PowerPolicySpec{Scope: v1alpha1.PolicyScope{Namespaces: []string{"fixtures"}}, Schedule: v1alpha1.PolicySchedule{DesiredState: "off"}}}
+	decisionKey := powerDecisionKey(domain.Decision{DesiredState: domain.PowerStateOff, WinningRule: &domain.RuleRef{Kind: domain.RuleKindPolicy, Name: "off", Namespace: "aura-system"}})
+	target := &v1alpha1.PowerTarget{ObjectMeta: metav1.ObjectMeta{Name: "fixtures--api", Namespace: "aura-system"}, Spec: v1alpha1.PowerTargetSpec{TargetRef: v1alpha1.TargetReference{Namespace: "fixtures", Name: "api", Kind: "Deployment", UID: "uid-api"}}, Status: v1alpha1.PowerTargetStatus{
+		ObservedState: v1alpha1.ObservedStateSpec{Replicas: 2, PowerState: "on"}, Snapshot: &v1alpha1.SnapshotSpec{Available: true, ReplicaCount: &replicas}, Action: &v1alpha1.PowerActionStatus{DesiredState: "off", DecisionKey: decisionKey, Phase: "InProgress"},
+	}}
+	c := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&v1alpha1.PowerTarget{}).WithObjects(target, policy).Build()
+	executor := &countingExecutor{}
+	r := TargetReconciler{Client: c, Config: domain.DefaultGuardrailConfig(), Executor: executor, Audit: noopAudit{}, Metrics: noopMetrics{}}
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(target)}); err != nil {
+		t.Fatal(err)
+	}
+	if executor.calls != 1 {
+		t.Fatalf("InProgress intent was not recovered idempotently: calls=%d", executor.calls)
+	}
+}
+
+func TestAcceptanceTargetWithoutUIDCannotMutateWorkload(t *testing.T) {
+	s := runtime.NewScheme()
+	if err := v1alpha1.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+	target := &v1alpha1.PowerTarget{ObjectMeta: metav1.ObjectMeta{Name: "legacy", Namespace: "aura-system"}, Spec: v1alpha1.PowerTargetSpec{TargetRef: v1alpha1.TargetReference{Namespace: "fixtures", Name: "api", Kind: "Deployment"}}, Status: v1alpha1.PowerTargetStatus{ObservedState: v1alpha1.ObservedStateSpec{Replicas: 2, PowerState: "on"}}}
+	policy := &v1alpha1.PowerPolicy{ObjectMeta: metav1.ObjectMeta{Name: "off", Namespace: "aura-system"}, Spec: v1alpha1.PowerPolicySpec{Scope: v1alpha1.PolicyScope{Namespaces: []string{"fixtures"}}, Schedule: v1alpha1.PolicySchedule{DesiredState: "off"}}}
+	c := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&v1alpha1.PowerTarget{}).WithObjects(target, policy).Build()
+	executor := &countingExecutor{}
+	r := TargetReconciler{Client: c, Config: domain.DefaultGuardrailConfig(), Executor: executor, Audit: noopAudit{}, Metrics: noopMetrics{}}
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(target)}); err != nil {
+		t.Fatal(err)
+	}
+	if executor.calls != 0 {
+		t.Fatalf("UID-less target mutated workload %d times", executor.calls)
 	}
 }
 

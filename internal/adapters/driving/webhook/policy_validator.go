@@ -81,6 +81,11 @@ func validateTimeOfDay(s string, windowIndex int, field string) error {
 	if len(s) != 5 || s[2] != ':' {
 		return fmt.Errorf("spec.schedule.windows[%d].%s: must be HH:MM format (got %q)", windowIndex, field, s)
 	}
+	for _, index := range []int{0, 1, 3, 4} {
+		if s[index] < '0' || s[index] > '9' {
+			return fmt.Errorf("spec.schedule.windows[%d].%s: must be HH:MM format (got %q)", windowIndex, field, s)
+		}
+	}
 	hour := int(s[0]-'0')*10 + int(s[1]-'0')
 	minute := int(s[3]-'0')*10 + int(s[4]-'0')
 	if hour < 0 || hour > 23 {

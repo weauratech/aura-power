@@ -64,6 +64,8 @@ spec:
               value: {{ .Release.Namespace | quote }}
             - name: SYSTEM_NAMESPACES
               value: {{ append .Values.controller.config.systemNamespaceBlocklist .Release.Namespace | uniq | join "," | quote }}
+            - name: ARGO_TRACKING_LABEL_KEYS
+              value: {{ .Values.controller.config.argoTrackingLabelKeys | join "," | quote }}
             - name: AUDIT_RETENTION_DAYS
               value: {{ .Values.controller.config.auditRetentionDays | default 7 | quote }}
             - name: WEBHOOK_ENABLED

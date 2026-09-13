@@ -17,6 +17,7 @@ func TestQualityTimeWindowValidationContract(t *testing.T) {
 		"invalid timezone": func(w *v1alpha1.TimeWindowSpec) { w.Timezone = "Mars/Olympus" },
 		"hour":             func(w *v1alpha1.TimeWindowSpec) { w.Start = "24:00" },
 		"minute":           func(w *v1alpha1.TimeWindowSpec) { w.End = "06:60" },
+		"non-digit":        func(w *v1alpha1.TimeWindowSpec) { w.Start = "1::00" },
 		"weekday":          func(w *v1alpha1.TimeWindowSpec) { w.Days = []int{7} },
 	} {
 		t.Run(name, func(t *testing.T) {
