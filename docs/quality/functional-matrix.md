@@ -1,34 +1,28 @@
 # Functional verification matrix
 
-Status values distinguish **pass-real**, **pass-simulated**, **failed**,
-**blocked**, **inconclusive**, and **not-implemented**. A passing HTTP response is
-not evidence that a workload action completed.
+The installed EKS v2.1.7 result is retained separately from the candidate branch. A passing simulated test does not replace a native Kubernetes result, and a result against the installed release does not validate unpublished code.
 
-| Capability | Contract and evidence | Local | EKS v2.1.7 | Result |
-|---|---|---:|---:|---|
-| Domain priority and schedule | Deterministic unit/property contracts | pass | not needed | pass-simulated |
-| Discovery of Deployment, StatefulSet, CronJob | Native API objects become targets | pass | observed installed controller | pass-real, limited |
-| Workload identity | Namespace, kind, name and UID remain distinct | two homonymous kinds collapse | not mutated | failed |
-| Exact namespace/name selection | Scope identifies exact workload pairs | frontend and converter contracts fail | not mutated | failed |
-| Namespace groups | Group membership reaches decision engine | acceptance contract fails | not mutated | failed |
-| Workload and namespace labels | Labels survive discovery and match policies | acceptance contracts fail | not mutated | failed |
-| Deployment/StatefulSet shutdown | Native workloads reach zero | pass | Deployment with 2 replicas reached zero | pass-real |
-| Replica restoration | Restore the original 2 and 1 replicas | snapshots persisted as zero; final replicas zero | snapshot was zero; after 5 minutes replicas remained zero | failed |
-| CronJob restoration | Preserve an originally suspended CronJob | executor contract fails | not mutated | failed |
-| Built-in schedules | Seed valid `on`/`off` schedules | API server rejects generated boolean enum | installed objects not readable cluster-wide | failed |
-| Preview/explain versus execution | Same selected set and state transition | override preview contract fails; UI shows desired on, replicas zero | not mutated | failed |
-| Audit truthfulness | One decision/action with correct kind and outcome | duplicate restore events observed | read-only inventory only | failed |
-| Authentication/RBAC | Login and role matrix | existing API E2E passes; deeper contracts separate | endpoint not exercised | partial |
-| Approval workflow | Create, approve/reject, apply and audit | frontend is static placeholder | not exercised | not-implemented |
-| Notifications | Provider error remains visible; controlled receiver gets event | frontend 504 contract fails | no channel configured | failed/blocked |
-| Frontend journeys | Real backend, accessible controls, deterministic browser tests | 17/17 Chromium; desktop Firefox/WebKit pass; mobile navigation fails | not exposed by this run | partial/failed mobile |
-| Helm installation | Fresh install becomes ready using built images | pass in Kind | v2.1.7 already installed | pass-real |
-| Argo CD coexistence | Drift, sync and field authority remain stable | self-heal oscillates; RespectIgnoreDifferences stabilizes replica ownership | Argo CD 2.10.13 observed; mutation withheld after P1 restore failure | failed by default; partial with explicit config |
-| HPA/KEDA/Flux | Explicit supported behavior | no complete adapter contract | not exercised | inconclusive |
-| Recovery under conflict/failure | No snapshot loss or false success | acceptance conflicts reproduce loss | not exercised | failed |
+| Capability | Candidate evidence | EKS v2.1.7 baseline | Candidate result |
+|---|---|---|---|
+| Domain priority, schedules and time | unit, property, fuzz and acceptance contracts | not required | pass-simulated |
+| Discovery of Deployment, StatefulSet and CronJob | expanded Kind journey with three native objects | three types observed | pass-real |
+| Identity and exact selection | homonymous objects remain distinct; exact UID-bound Deployment ref leaves StatefulSet and CronJob unchanged | not mutated | pass-real |
+| Namespace groups and labels | Kind policy intersects group, namespace label and workload label | not mutated | pass-real |
+| Replica snapshot and restore | Kind preserves Deployment 2 and StatefulSet 1 across shutdown/restore | Deployment snapshot incorrectly persisted 0 | pass-real; baseline failed |
+| CronJob restoration | Kind restores `suspend=false`; executor tests cover original true/false and repeated restore | not mutated | pass-real |
+| Built-in schedules and enum semantics | API/CRD contracts use string `on`/`off` and valid objects seed | baseline issue identified | pass-simulated |
+| Preview/explain versus execution | API uses the domain preview and resolved scope; contract tests compare selected targets/conflicts | not exercised | pass-simulated |
+| Audit truthfulness | action/result/rule grouping and approval audit contracts; real Kind approval creates one audit object | read-only inventory | pass-real for approval; pass-simulated for delivery grouping |
+| Authentication and RBAC | login/session/refresh/logout and member/approver/admin verb matrix | not exercised | pass-simulated and browser-real |
+| Approval workflow | real server and Kind API: member submits, admin approves, one policy and audit object created, replay returns 409 | not exercised | pass-real |
+| Notifications and webhooks | controlled HTTP receiver, retry/error and bounded queue contracts; URL may come from Secret | real channel intentionally not used | pass-simulated; EKS blocked by safety boundary |
+| Frontend and accessibility | 75 live checks passed against the final Kind candidate in Chromium, Firefox, WebKit and mobile Chromium; three desktop mobile-only cases were skipped by design | not exposed | pass-real |
+| Helm install and upgrade | clean Kind install, stable auth/TLS secrets, default fail-closed admission, invalid timezone rejected | existing release observed | pass-real |
+| Argo CD coexistence | action state machine detects sustained contention after convergence grace; GitOps matrix records ownership modes | Argo present; mutation stopped after baseline restore failure | pass-simulated; full Argo matrix remains compatibility evidence, not release blocker |
+| HPA, KEDA and Flux | explicitly documented as unproven integrations | not exercised | inconclusive/non-claimed |
+| Recovery and concurrency | snapshot-before-mutation, UID validation, crash replay, status conflict, stale discovery and legacy upgrade contracts | baseline restoration failed | pass-simulated plus native transition |
+| Controller memory | bounded discovery and notification queues; repeated load contract in release gate | read-only footprint observed | pass-load |
 
-## Release gate
+## Release decision
 
-The current product must not be declared fully approved while target identity,
-selection, snapshot persistence, restoration, approval semantics, or audit
-truthfulness fail. Those are central invariants rather than optional coverage.
+The candidate passed `make quality quality-acceptance quality-load`, the expanded Kind journey, Helm upgrade/admission checks, legacy snapshot migration, the real approval workflow, and the clean multi-browser Playwright run. Production applications remain outside the mutation scope; the EKS result documents the installed baseline defect and verified cleanup.

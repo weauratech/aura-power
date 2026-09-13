@@ -1,4 +1,8 @@
-# Quality campaign report — 2026-09-12
+# Quality campaign baseline report — 2026-09-12
+
+This dated report preserves behavior observed before remediation. Current
+candidate results live in `functional-matrix.md`; failures recorded here are
+historical evidence for the installed baseline.
 
 ## Scope and versions
 
