@@ -3,8 +3,10 @@ package background
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -20,6 +22,9 @@ func discoveryScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	s := runtime.NewScheme()
 	if err := v1alpha1.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+	if err := corev1.AddToScheme(s); err != nil {
 		t.Fatal(err)
 	}
 	return s
@@ -221,6 +226,59 @@ func TestQualityDiscoveryRequiresLeaderElection(t *testing.T) {
 	loop := &DiscoveryLoop{}
 	if !loop.NeedLeaderElection() {
 		t.Fatal("discovery and orphan cleanup must run only on the elected leader")
+	}
+}
+
+func TestQualityNamespacePolicyCollisionFailsClosed(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		labels       map[string]string
+		shouldUpdate bool
+	}{
+		{name: "user policy without ownership labels", labels: map[string]string{"owner": "user"}},
+		{name: "namespace ownership label points elsewhere", labels: map[string]string{"power.aura.sh/source": "namespace-annotation", "power.aura.sh/namespace": "another-namespace"}},
+		{name: "controller-owned policy", labels: map[string]string{"power.aura.sh/source": "namespace-annotation", "power.aura.sh/namespace": "team-a"}, shouldUpdate: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "team-a", Annotations: map[string]string{
+				"aura.sh/default-schedule": "always-off", "aura.sh/power-priority": "321",
+			}}}
+			schedule := &v1alpha1.PowerSchedule{
+				ObjectMeta: metav1.ObjectMeta{Name: "always-off", Namespace: "aura-system"},
+				Spec:       v1alpha1.PowerScheduleSpec{DesiredState: "off", Windows: []v1alpha1.TimeWindowSpec{{Start: "00:00", End: "23:59", Timezone: "UTC"}}},
+			}
+			policy := &v1alpha1.PowerPolicy{
+				ObjectMeta: metav1.ObjectMeta{Name: "ns-default-team-a", Namespace: "aura-system", Labels: tc.labels},
+				Spec: v1alpha1.PowerPolicySpec{
+					Scope:       v1alpha1.PolicyScope{Namespaces: []string{"user-owned-scope"}},
+					Schedule:    v1alpha1.PolicySchedule{DesiredState: "on"},
+					Priority:    999,
+					Description: "user-owned sentinel",
+				},
+			}
+			originalSpec := policy.DeepCopy().Spec
+			originalLabels := copyStringMap(policy.Labels)
+			c := fake.NewClientBuilder().WithScheme(discoveryScheme(t)).WithObjects(ns, schedule, policy).Build()
+			loop := DiscoveryLoop{Client: c, Config: DiscoveryConfig{Namespace: "aura-system"}}
+			loop.processNamespaceAnnotations(context.Background())
+
+			var got v1alpha1.PowerPolicy
+			if err := c.Get(context.Background(), client.ObjectKeyFromObject(policy), &got); err != nil {
+				t.Fatal(err)
+			}
+			if tc.shouldUpdate {
+				if got.Spec.Priority != 321 || got.Spec.Schedule.DesiredState != "off" ||
+					!reflect.DeepEqual(got.Spec.Schedule.Windows, schedule.Spec.Windows) ||
+					!reflect.DeepEqual(got.Spec.Scope.Namespaces, []string{"team-a"}) ||
+					got.Spec.Description != "Auto-generated from namespace team-a annotation (schedule: always-off)" {
+					t.Fatalf("owned implicit policy was not reconciled: %+v", got.Spec)
+				}
+				return
+			}
+			if !reflect.DeepEqual(got.Spec, originalSpec) || !reflect.DeepEqual(got.Labels, originalLabels) {
+				t.Fatalf("colliding user policy was mutated: before=%+v/%v after=%+v/%v", originalSpec, originalLabels, got.Spec, got.Labels)
+			}
+		})
 	}
 }
 

@@ -86,15 +86,56 @@ metadata:
   name: ${RBAC_FIXTURE_NAMESPACE}
   labels:
     aura-power-quality/run: "${RUN_ID}"
-  annotations:
-    aura.sh/default-schedule: always-off
-    aura.sh/power-priority: "321"
 YAML
 )"
 rbac_namespace_uid="$(jq -er .metadata.uid <<<"$rbac_namespace_json")"
+
+# A namespace-derived policy name can collide with a user-owned object. The
+# controller must observe the collision and leave every field untouched.
+kubectl create -f - <<YAML
+apiVersion: power.aura.sh/v1alpha1
+kind: PowerPolicy
+metadata:
+  name: ${IMPLICIT_POLICY_NAME}
+  namespace: aura-system
+  labels:
+    aura-power-quality/run: "${RUN_ID}"
+    owner: user
+spec:
+  scope:
+    namespaces: ["collision-sentinel"]
+  schedule:
+    desiredState: "on"
+    windows: []
+  priority: 999
+  description: "user-owned collision sentinel"
+YAML
+collision_before="$(kubectl get powerpolicy "$IMPLICIT_POLICY_NAME" -n aura-system -o json | jq -c '{labels:.metadata.labels,spec:.spec}')"
+collision_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+kubectl annotate namespace "$RBAC_FIXTURE_NAMESPACE" \
+  aura.sh/default-schedule=always-off aura.sh/power-priority=321 --overwrite >/dev/null
+deadline=$((SECONDS + TIMEOUT_SECONDS)); collision_observed=false
+while (( SECONDS < deadline )); do
+  collision_current="$(kubectl get powerpolicy "$IMPLICIT_POLICY_NAME" -n aura-system -o json | jq -c '{labels:.metadata.labels,spec:.spec}')"
+  [[ "$collision_current" == "$collision_before" ]] || { echo "FAIL: namespace annotation reconciliation mutated a colliding user policy" >&2; exit 6; }
+  if controller_logs="$(kubectl logs -n aura-system -l app.kubernetes.io/component=controller \
+    --all-containers=true --prefix=true --since-time="$collision_started_at" 2>/dev/null)"; then
+    if grep -Fq 'refusing to overwrite policy that is not owned by namespace annotation reconciliation' <<<"$controller_logs"; then
+      collision_observed=true
+      break
+    fi
+  fi
+  sleep 3
+done
+[[ "$collision_observed" == true ]] || { echo "FAIL: namespace policy ownership collision was not observed" >&2; exit 6; }
+collision_after="$(kubectl get powerpolicy "$IMPLICIT_POLICY_NAME" -n aura-system -o json | jq -c '{labels:.metadata.labels,spec:.spec}')"
+[[ "$collision_after" == "$collision_before" ]] || { echo "FAIL: colliding user policy changed after collision observation" >&2; exit 6; }
+kubectl delete powerpolicy "$IMPLICIT_POLICY_NAME" -n aura-system --wait=true --timeout=60s >/dev/null
+
 deadline=$((SECONDS + TIMEOUT_SECONDS))
 until kubectl get powerpolicy "$IMPLICIT_POLICY_NAME" -n aura-system -o json 2>/dev/null | jq -e --arg ns "$RBAC_FIXTURE_NAMESPACE" '
   .metadata.labels["power.aura.sh/source"] == "namespace-annotation" and
+  .metadata.labels["power.aura.sh/namespace"] == $ns and
   .spec.scope.namespaces == [$ns] and .spec.schedule.desiredState == "off" and .spec.priority == 321
 ' >/dev/null; do
   (( SECONDS < deadline )) || { echo "FAIL: controller service account could not create the implicit namespace policy" >&2; exit 6; }
@@ -268,4 +309,4 @@ while (( SECONDS < deadline )); do
   sleep 5
 done
 [[ "$dep_replicas/$sts_replicas/$cron_suspended" == "2/1/false" ]] || { echo "FAIL: exact multi-kind restore failed: ${dep_replicas}/${sts_replicas}/${cron_suspended}" >&2; exit 15; }
-echo "kind_core_journey=passed builtins=true implicit_policy_create_update_rbac=true identity=true exact_refs=true groups_and_labels=true deployment=true statefulset=true cronjob=true"
+echo "kind_core_journey=passed builtins=true implicit_policy_collision_fail_closed=true implicit_policy_create_update_rbac=true identity=true exact_refs=true groups_and_labels=true deployment=true statefulset=true cronjob=true"

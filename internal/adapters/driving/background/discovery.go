@@ -584,18 +584,28 @@ func (d *DiscoveryLoop) processNamespaceAnnotations(ctx context.Context) {
 		var existingPolicy v1alpha1.PowerPolicy
 		err := d.Client.Get(ctx, key, &existingPolicy)
 		if err == nil {
-			// Policy exists — check if it needs updating
-			if existingPolicy.Spec.Priority == priority &&
-				existingPolicy.Spec.Schedule.DesiredState == schedule.Spec.DesiredState {
+			if !isOwnedNamespacePolicy(&existingPolicy, ns.Name) {
+				log.Error(errImplicitPolicyOwnershipConflict,
+					"refusing to overwrite policy that is not owned by namespace annotation reconciliation",
+					"namespace", ns.Name, "policy", policyName,
+					"source", existingPolicy.Labels["power.aura.sh/source"],
+					"ownerNamespace", existingPolicy.Labels["power.aura.sh/namespace"])
+				continue
+			}
+			desiredSpec := namespacePolicySpec(ns.Name, scheduleName, schedule, priority)
+			// Policy exists and is controller-owned — reconcile its complete
+			// generated contract, including scope and changed schedule windows.
+			if reflect.DeepEqual(existingPolicy.Spec, desiredSpec) {
 				continue // No change needed
 			}
-			// Update
-			existingPolicy.Spec.Priority = priority
-			existingPolicy.Spec.Schedule.DesiredState = schedule.Spec.DesiredState
-			existingPolicy.Spec.Schedule.Windows = schedule.Spec.Windows
+			existingPolicy.Spec = desiredSpec
 			if err := d.Client.Update(ctx, &existingPolicy); err != nil {
 				log.Error(err, "failed to update implicit policy", "namespace", ns.Name)
 			}
+			continue
+		}
+		if !apierrors.IsNotFound(err) {
+			log.Error(err, "failed to read implicit policy", "namespace", ns.Name, "policy", policyName)
 			continue
 		}
 
@@ -609,17 +619,7 @@ func (d *DiscoveryLoop) processNamespaceAnnotations(ctx context.Context) {
 					"power.aura.sh/namespace": ns.Name,
 				},
 			},
-			Spec: v1alpha1.PowerPolicySpec{
-				Scope: v1alpha1.PolicyScope{
-					Namespaces: []string{ns.Name},
-				},
-				Schedule: v1alpha1.PolicySchedule{
-					DesiredState: schedule.Spec.DesiredState,
-					Windows:      schedule.Spec.Windows,
-				},
-				Priority:    priority,
-				Description: fmt.Sprintf("Auto-generated from namespace %s annotation (schedule: %s)", ns.Name, scheduleName),
-			},
+			Spec: namespacePolicySpec(ns.Name, scheduleName, schedule, priority),
 		}
 
 		if err := d.Client.Create(ctx, policy); err != nil {
@@ -627,5 +627,24 @@ func (d *DiscoveryLoop) processNamespaceAnnotations(ctx context.Context) {
 		} else {
 			log.Info("created implicit policy from namespace annotation", "namespace", ns.Name, "policy", policyName, "schedule", scheduleName)
 		}
+	}
+}
+
+var errImplicitPolicyOwnershipConflict = fmt.Errorf("implicit policy name collides with a policy not owned by namespace annotation reconciliation")
+
+func isOwnedNamespacePolicy(policy *v1alpha1.PowerPolicy, namespace string) bool {
+	return policy.Labels["power.aura.sh/source"] == "namespace-annotation" &&
+		policy.Labels["power.aura.sh/namespace"] == namespace
+}
+
+func namespacePolicySpec(namespace, scheduleName string, schedule *v1alpha1.PowerSchedule, priority int32) v1alpha1.PowerPolicySpec {
+	return v1alpha1.PowerPolicySpec{
+		Scope: v1alpha1.PolicyScope{Namespaces: []string{namespace}},
+		Schedule: v1alpha1.PolicySchedule{
+			DesiredState: schedule.Spec.DesiredState,
+			Windows:      schedule.Spec.Windows,
+		},
+		Priority:    priority,
+		Description: fmt.Sprintf("Auto-generated from namespace %s annotation (schedule: %s)", namespace, scheduleName),
 	}
 }
