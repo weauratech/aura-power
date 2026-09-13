@@ -76,7 +76,7 @@ func TestFailedApprovalPreservesPendingState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != "pending" || got.ReviewedAt != nil {
+	if got.Status != "approving" || got.ReviewedAt != nil {
 		t.Fatalf("failed apply changed decision: %+v", got)
 	}
 }
@@ -100,7 +100,7 @@ func TestStaleUpdateRemainsPending(t *testing.T) {
 		t.Fatalf("stale update returned %d: %s", response.Code, response.Body.String())
 	}
 	got, _ := f.store.GetPendingChange(pending.ID)
-	if got.Status != "pending" {
+	if got.Status != "approving" {
 		t.Fatalf("stale request status=%s", got.Status)
 	}
 	var unchanged v1alpha1.PowerPolicy

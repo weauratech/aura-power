@@ -115,12 +115,12 @@ const (
 
 // WorkloadRef uniquely identifies a workload in a cluster.
 type WorkloadRef struct {
-	Cluster    string
-	APIVersion string
-	Namespace  string
-	Name       string
-	Kind       WorkloadKind
-	UID        string
+	Cluster    string       `json:"cluster,omitempty"`
+	APIVersion string       `json:"apiVersion,omitempty"`
+	Namespace  string       `json:"namespace"`
+	Name       string       `json:"name"`
+	Kind       WorkloadKind `json:"kind"`
+	UID        string       `json:"uid,omitempty"`
 }
 
 // ResourceSummary captures CPU and memory resource requests.
@@ -227,13 +227,13 @@ const (
 
 // RuleRef identifies a rule that participated in a decision.
 type RuleRef struct {
-	Kind        RuleKind
-	Name        string
-	Namespace   string
-	Priority    Priority
-	Specificity ScopeSpecificity
-	Description string
-	CreatedAt   time.Time
+	Kind        RuleKind         `json:"kind"`
+	Name        string           `json:"name"`
+	Namespace   string           `json:"namespace"`
+	Priority    Priority         `json:"priority"`
+	Specificity ScopeSpecificity `json:"specificity"`
+	Description string           `json:"description,omitempty"`
+	CreatedAt   time.Time        `json:"createdAt"`
 }
 
 // BlockType categorizes the reason a workload is blocked.
@@ -336,23 +336,23 @@ type SavingsSummary struct {
 
 // PreviewResult holds the impact preview of a proposed policy/override.
 type PreviewResult struct {
-	AffectedOn    []WorkloadRef
-	AffectedOff   []WorkloadRef
-	Blocked       []BlockedTarget
-	Unsupported   []WorkloadRef
-	Conflicts     []ConflictInfo
-	TotalAffected int
+	AffectedOn    []WorkloadRef   `json:"affectedOn"`
+	AffectedOff   []WorkloadRef   `json:"affectedOff"`
+	Blocked       []BlockedTarget `json:"blocked"`
+	Unsupported   []WorkloadRef   `json:"unsupported"`
+	Conflicts     []ConflictInfo  `json:"conflicts"`
+	TotalAffected int             `json:"totalAffected"`
 }
 
 // BlockedTarget represents a target blocked with its reasons.
 type BlockedTarget struct {
-	Ref     WorkloadRef
-	Reasons []BlockReason
+	Ref     WorkloadRef   `json:"ref"`
+	Reasons []BlockReason `json:"reasons"`
 }
 
 // ConflictInfo shows how competing rules were resolved for a target.
 type ConflictInfo struct {
-	Target     WorkloadRef
-	Winner     RuleRef
-	Suppressed []RuleRef
+	Target     WorkloadRef `json:"target"`
+	Winner     RuleRef     `json:"winner"`
+	Suppressed []RuleRef   `json:"suppressed"`
 }

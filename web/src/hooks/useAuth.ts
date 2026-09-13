@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 
-interface User {
+export interface User {
   id: string;
   username: string;
   role: 'member' | 'approver' | 'admin';

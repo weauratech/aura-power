@@ -7,6 +7,7 @@ import { ScheduleDrawer } from '../../src/components/ScheduleDrawer';
 import { origin, server } from '../server';
 import { renderUI } from '../helpers';
 import { target } from '../helpers';
+import { CurrentUserContext } from '../../src/contexts/CurrentUser';
 
 describe('schedule form contracts', () => {
   it('traps focus, closes with Escape, and returns focus to its trigger', async () => {
@@ -47,7 +48,7 @@ describe('schedule form contracts', () => {
 
     await waitFor(() => expect(received).toHaveBeenCalledTimes(1));
     expect(received).toHaveBeenCalledWith(expect.objectContaining({
-      metadata: { name: 'fixture-policy', namespace: 'aura-system' },
+	  metadata: { name: 'fixture-policy' },
       spec: expect.objectContaining({
         scope: { namespaces: ['fixture-a'] },
         schedule: expect.objectContaining({ desiredState: 'off' }),
@@ -75,7 +76,12 @@ describe('schedule form contracts', () => {
     const received = vi.fn();
     server.use(http.post(`${origin}/preview/policy`, async ({ request }) => {
       received(await request.json());
-      return HttpResponse.json({ affectedTargets: 2, poweredOn: 0, poweredOff: 1, blocked: 1 });
+      return HttpResponse.json({
+        totalAffected: 2,
+        affectedOn: [],
+        affectedOff: [{ namespace: 'team-a', name: 'api', kind: 'Deployment' }],
+        blocked: [{ ref: { namespace: 'team-a', name: 'db', kind: 'StatefulSet' }, reasons: ['protected'] }],
+      });
     }));
     renderUI(<ScheduleDrawer open onClose={() => undefined} prefill={{ namespaces: ['fixture-a'] }} />);
 
@@ -112,5 +118,16 @@ describe('schedule form contracts', () => {
     expect(payload.spec.scope).toEqual({ targetRefs: [api.spec.targetRef, worker.spec.targetRef] });
     expect(payload.spec.scope).not.toHaveProperty('namespaces');
     expect(payload.spec.scope).not.toHaveProperty('workloadNames');
+  });
+
+  it('submits a member change to the durable approval workflow', async () => {
+    const received = vi.fn();
+    server.use(http.post(`${origin}/pending`, async ({ request }) => { received(await request.json()); return HttpResponse.json({ id: 'pending-1' }, { status: 201 }); }));
+    renderUI(<CurrentUserContext.Provider value={{ id: 'member-1', username: 'member', role: 'member' }}><ScheduleDrawer open onClose={() => undefined} prefill={{ namespaces: ['fixture-a'] }} /></CurrentUserContext.Provider>);
+    const user = userEvent.setup();
+    await user.type(screen.getByRole('textbox', { name: /^Name/ }), 'member-policy');
+    await user.click(screen.getByRole('button', { name: 'Create Schedule' }));
+    await waitFor(() => expect(received).toHaveBeenCalledOnce());
+    expect(received).toHaveBeenCalledWith(expect.objectContaining({ action: 'create', resourceKind: 'PowerPolicy', resourceName: 'member-policy', payload: expect.objectContaining({ spec: expect.any(Object) }) }));
   });
 });

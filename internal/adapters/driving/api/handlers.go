@@ -327,6 +327,7 @@ func (s *Server) handleExplainTarget(c *gin.Context) {
 func (s *Server) handlePreviewPolicy(c *gin.Context) {
 	ctx := c.Request.Context()
 	namespace := c.DefaultQuery("namespace", s.controlNamespace())
+	previewName := c.DefaultQuery("name", "preview")
 
 	// Parse policy from request body
 	var policySpec v1alpha1.PowerPolicySpec
@@ -353,7 +354,7 @@ func (s *Server) handlePreviewPolicy(c *gin.Context) {
 		return
 	}
 
-	proposed := v1alpha1.PowerPolicy{ObjectMeta: metav1.ObjectMeta{Name: "preview", Namespace: namespace, CreationTimestamp: metav1.Now()}, Spec: policySpec}
+	proposed := v1alpha1.PowerPolicy{ObjectMeta: metav1.ObjectMeta{Name: previewName, Namespace: namespace, CreationTimestamp: metav1.Now()}, Spec: policySpec}
 	proposedScope, err := resolvePreviewPolicyScope(ctx, s.client, namespace, &proposed)
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
@@ -363,6 +364,9 @@ func (s *Server) handlePreviewPolicy(c *gin.Context) {
 	domainProposed.Scope = proposedScope
 	domainPolicies := make([]domain.PolicySpec, 0, len(policies.Items))
 	for i := range policies.Items {
+		if policies.Items[i].Namespace == namespace && policies.Items[i].Name == previewName {
+			continue
+		}
 		resolved, err := resolvePreviewPolicyScope(ctx, s.client, policies.Items[i].Namespace, &policies.Items[i])
 		if err != nil {
 			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
@@ -394,6 +398,7 @@ func (s *Server) handlePreviewPolicy(c *gin.Context) {
 func (s *Server) handlePreviewOverride(c *gin.Context) {
 	ctx := c.Request.Context()
 	namespace := c.DefaultQuery("namespace", s.controlNamespace())
+	previewName := c.DefaultQuery("name", "preview")
 
 	var overrideSpec v1alpha1.PowerOverrideSpec
 	if err := c.ShouldBindJSON(&overrideSpec); err != nil {
@@ -416,7 +421,7 @@ func (s *Server) handlePreviewOverride(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	proposed := v1alpha1.PowerOverride{ObjectMeta: metav1.ObjectMeta{Name: "preview", Namespace: namespace, CreationTimestamp: metav1.Now()}, Spec: overrideSpec}
+	proposed := v1alpha1.PowerOverride{ObjectMeta: metav1.ObjectMeta{Name: previewName, Namespace: namespace, CreationTimestamp: metav1.Now()}, Spec: overrideSpec}
 	proposedScope, err := resolvePreviewOverrideScope(ctx, s.client, namespace, &proposed)
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
@@ -437,6 +442,9 @@ func (s *Server) handlePreviewOverride(c *gin.Context) {
 	}
 	domainOverrides := make([]domain.OverrideSpec, 0, len(overrides.Items))
 	for i := range overrides.Items {
+		if overrides.Items[i].Namespace == namespace && overrides.Items[i].Name == previewName {
+			continue
+		}
 		resolved, err := resolvePreviewOverrideScope(ctx, s.client, overrides.Items[i].Namespace, &overrides.Items[i])
 		if err != nil {
 			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})

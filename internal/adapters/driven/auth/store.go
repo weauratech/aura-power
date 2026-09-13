@@ -38,7 +38,7 @@ type PendingChange struct {
 	ResourceName      string     `json:"resourceName"`
 	ResourceVersion   string     `json:"resourceVersion,omitempty"`
 	Payload           string     `json:"payload"` // JSON of the resource spec
-	Status            string     `json:"status"`  // pending, approved, rejected
+	Status            string     `json:"status"`  // pending, approving, rejecting, approved, rejected
 	CreatedAt         time.Time  `json:"createdAt"`
 	ReviewedBy        string     `json:"reviewedBy,omitempty"`
 	ReviewedAt        *time.Time `json:"reviewedAt,omitempty"`
@@ -61,6 +61,8 @@ type Store interface {
 	// Pending Changes
 	CreatePendingChange(change PendingChange) (*PendingChange, error)
 	ListPendingChanges() ([]PendingChange, error)
+	BeginPendingDecision(id, reviewerID, decision string) (*PendingChange, error)
+	FinalizePendingDecision(id, reviewerID, decision string) (*PendingChange, error)
 	ApprovePendingChange(id, reviewerID string) (*PendingChange, error)
 	RejectPendingChange(id, reviewerID string) (*PendingChange, error)
 	GetPendingChange(id string) (*PendingChange, error)
@@ -96,3 +98,7 @@ var ErrPendingNotFound = errors.New("pending change not found")
 // ErrInvalidPendingChange is returned when a requested operation cannot be
 // represented safely by the approval workflow.
 var ErrInvalidPendingChange = errors.New("invalid pending change")
+
+// ErrPendingDecisionConflict indicates that another or opposite durable
+// decision already owns the pending change.
+var ErrPendingDecisionConflict = errors.New("pending change decision conflict")

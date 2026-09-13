@@ -106,10 +106,10 @@ func TestSQLitePendingDecisionIsTerminal(t *testing.T) {
 			if got.Status != decision || got.ReviewedBy != "reviewer" || got.ReviewedAt == nil || got.Payload != c.Payload {
 				t.Fatalf("review state not persisted: %+v", got)
 			}
-			if _, err := s.ApprovePendingChange(c.ID, "other"); !errors.Is(err, ErrPendingNotFound) {
+			if _, err := s.ApprovePendingChange(c.ID, "other"); !errors.Is(err, ErrPendingDecisionConflict) {
 				t.Fatalf("repeat approve: %v", err)
 			}
-			if _, err := s.RejectPendingChange(c.ID, "other"); !errors.Is(err, ErrPendingNotFound) {
+			if _, err := s.RejectPendingChange(c.ID, "other"); !errors.Is(err, ErrPendingDecisionConflict) {
 				t.Fatalf("repeat reject: %v", err)
 			}
 			pending, err = s.ListPendingChanges()
@@ -120,6 +120,29 @@ func TestSQLitePendingDecisionIsTerminal(t *testing.T) {
 	}
 	if _, err := s.GetPendingChange("missing"); !errors.Is(err, ErrPendingNotFound) {
 		t.Fatalf("missing: %v", err)
+	}
+}
+
+func TestSQLitePendingDecisionCannotReverseAfterDurableIntent(t *testing.T) {
+	s, err := NewSQLiteStore(filepath.Join(t.TempDir(), "auth.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	change, err := s.CreatePendingChange(PendingChange{UserID: "requester", Username: "member", Action: "create", ResourceKind: "PowerPolicy", ResourceName: "nightly", Payload: `{}`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := s.BeginPendingDecision(change.ID, "reviewer", "approve")
+	if err != nil || started.Status != "approving" {
+		t.Fatalf("begin approve: %+v %v", started, err)
+	}
+	if _, err := s.BeginPendingDecision(change.ID, "reviewer", "reject"); !errors.Is(err, ErrPendingDecisionConflict) {
+		t.Fatalf("opposite decision was accepted after durable approval intent: %v", err)
+	}
+	finished, err := s.FinalizePendingDecision(change.ID, "reviewer", "approve")
+	if err != nil || finished.Status != "approved" {
+		t.Fatalf("finalize approve: %+v %v", finished, err)
 	}
 }
 

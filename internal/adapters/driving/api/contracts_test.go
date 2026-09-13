@@ -313,7 +313,7 @@ func TestHTTPPreviewDoesNotPersistAndTargetsFilter(t *testing.T) {
 		if r.Code != 200 {
 			t.Fatal(r.Code)
 		}
-		if decodeContract[map[string]int](t, requestContract(t, f.server.Handler(), "POST", "/api/v1/preview/policy", token, map[string]any{"scope": map[string]any{"namespaces": []string{"dev"}}, "schedule": map[string]string{"desiredState": "off"}}))["totalAffected"] != 1 {
+		if decodeContract[previewResponse](t, requestContract(t, f.server.Handler(), "POST", "/api/v1/preview/policy", token, map[string]any{"scope": map[string]any{"namespaces": []string{"dev"}}, "schedule": map[string]string{"desiredState": "off"}})).TotalAffected != 1 {
 			t.Fatal("namespace preview count")
 		}
 	}
@@ -364,7 +364,7 @@ func TestHTTPPreviewExactTargetsAvoidNamespaceNameCrossProduct(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("preview returned %d: %s", response.Code, response.Body.String())
 	}
-	if got := decodeContract[map[string]int](t, response)["totalAffected"]; got != 2 {
+	if got := decodeContract[previewResponse](t, response).TotalAffected; got != 2 {
 		t.Fatalf("exact preview affected %d targets, want 2", got)
 	}
 }

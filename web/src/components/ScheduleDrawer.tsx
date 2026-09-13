@@ -1,4 +1,4 @@
-import { useState, useEffect, useId } from 'react';
+import { useState, useEffect, useId, useContext } from 'react';
 import Box from '@mui/material/Box';
 import Drawer from '@mui/material/Drawer';
 import Typography from '@mui/material/Typography';
@@ -20,6 +20,7 @@ import CloseIcon from '@mui/icons-material/CloseOutlined';
 import { useNamespaces, useTargets, apiPost, apiPut } from '../hooks/useApi';
 import { useQueryClient } from '@tanstack/react-query';
 import type { PowerState, TargetRef } from '../types';
+import { CurrentUserContext } from '../contexts/CurrentUser';
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -46,14 +47,16 @@ export interface ScheduleDrawerProps {
 }
 
 interface PreviewResult {
-  affectedTargets: number;
-  poweredOn: number;
-  poweredOff: number;
-  blocked: number;
+  totalAffected: number;
+  affectedOn: TargetRef[];
+  affectedOff: TargetRef[];
+  blocked: Array<{ ref: TargetRef; reasons: string[] }>;
+  conflicts?: Array<{ target: TargetRef }>;
 }
 
 export function ScheduleDrawer({ open, onClose, onSuccess, prefill, editPolicy }: ScheduleDrawerProps) {
   const titleId = useId();
+  const currentUser = useContext(CurrentUserContext);
   const queryClient = useQueryClient();
   const { data: nsData } = useNamespaces();
   const { data: targetsData } = useTargets();
@@ -100,7 +103,7 @@ export function ScheduleDrawer({ open, onClose, onSuccess, prefill, editPolicy }
       setSelectedWorkloads(prefill.targetRefs);
       setScopeMode('workloads');
     }
-  }, [prefill]);
+  }, [prefill, targetsData?.targets]);
 
   // Pre-fill from editPolicy
   useEffect(() => {
@@ -151,7 +154,8 @@ export function ScheduleDrawer({ open, onClose, onSuccess, prefill, editPolicy }
     setError('');
     try {
       const scope = buildScope();
-      const result = await apiPost<PreviewResult>('/preview/policy', {
+	  const previewQuery = new URLSearchParams({ name, ...(editPolicy?.namespace ? { namespace: editPolicy.namespace } : {}) });
+	  const result = await apiPost<PreviewResult>(`/preview/policy?${previewQuery}`, {
         scope,
         schedule: {
           desiredState,
@@ -175,8 +179,8 @@ export function ScheduleDrawer({ open, onClose, onSuccess, prefill, editPolicy }
 
       if (isOverride) {
         const expiresAt = new Date(Date.now() + parseInt(expiresIn) * 3600000).toISOString();
-        await apiPost('/overrides', {
-          metadata: { name, namespace: 'aura-system' },
+        const object = {
+          metadata: { name },
           spec: {
             scope,
             state: desiredState,
@@ -185,7 +189,10 @@ export function ScheduleDrawer({ open, onClose, onSuccess, prefill, editPolicy }
             reason,
             reference: reference || undefined,
           },
-        });
+        };
+        if (currentUser?.role === 'member') {
+		  await apiPost('/pending', { action: 'create', resourceKind: 'PowerOverride', resourceName: name, payload: object });
+        } else { await apiPost('/overrides', object); }
         queryClient.invalidateQueries({ queryKey: ['overrides'] });
         onSuccess?.(`Override "${name}" created (expires in ${expiresIn}h)`);
       } else if (editPolicy) {
@@ -205,8 +212,8 @@ export function ScheduleDrawer({ open, onClose, onSuccess, prefill, editPolicy }
         queryClient.invalidateQueries({ queryKey: ['policies'] });
         onSuccess?.(`Schedule "${editPolicy.name}" updated`);
       } else {
-        await apiPost('/policies', {
-          metadata: { name, namespace: 'aura-system' },
+        const object = {
+          metadata: { name },
           spec: {
             scope,
             schedule: {
@@ -216,9 +223,12 @@ export function ScheduleDrawer({ open, onClose, onSuccess, prefill, editPolicy }
             priority: parseInt(priority) || 100,
             description,
           },
-        });
+        };
+        if (currentUser?.role === 'member') {
+		  await apiPost('/pending', { action: 'create', resourceKind: 'PowerPolicy', resourceName: name, payload: object });
+        } else { await apiPost('/policies', object); }
         queryClient.invalidateQueries({ queryKey: ['policies'] });
-        onSuccess?.(`Schedule "${name}" created successfully`);
+        onSuccess?.(currentUser?.role === 'member' ? `Schedule "${name}" submitted for approval` : `Schedule "${name}" created successfully`);
       }
 
       onClose();
@@ -361,12 +371,13 @@ export function ScheduleDrawer({ open, onClose, onSuccess, prefill, editPolicy }
                 {preview && (
                   <Alert severity="info" sx={{ mt: 2 }}>
                     <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                      This schedule will affect {preview.affectedTargets} target(s)
+                      This schedule will affect {preview.totalAffected} target(s)
                     </Typography>
                     <Typography variant="caption" color="text.secondary">
-                      {preview.poweredOff > 0 && `${preview.poweredOff} will be powered off. `}
-                      {preview.poweredOn > 0 && `${preview.poweredOn} will stay on. `}
-                      {preview.blocked > 0 && `${preview.blocked} blocked by guardrails.`}
+                      {preview.affectedOff.length > 0 && `${preview.affectedOff.length} will be powered off. `}
+                      {preview.affectedOn.length > 0 && `${preview.affectedOn.length} will be powered on. `}
+                      {preview.blocked.length > 0 && `${preview.blocked.length} blocked by guardrails. `}
+                      {(preview.conflicts?.length ?? 0) > 0 && `${preview.conflicts?.length} conflict(s) resolved by priority.`}
                     </Typography>
                   </Alert>
                 )}

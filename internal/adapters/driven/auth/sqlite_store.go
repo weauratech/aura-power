@@ -210,7 +210,7 @@ func (s *SQLiteStore) CreatePendingChange(change PendingChange) (*PendingChange,
 
 func (s *SQLiteStore) ListPendingChanges() ([]PendingChange, error) {
 	rows, err := s.db.Query(
-		"SELECT id, user_id, username, action, resource_kind, resource_namespace, resource_name, resource_version, payload, status, created_at, reviewed_by, reviewed_at FROM pending_changes WHERE status = 'pending' ORDER BY created_at DESC",
+		"SELECT id, user_id, username, action, resource_kind, resource_namespace, resource_name, resource_version, payload, status, created_at, reviewed_by, reviewed_at FROM pending_changes WHERE status IN ('pending', 'approving', 'rejecting') ORDER BY created_at DESC",
 	)
 	if err != nil {
 		return nil, err
@@ -237,36 +237,63 @@ func (s *SQLiteStore) ListPendingChanges() ([]PendingChange, error) {
 	return changes, nil
 }
 
-func (s *SQLiteStore) ApprovePendingChange(id, reviewerID string) (*PendingChange, error) {
-	now := time.Now()
-	result, err := s.db.Exec(
-		"UPDATE pending_changes SET status = 'approved', reviewed_by = ?, reviewed_at = ? WHERE id = ? AND status = 'pending'",
-		reviewerID, now, id,
-	)
+func (s *SQLiteStore) BeginPendingDecision(id, reviewerID, decision string) (*PendingChange, error) {
+	interim := decision + "ing"
+	if decision == "approve" {
+		interim = "approving"
+	}
+	if decision != "approve" && decision != "reject" {
+		return nil, ErrInvalidPendingChange
+	}
+	result, err := s.db.Exec("UPDATE pending_changes SET status = ?, reviewed_by = ? WHERE id = ? AND status = 'pending'", interim, reviewerID, id)
 	if err != nil {
 		return nil, err
 	}
 	rows, _ := result.RowsAffected()
 	if rows == 0 {
-		return nil, ErrPendingNotFound
+		change, getErr := s.GetPendingChange(id)
+		if getErr != nil {
+			return nil, getErr
+		}
+		if change.Status != interim || change.ReviewedBy != reviewerID {
+			return nil, ErrPendingDecisionConflict
+		}
+		return change, nil
 	}
 	return s.GetPendingChange(id)
 }
 
-func (s *SQLiteStore) RejectPendingChange(id, reviewerID string) (*PendingChange, error) {
+func (s *SQLiteStore) FinalizePendingDecision(id, reviewerID, decision string) (*PendingChange, error) {
+	interim, final := "approving", "approved"
+	if decision == "reject" {
+		interim, final = "rejecting", "rejected"
+	} else if decision != "approve" {
+		return nil, ErrInvalidPendingChange
+	}
 	now := time.Now()
-	result, err := s.db.Exec(
-		"UPDATE pending_changes SET status = 'rejected', reviewed_by = ?, reviewed_at = ? WHERE id = ? AND status = 'pending'",
-		reviewerID, now, id,
-	)
+	result, err := s.db.Exec("UPDATE pending_changes SET status = ?, reviewed_at = ? WHERE id = ? AND status = ? AND reviewed_by = ?", final, now, id, interim, reviewerID)
 	if err != nil {
 		return nil, err
 	}
 	rows, _ := result.RowsAffected()
 	if rows == 0 {
-		return nil, ErrPendingNotFound
+		return nil, ErrPendingDecisionConflict
 	}
 	return s.GetPendingChange(id)
+}
+
+func (s *SQLiteStore) ApprovePendingChange(id, reviewerID string) (*PendingChange, error) {
+	if _, err := s.BeginPendingDecision(id, reviewerID, "approve"); err != nil {
+		return nil, err
+	}
+	return s.FinalizePendingDecision(id, reviewerID, "approve")
+}
+
+func (s *SQLiteStore) RejectPendingChange(id, reviewerID string) (*PendingChange, error) {
+	if _, err := s.BeginPendingDecision(id, reviewerID, "reject"); err != nil {
+		return nil, err
+	}
+	return s.FinalizePendingDecision(id, reviewerID, "reject")
 }
 
 func (s *SQLiteStore) GetPendingChange(id string) (*PendingChange, error) {

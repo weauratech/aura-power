@@ -34,15 +34,20 @@ func isSecureRequest(c *gin.Context) bool {
 
 // AuthHandlers holds auth-related HTTP handlers.
 type AuthHandlers struct {
-	store      auth.Store
-	jwtService *auth.JWTService
-	client     client.Client
-	mu         sync.Mutex
+	store            auth.Store
+	jwtService       *auth.JWTService
+	client           client.Client
+	controlNamespace string
+	mu               sync.Mutex
 }
 
 // NewAuthHandlers creates auth handlers.
-func NewAuthHandlers(store auth.Store, jwtService *auth.JWTService, c client.Client) *AuthHandlers {
-	return &AuthHandlers{store: store, jwtService: jwtService, client: c}
+func NewAuthHandlers(store auth.Store, jwtService *auth.JWTService, c client.Client, namespaces ...string) *AuthHandlers {
+	namespace := "aura-system"
+	if len(namespaces) > 0 && namespaces[0] != "" {
+		namespace = namespaces[0]
+	}
+	return &AuthHandlers{store: store, jwtService: jwtService, client: c, controlNamespace: namespace}
 }
 
 // RegisterRoutes registers auth API endpoints.
@@ -95,7 +100,7 @@ func (h *AuthHandlers) handleCreatePending(c *gin.Context) {
 		return
 	}
 	if req.ResourceNamespace == "" {
-		req.ResourceNamespace = "aura-system"
+		req.ResourceNamespace = h.controlNamespace
 	}
 	if err := validatePendingRequest(req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -339,12 +344,13 @@ func (h *AuthHandlers) handleApprove(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 		return
 	}
-	if change.Status != "pending" {
-		c.JSON(http.StatusConflict, gin.H{"error": "pending change has already been decided"})
-		return
-	}
 	if change.UserID == reviewerID {
 		c.JSON(http.StatusForbidden, gin.H{"error": "requesters cannot approve their own change"})
+		return
+	}
+	change, err = h.store.BeginPendingDecision(id, reviewerID, "approve")
+	if err != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": "pending change already has another decision"})
 		return
 	}
 	if err := h.applyPendingChange(c.Request.Context(), change); err != nil {
@@ -352,14 +358,14 @@ func (h *AuthHandlers) handleApprove(c *gin.Context) {
 		if errors.Is(err, errStalePendingChange) || apierrors.IsAlreadyExists(err) {
 			status = http.StatusConflict
 		}
-		c.JSON(status, gin.H{"error": err.Error(), "status": "pending"})
+		c.JSON(status, gin.H{"error": err.Error(), "status": change.Status})
 		return
 	}
 	if err := h.recordApprovalDecision(c.Request.Context(), change, reviewer, true); err != nil {
-		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error(), "status": "pending"})
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error(), "status": change.Status})
 		return
 	}
-	change, err = h.store.ApprovePendingChange(id, reviewerID)
+	change, err = h.store.FinalizePendingDecision(id, reviewerID, "approve")
 	if err != nil {
 		// The Kubernetes operation is intentionally replayable. Returning an
 		// error is truthful; a retry after restart observes the intended state
@@ -387,15 +393,16 @@ func (h *AuthHandlers) handleReject(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 		return
 	}
-	if change.Status != "pending" {
-		c.JSON(http.StatusConflict, gin.H{"error": "pending change has already been decided"})
+	change, err = h.store.BeginPendingDecision(id, reviewerID, "reject")
+	if err != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": "pending change already has another decision"})
 		return
 	}
 	if err := h.recordApprovalDecision(c.Request.Context(), change, reviewer, false); err != nil {
-		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error(), "status": "pending"})
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error(), "status": change.Status})
 		return
 	}
-	change, err = h.store.RejectPendingChange(id, reviewerID)
+	change, err = h.store.FinalizePendingDecision(id, reviewerID, "reject")
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 		return

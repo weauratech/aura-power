@@ -179,7 +179,7 @@ export interface PendingChange {
   resourceName: string;
   resourceVersion?: string;
   payload: string;
-  status: 'pending' | 'approved' | 'rejected';
+  status: 'pending' | 'approving' | 'rejecting' | 'approved' | 'rejected';
   createdAt: string;
   reviewedBy?: string;
   reviewedAt?: string;

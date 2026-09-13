@@ -84,7 +84,7 @@ func (s *Server) setupRoutes() {
 
 	// Auth endpoints (no middleware — login, refresh, logout must be accessible)
 	if s.authStore != nil && s.jwtService != nil {
-		authHandlers := NewAuthHandlers(s.authStore, s.jwtService, s.client)
+		authHandlers := NewAuthHandlers(s.authStore, s.jwtService, s.client, s.controlNamespace())
 		authHandlers.RegisterRoutes(api)
 	}
 
@@ -95,7 +95,7 @@ func (s *Server) setupRoutes() {
 
 	// Protected auth routes (me, users, pending)
 	if s.authStore != nil && s.jwtService != nil {
-		authHandlers := NewAuthHandlers(s.authStore, s.jwtService, s.client)
+		authHandlers := NewAuthHandlers(s.authStore, s.jwtService, s.client, s.controlNamespace())
 		authHandlers.RegisterProtectedRoutes(api)
 	}
 	{
