@@ -6,18 +6,24 @@ set -Eeuo pipefail
 
 RUN_ID="${RUN_ID:-kind$(date -u +%Y%m%d%H%M%S)}"
 FIXTURE_NAMESPACE="aura-power-e2e-${RUN_ID}"
+RBAC_FIXTURE_NAMESPACE="aura-power-rbac-${RUN_ID}"
+IMPLICIT_POLICY_NAME="ns-default-${RBAC_FIXTURE_NAMESPACE}"
 POLICY_NAME="quality-${RUN_ID}"
 GROUP_NAME="quality-${RUN_ID}"
 WORKLOAD_NAME="restore-two"
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-180}"
 [[ "$TIMEOUT_SECONDS" =~ ^[0-9]+$ && "$TIMEOUT_SECONDS" -le 300 ]] || { echo "TIMEOUT_SECONDS must be an integer <= 300" >&2; exit 2; }
 
-if kubectl get namespace "$FIXTURE_NAMESPACE" >/dev/null 2>&1 || kubectl get powerpolicy "$POLICY_NAME" -n aura-system >/dev/null 2>&1; then
+if kubectl get namespace "$FIXTURE_NAMESPACE" >/dev/null 2>&1 ||
+  kubectl get namespace "$RBAC_FIXTURE_NAMESPACE" >/dev/null 2>&1 ||
+  kubectl get powerpolicy "$POLICY_NAME" -n aura-system >/dev/null 2>&1 ||
+  kubectl get powerpolicy "$IMPLICIT_POLICY_NAME" -n aura-system >/dev/null 2>&1; then
   echo "refusing mutation: campaign namespace or policy already exists" >&2
   exit 4
 fi
 
 namespace_uid=""
+rbac_namespace_uid=""
 cleanup() {
   local original_status=$? cleanup_status=0 actual_uid actual_run
   trap - EXIT INT TERM HUP
@@ -26,6 +32,17 @@ cleanup() {
     [[ "$actual_run" == "$RUN_ID" ]] && kubectl delete powerpolicy "$POLICY_NAME" -n aura-system --wait=true --timeout=60s || cleanup_status=1
   fi
   kubectl delete powernamespacegroup "$GROUP_NAME" -n aura-system --ignore-not-found --wait=true --timeout=60s >/dev/null 2>&1 || cleanup_status=1
+  kubectl delete powerpolicy "$IMPLICIT_POLICY_NAME" -n aura-system --ignore-not-found --wait=true --timeout=60s >/dev/null 2>&1 || cleanup_status=1
+  if [[ -n "$rbac_namespace_uid" ]] && kubectl get namespace "$RBAC_FIXTURE_NAMESPACE" >/dev/null 2>&1; then
+    actual_uid="$(kubectl get namespace "$RBAC_FIXTURE_NAMESPACE" -o jsonpath='{.metadata.uid}')"
+    actual_run="$(kubectl get namespace "$RBAC_FIXTURE_NAMESPACE" -o json | jq -r '.metadata.labels["aura-power-quality/run"] // empty')"
+    if [[ "$actual_uid" == "$rbac_namespace_uid" && "$actual_run" == "$RUN_ID" ]]; then
+      kubectl delete namespace "$RBAC_FIXTURE_NAMESPACE" --wait=true --timeout=180s >/dev/null || cleanup_status=1
+    else
+      echo "refusing cleanup: RBAC fixture namespace ownership or UID mismatch" >&2
+      cleanup_status=1
+    fi
+  fi
   if [[ -n "$namespace_uid" ]] && kubectl get namespace "$FIXTURE_NAMESPACE" >/dev/null 2>&1; then
     actual_uid="$(kubectl get namespace "$FIXTURE_NAMESPACE" -o jsonpath='{.metadata.uid}')"
     actual_run="$(kubectl get namespace "$FIXTURE_NAMESPACE" -o json | jq -r '.metadata.labels["aura-power-quality/run"] // empty')"
@@ -39,7 +56,10 @@ cleanup() {
       cleanup_status=1
     fi
   fi
-  if kubectl get powerpolicy "$POLICY_NAME" -n aura-system >/dev/null 2>&1 || kubectl get namespace "$FIXTURE_NAMESPACE" >/dev/null 2>&1; then
+  if kubectl get powerpolicy "$POLICY_NAME" -n aura-system >/dev/null 2>&1 ||
+    kubectl get powerpolicy "$IMPLICIT_POLICY_NAME" -n aura-system >/dev/null 2>&1 ||
+    kubectl get namespace "$FIXTURE_NAMESPACE" >/dev/null 2>&1 ||
+    kubectl get namespace "$RBAC_FIXTURE_NAMESPACE" >/dev/null 2>&1; then
     cleanup_status=1
   fi
   [[ "$cleanup_status" -eq 0 ]] || { echo "FATAL: Kind fixture cleanup was not verified" >&2; exit 90; }
@@ -48,6 +68,44 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
+
+# Exercise the rendered controller ClusterRole through the real service account.
+# Built-in schedule seeding and namespace-derived policies are controller-owned
+# writes and must survive least-privilege changes.
+for schedule in business-hours always-off weekdays-only; do
+  deadline=$((SECONDS + TIMEOUT_SECONDS))
+  until kubectl get powerschedule "$schedule" -n aura-system >/dev/null 2>&1; do
+    (( SECONDS < deadline )) || { echo "FAIL: built-in schedule $schedule was not seeded" >&2; exit 5; }
+    sleep 3
+  done
+done
+rbac_namespace_json="$(kubectl create -o json -f - <<YAML
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ${RBAC_FIXTURE_NAMESPACE}
+  labels:
+    aura-power-quality/run: "${RUN_ID}"
+  annotations:
+    aura.sh/default-schedule: always-off
+    aura.sh/power-priority: "321"
+YAML
+)"
+rbac_namespace_uid="$(jq -er .metadata.uid <<<"$rbac_namespace_json")"
+deadline=$((SECONDS + TIMEOUT_SECONDS))
+until kubectl get powerpolicy "$IMPLICIT_POLICY_NAME" -n aura-system -o json 2>/dev/null | jq -e --arg ns "$RBAC_FIXTURE_NAMESPACE" '
+  .metadata.labels["power.aura.sh/source"] == "namespace-annotation" and
+  .spec.scope.namespaces == [$ns] and .spec.schedule.desiredState == "off" and .spec.priority == 321
+' >/dev/null; do
+  (( SECONDS < deadline )) || { echo "FAIL: controller service account could not create the implicit namespace policy" >&2; exit 6; }
+  sleep 3
+done
+kubectl annotate namespace "$RBAC_FIXTURE_NAMESPACE" aura.sh/power-priority="654" --overwrite >/dev/null
+deadline=$((SECONDS + TIMEOUT_SECONDS))
+until [[ "$(kubectl get powerpolicy "$IMPLICIT_POLICY_NAME" -n aura-system -o jsonpath='{.spec.priority}' 2>/dev/null || true)" == "654" ]]; do
+  (( SECONDS < deadline )) || { echo "FAIL: controller service account could not update the implicit namespace policy" >&2; exit 7; }
+  sleep 3
+done
 
 namespace_json="$(kubectl create -o json -f - <<YAML
 apiVersion: v1
@@ -210,4 +268,4 @@ while (( SECONDS < deadline )); do
   sleep 5
 done
 [[ "$dep_replicas/$sts_replicas/$cron_suspended" == "2/1/false" ]] || { echo "FAIL: exact multi-kind restore failed: ${dep_replicas}/${sts_replicas}/${cron_suspended}" >&2; exit 15; }
-echo "kind_core_journey=passed identity=true exact_refs=true groups_and_labels=true deployment=true statefulset=true cronjob=true"
+echo "kind_core_journey=passed builtins=true implicit_policy_create_update_rbac=true identity=true exact_refs=true groups_and_labels=true deployment=true statefulset=true cronjob=true"

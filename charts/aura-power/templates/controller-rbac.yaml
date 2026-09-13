@@ -21,10 +21,18 @@ metadata:
   labels:
     {{- include "aura-power.controller.labels" . | nindent 4 }}
 rules:
-  # Decision inputs are observed, never authored by the controller.
+  # User-authored decision inputs are observed, never changed by the controller.
   - apiGroups: ["power.aura.sh"]
-    resources: ["powerpolicies", "poweroverrides", "powerschedules", "powernamespacegroups"]
+    resources: ["poweroverrides", "powernamespacegroups"]
     verbs: ["get", "list", "watch"]
+  # Discovery owns namespace-annotation policies and may create or refresh them.
+  - apiGroups: ["power.aura.sh"]
+    resources: ["powerpolicies"]
+    verbs: ["get", "list", "watch", "create", "update"]
+  # Built-in schedules are seeded once and existing resources are left untouched.
+  - apiGroups: ["power.aura.sh"]
+    resources: ["powerschedules"]
+    verbs: ["get", "list", "watch", "create"]
   # Discovery owns target lifecycle.
   - apiGroups: ["power.aura.sh"]
     resources: ["powertargets"]

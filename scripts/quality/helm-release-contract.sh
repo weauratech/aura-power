@@ -51,6 +51,16 @@ fi
 perl -0ne 'exit(!/name: managed-auth\n\s+key: jwt-secret/s)' "$external_secret_render"
 perl -0ne 'exit(!/name: managed-auth\n\s+key: admin-password/s)' "$external_secret_render"
 
+# The controller authors only its generated decision resources: built-in
+# schedules and namespace-annotation policies. Keep these permissions explicit
+# so least-privilege hardening cannot silently disable either feature.
+perl -0ne 'exit(!/resources: \["powerpolicies"\]\n\s+verbs: \["get", "list", "watch", "create", "update"\]/s)' "$default_render"
+perl -0ne 'exit(!/resources: \["powerschedules"\]\n\s+verbs: \["get", "list", "watch", "create"\]/s)' "$default_render"
+if perl -0ne 'exit(!/resources: \["poweroverrides", "powernamespacegroups"\]\n\s+verbs: \[[^\]]*("create"|"update"|"patch"|"delete")/s)' "$default_render"; then
+  echo "controller unexpectedly writes user-authored decision inputs" >&2
+  exit 1
+fi
+
 if helm template aura-power charts/aura-power --set server.replicas=2 >/dev/null 2>&1; then
   echo "server.replicas=2 must be rejected while SQLite is pod-local" >&2
   exit 1
