@@ -179,6 +179,38 @@ func TestAcceptanceArgoRestoredLiveStateIsNotOverwrittenByStaleSnapshot(t *testi
 	}
 }
 
+func TestAcceptancePolicyFlipPreservesSnapshotUntilPowerDownIsObserved(t *testing.T) {
+	s := runtime.NewScheme()
+	if err := v1alpha1.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+	snapshotReplicas := int32(2)
+	now := metav1.Now()
+	target := &v1alpha1.PowerTarget{
+		ObjectMeta: metav1.ObjectMeta{Name: "fixtures--api", Namespace: "aura-system"},
+		Spec:       v1alpha1.PowerTargetSpec{TargetRef: v1alpha1.TargetReference{Namespace: "fixtures", Name: "api", Kind: "Deployment", UID: "uid-api"}},
+		Status: v1alpha1.PowerTargetStatus{
+			ObservedState: v1alpha1.ObservedStateSpec{Replicas: 2, PowerState: "on"},
+			Snapshot:      &v1alpha1.SnapshotSpec{Available: true, ReplicaCount: &snapshotReplicas},
+			Action:        &v1alpha1.PowerActionStatus{DesiredState: "off", Phase: "Applied", AttemptedAt: &now, CompletedAt: &now},
+		},
+	}
+	policy := &v1alpha1.PowerPolicy{ObjectMeta: metav1.ObjectMeta{Name: "on", Namespace: "aura-system"}, Spec: v1alpha1.PowerPolicySpec{Scope: v1alpha1.PolicyScope{Namespaces: []string{"fixtures"}}, Schedule: v1alpha1.PolicySchedule{DesiredState: "on"}}}
+	c := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&v1alpha1.PowerTarget{}).WithObjects(target, policy).Build()
+	r := TargetReconciler{Client: c, Config: domain.DefaultGuardrailConfig(), Executor: &countingExecutor{}, Audit: noopAudit{}, Metrics: noopMetrics{}}
+	req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(target)}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	var got v1alpha1.PowerTarget
+	if err := c.Get(context.Background(), req.NamespacedName, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.Snapshot == nil || got.Status.Snapshot.ReplicaCount == nil || *got.Status.Snapshot.ReplicaCount != 2 {
+		t.Fatalf("snapshot was discarded while discovery still held the pre-power-down observation: %+v", got.Status)
+	}
+}
+
 func TestAcceptanceInvalidNamespaceGroupDoesNotBlockUnrelatedRestore(t *testing.T) {
 	s := runtime.NewScheme()
 	if err := v1alpha1.AddToScheme(s); err != nil {

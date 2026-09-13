@@ -21,6 +21,7 @@ const defaultRequeueAfter = 30 * time.Second
 const errorRequeueAfter = 10 * time.Second
 const retryActionAnnotation = "power.aura.sh/retry-action"
 const statusCheckpointInterval = 5 * time.Minute
+const actionConvergenceGrace = 2 * time.Minute
 
 // TargetReconciler reconciles PowerTarget objects.
 type TargetReconciler struct {
@@ -183,7 +184,8 @@ func (r *TargetReconciler) reconcileExistingAction(ctx context.Context, target *
 	desired := decision.DesiredState
 	decisionKey := powerDecisionKey(decision)
 	action := target.Status.Action
-	if desired == domain.PowerStateOn && observed == desired && target.Status.Snapshot != nil {
+	if desired == domain.PowerStateOn && observed == desired && target.Status.Snapshot != nil &&
+		(action == nil || action.DesiredState != string(domain.PowerStateOff) || action.Phase == "Converged") {
 		// GitOps or an operator may already have restored the workload. Do not
 		// replay the stale replica snapshot over that legitimate live state.
 		target.Status.Snapshot = nil
@@ -216,6 +218,12 @@ func (r *TargetReconciler) reconcileExistingAction(ctx context.Context, target *
 		// same UID-bound scale/suspend operation is idempotent and recovers both
 		// the before-mutation and after-mutation crash windows.
 		return false, nil
+	}
+	if action.Phase == "Applied" && action.CompletedAt != nil && time.Since(action.CompletedAt.Time) < actionConvergenceGrace {
+		// Discovery is periodic, so the first reconciliation after a successful
+		// write can still carry the pre-mutation observation. Give the API and
+		// discovery loop time to converge before declaring another field owner.
+		return true, nil
 	}
 
 	if action.Phase != "Contended" {
