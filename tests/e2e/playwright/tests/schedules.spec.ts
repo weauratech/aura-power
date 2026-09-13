@@ -4,27 +4,32 @@ import { openPage, requireFixtureNamespace } from './support';
 test.describe('schedules', () => {
   test.beforeEach(async ({ page }) => openPage(page, 'Schedules', 'Schedules'));
 
+  const openScheduleDrawer = async (page: import('@playwright/test').Page) => {
+    await page.getByRole('main').getByRole('button', { name: 'New Schedule', exact: true }).first().click();
+    return page.getByRole('dialog', { name: 'New Schedule' });
+  };
+
   test('renders the policy table and validates required scope', async ({ page }) => {
     await expect(page.getByRole('table')).toBeVisible();
-    await page.getByRole('button', { name: 'New Schedule' }).click();
-    await expect(page.getByRole('heading', { name: 'New Schedule' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Create Schedule' })).toBeDisabled();
+    const drawer = await openScheduleDrawer(page);
+    await expect(drawer).toBeVisible();
+    await expect(drawer.getByRole('button', { name: 'Create Schedule', exact: true })).toBeDisabled();
   });
 
   test('namespace autocomplete contains the dedicated fixture', async ({ page }) => {
     const namespace = requireFixtureNamespace();
-    await page.getByRole('button', { name: 'New Schedule' }).click();
-    const scope = page.getByRole('combobox', { name: 'Select Namespaces' });
+    const drawer = await openScheduleDrawer(page);
+    const scope = drawer.getByRole('combobox', { name: 'Select Namespaces' });
     await scope.fill(namespace);
-    await expect(page.getByRole('option', { name: namespace })).toBeVisible();
+    await expect(page.getByRole('option', { name: namespace, exact: true })).toBeVisible();
   });
 
   test('override mode requires a reason and shows expiry controls', async ({ page }) => {
-    await page.getByRole('button', { name: 'New Schedule' }).click();
-    await page.getByRole('checkbox', { name: /Temporary override/ }).check();
-    await expect(page.getByLabel('Expires in (hours)')).toBeVisible();
-    await expect(page.getByLabel(/Reason/)).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Create Override' })).toBeDisabled();
+    const drawer = await openScheduleDrawer(page);
+    await drawer.getByRole('checkbox', { name: /Temporary override/ }).check();
+    await expect(drawer.getByLabel('Expires in (hours)')).toBeVisible();
+    await expect(drawer.getByLabel(/Reason/)).toBeVisible();
+    await expect(drawer.getByRole('button', { name: 'Create Override', exact: true })).toBeDisabled();
   });
 
   test('@mutation creates, observes, and deletes a fixture policy', async ({ page }) => {
@@ -39,12 +44,12 @@ test.describe('schedules', () => {
     };
     expect(await policyExists()).toBe(false);
     try {
-      await page.getByRole('button', { name: 'New Schedule' }).click();
-      await page.getByRole('textbox', { name: /^Name/ }).fill(name);
-      const scope = page.getByRole('combobox', { name: 'Select Namespaces' });
+      const drawer = await openScheduleDrawer(page);
+      await drawer.getByRole('textbox', { name: /^Name/ }).fill(name);
+      const scope = drawer.getByRole('combobox', { name: 'Select Namespaces' });
       await scope.fill(namespace);
-      await page.getByRole('option', { name: namespace }).click();
-      await page.getByRole('button', { name: 'Create Schedule' }).click();
+      await page.getByRole('option', { name: namespace, exact: true }).click();
+      await drawer.getByRole('button', { name: 'Create Schedule', exact: true }).click();
       await expect(page.getByText(name, { exact: true })).toBeVisible();
     } finally {
       if (await policyExists()) {

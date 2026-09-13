@@ -200,6 +200,7 @@ export function Layout({ user, onLogout }: LayoutProps) {
         component="main"
         sx={{
           flexGrow: 1,
+          minWidth: 0,
           bgcolor: 'background.default',
           minHeight: '100vh',
           mt: isMobile ? '56px' : 0,

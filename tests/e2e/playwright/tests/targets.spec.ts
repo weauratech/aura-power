@@ -26,8 +26,9 @@ test.describe('targets', () => {
   });
 
   test('opens the schedule drawer with required fields incomplete', async ({ page }) => {
-    await page.getByRole('button', { name: 'Create Schedule' }).click();
-    await expect(page.getByRole('heading', { name: 'New Schedule' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Create Schedule' })).toBeDisabled();
+    await page.getByRole('main').getByRole('button', { name: 'Create Schedule', exact: true }).click();
+    const drawer = page.getByRole('dialog', { name: 'New Schedule' });
+    await expect(drawer).toBeVisible();
+    await expect(drawer.getByRole('button', { name: 'Create Schedule', exact: true })).toBeDisabled();
   });
 });

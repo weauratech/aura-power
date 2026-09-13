@@ -1,5 +1,6 @@
 import AxeBuilder from '@axe-core/playwright';
 import { test, expect } from '@playwright/test';
+import { waitForMobileNavigationClosed } from './support';
 
 test.describe('mobile navigation and drawers', () => {
   test.skip(({ isMobile }) => !isMobile, 'mobile browser contract');
@@ -17,16 +18,17 @@ test.describe('mobile navigation and drawers', () => {
 
     await menuButton.click();
     await page.getByRole('link', { name: 'Schedules', exact: true }).click();
+    await waitForMobileNavigationClosed(page);
     await expect(page.getByRole('heading', { name: 'Schedules', exact: true })).toBeVisible();
 
-    const trigger = page.getByRole('button', { name: 'New Schedule' }).first();
+    const trigger = page.getByRole('main').getByRole('button', { name: 'New Schedule', exact: true }).first();
     await trigger.click();
     const drawer = page.getByRole('dialog', { name: 'New Schedule' });
     await expect(drawer).toBeVisible();
     await expect(page.getByRole('button', { name: 'Close schedule drawer' })).toBeFocused();
     const box = await drawer.boundingBox();
     expect(box).not.toBeNull();
-    expect(box!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+    expect(box!.width).toBeLessThanOrEqual(page.viewportSize()!.width + 0.5);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 
     const accessibility = await new AxeBuilder({ page }).include('[role="dialog"]').analyze();

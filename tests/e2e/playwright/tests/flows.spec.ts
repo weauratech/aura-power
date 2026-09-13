@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { openPage } from './support';
+import { openPage, waitForMobileNavigationClosed } from './support';
 
 test('administrator navigation keeps every primary destination reachable', async ({ page }) => {
   await openPage(page, 'Dashboard', 'Cluster Overview');
@@ -15,10 +15,14 @@ test('administrator navigation keeps every primary destination reachable', async
     ['Users', 'Users'],
   ] as const;
   for (const [link, heading] of destinations) {
-    if ((page.viewportSize()?.width ?? 1280) < 900) {
+    const mobile = (page.viewportSize()?.width ?? 1280) < 900;
+    if (mobile) {
       await page.getByRole('button', { name: 'Open navigation' }).click();
     }
     await page.getByRole('link', { name: link, exact: true }).click();
+    if (mobile) {
+      await waitForMobileNavigationClosed(page);
+    }
     await expect(page.getByRole('heading', { name: heading, exact: true })).toBeVisible();
   }
 });

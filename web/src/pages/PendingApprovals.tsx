@@ -43,7 +43,7 @@ export function PendingApprovals() {
         Review the exact operation and payload before applying it to the cluster.
       </Typography>
       {actionError && <Alert severity="error" sx={{ mb: 2 }}>{actionError}</Alert>}
-      {isLoading ? <Skeleton variant="rounded" height={240} /> : data?.items.length ? (
+      {isLoading ? <Skeleton variant="rounded" height={240} /> : data?.items?.length ? (
         <TableContainer>
           <Table>
             <TableHead>

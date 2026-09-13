@@ -58,7 +58,11 @@ test('audit log renders an induced API error without an empty state', async ({ p
 
 test('logout clears the session and returns to login', async ({ page }) => {
   await openPage(page, 'Dashboard', 'Cluster Overview');
-  await page.getByRole('button', { name: 'Sign out' }).click();
+  if ((page.viewportSize()?.width ?? 1280) < 900) {
+    await page.getByRole('button', { name: 'Open navigation' }).click();
+  }
+  const navigation = page.getByRole('navigation', { name: 'Primary navigation' });
+  await navigation.getByRole('button', { name: 'Sign out' }).click();
   await expect(page.getByLabel('Password')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Cluster Overview' })).not.toBeVisible();
 });
