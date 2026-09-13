@@ -145,10 +145,10 @@ func TestDispatchRecordsSenderFailure(t *testing.T) {
 	if err := c.Get(context.Background(), client.ObjectKeyFromObject(channel), &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Status.TotalErrors != 1 || got.Status.TotalSent != 0 || got.Status.LastError != "controlled failure" {
+	if got.Status.TotalErrors != 1 || got.Status.TotalSent != 0 || got.Status.LastError != redactedDeliveryFailure {
 		t.Fatalf("failure status not persisted: %+v", got.Status)
 	}
-	if got.Status.LastAttempt == nil || got.Status.LastAttempt.Phase != "Failed" || got.Status.LastAttempt.Response != "controlled failure" {
+	if got.Status.LastAttempt == nil || got.Status.LastAttempt.Phase != "Failed" || got.Status.LastAttempt.Response != redactedDeliveryFailure {
 		t.Fatalf("failure attempt correlation not persisted: %+v", got.Status.LastAttempt)
 	}
 }
@@ -300,17 +300,59 @@ func TestDispatchBatchSeparatesDifferentActionsResultsAndRules(t *testing.T) {
 	}
 }
 
-func TestEnqueueDropsOldestWhenQueueIsFull(t *testing.T) {
+func TestEnqueueFailsWithoutDroppingWhenQueueIsFull(t *testing.T) {
 	d, _, _ := testDispatcher(t)
 	d.queue = make(chan Event, 2)
-	d.Enqueue(Event{Target: TargetRef{Name: "oldest"}})
-	d.Enqueue(Event{Target: TargetRef{Name: "middle"}})
-	d.Enqueue(Event{Target: TargetRef{Name: "newest"}})
+	if err := d.Enqueue(Event{Target: TargetRef{Name: "oldest"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Enqueue(Event{Target: TargetRef{Name: "middle"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Enqueue(Event{Target: TargetRef{Name: "newest"}}); !errors.Is(err, ErrQueueFull) {
+		t.Fatalf("enqueue error=%v want ErrQueueFull", err)
+	}
 
 	first := <-d.queue
 	second := <-d.queue
-	if first.Target.Name != "middle" || second.Target.Name != "newest" {
+	if first.Target.Name != "oldest" || second.Target.Name != "middle" {
 		t.Fatalf("queue retained wrong events: first=%q second=%q", first.Target.Name, second.Target.Name)
+	}
+}
+
+func TestExcludeAttemptedEventsUsesDurableAuditReference(t *testing.T) {
+	status := v1alpha1.PowerNotificationChannelStatus{RecentAttempts: []v1alpha1.NotificationAttemptStatus{{
+		AuditEventRefs: []string{"aura-system/action-already-attempted"},
+		Phase:          "Succeeded",
+	}}}
+	events := []Event{
+		{AuditEventRef: "aura-system/action-already-attempted", Target: TargetRef{Name: "duplicate"}},
+		{AuditEventRef: "aura-system/action-pending", Target: TargetRef{Name: "pending"}},
+		{Target: TargetRef{Name: "legacy-without-audit-ref"}},
+	}
+	filtered := excludeAttemptedEvents(status, events)
+	if len(filtered) != 2 || filtered[0].Target.Name != "pending" || filtered[1].Target.Name != "legacy-without-audit-ref" {
+		t.Fatalf("filtered events=%+v", filtered)
+	}
+}
+
+func TestRedactDeliveryErrorNeverDependsOnLiteralURLReplacement(t *testing.T) {
+	secretValue := "https://hooks.example.test/path\nPRIVATE-KEY-MATERIAL"
+	transportError := errors.New("parse https://hooks.example.test/path%0APRIVATE-KEY-MATERIAL: invalid control character")
+	safe := redactDeliveryError(transportError, secretValue).Error()
+	for _, forbidden := range []string{"hooks.example.test", "PRIVATE-KEY-MATERIAL", "%0A"} {
+		if strings.Contains(safe, forbidden) {
+			t.Fatalf("sanitized error leaked %q: %q", forbidden, safe)
+		}
+	}
+	if !strings.Contains(safe, "<redacted>") {
+		t.Fatalf("sanitized error lacks explicit redaction marker: %q", safe)
+	}
+	if _, err := validateWebhookURL(secretValue); err == nil || strings.Contains(err.Error(), "PRIVATE-KEY-MATERIAL") {
+		t.Fatalf("invalid secret-backed endpoint was not rejected safely: %v", err)
+	}
+	if _, err := validateWebhookURL("ftp://user:password@example.test/hook"); err == nil || strings.Contains(err.Error(), "password") {
+		t.Fatalf("userinfo or unsupported scheme was not rejected safely: %v", err)
 	}
 }
 

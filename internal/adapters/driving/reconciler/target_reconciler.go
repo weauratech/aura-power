@@ -127,9 +127,17 @@ func (r *TargetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 				logger.Error(err, "power-down failed")
 				target.Status.ConsecutiveFailures++
 				r.failAction(&target, err)
+				if errors.Is(err, ports.ErrSnapshotStale) {
+					// The executor proves it did not apply the mutation. Retire the
+					// obsolete recovery value so the next reconcile captures the newer
+					// workload revision before trying again.
+					target.Status.Snapshot = nil
+				}
 				r.Metrics.RecordAction(ports.ActionPowerDown, req.String(), false)
 				r.recordAudit(ctx, domainTarget.Ref, ports.AuditExecutionError, "error", err.Error(), "")
-				r.Status().Update(ctx, &target)
+				if statusErr := r.Status().Update(ctx, &target); statusErr != nil {
+					logger.Error(statusErr, "failed to persist power-down failure")
+				}
 				return ctrl.Result{RequeueAfter: errorRequeueAfter}, nil
 			}
 			target.Status.ConsecutiveFailures = 0
@@ -387,7 +395,14 @@ func (r *TargetReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 func (r *TargetReconciler) executePowerDown(ctx context.Context, target *v1alpha1.PowerTarget, ref domain.WorkloadRef) error {
-	return r.Executor.PowerDown(ctx, ref)
+	if target.Status.Snapshot == nil || !target.Status.Snapshot.Available {
+		return errors.New("refusing power-down without an available snapshot")
+	}
+	return r.Executor.PowerDown(ctx, ref, domain.Snapshot{
+		ReplicaCount:    target.Status.Snapshot.ReplicaCount,
+		Suspended:       target.Status.Snapshot.Suspended,
+		ResourceVersion: target.Status.Snapshot.ResourceVersion,
+	})
 }
 
 func (r *TargetReconciler) captureAndPersistSnapshot(ctx context.Context, target *v1alpha1.PowerTarget, ref domain.WorkloadRef) error {
@@ -398,10 +413,11 @@ func (r *TargetReconciler) captureAndPersistSnapshot(ctx context.Context, target
 	// Store snapshot on target status
 	now := metav1.Now()
 	target.Status.Snapshot = &v1alpha1.SnapshotSpec{
-		Available:    true,
-		ReplicaCount: snapshot.ReplicaCount,
-		Suspended:    snapshot.Suspended,
-		CapturedAt:   &now,
+		Available:       true,
+		ReplicaCount:    snapshot.ReplicaCount,
+		Suspended:       snapshot.Suspended,
+		CapturedAt:      &now,
+		ResourceVersion: snapshot.ResourceVersion,
 		Resources: v1alpha1.ResourceSpec{
 			CPUMillicores: snapshot.Resources.CPUMillicores,
 			MemoryMiB:     snapshot.Resources.MemoryMiB,
@@ -504,8 +520,9 @@ func toDomainTarget(t *v1alpha1.PowerTarget) domain.Target {
 	var snapshot *domain.Snapshot
 	if t.Status.Snapshot != nil && t.Status.Snapshot.Available {
 		snapshot = &domain.Snapshot{
-			ReplicaCount: t.Status.Snapshot.ReplicaCount,
-			Suspended:    t.Status.Snapshot.Suspended,
+			ReplicaCount:    t.Status.Snapshot.ReplicaCount,
+			Suspended:       t.Status.Snapshot.Suspended,
+			ResourceVersion: t.Status.Snapshot.ResourceVersion,
 			Resources: domain.ResourceSummary{
 				CPUMillicores: t.Status.Snapshot.Resources.CPUMillicores,
 				MemoryMiB:     t.Status.Snapshot.Resources.MemoryMiB,

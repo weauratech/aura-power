@@ -3,6 +3,7 @@ package kubernetes
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -63,7 +64,7 @@ func TestQualityExecutorRoundTripDeploymentAndStatefulSet(t *testing.T) {
 			if snapshot.ReplicaCount == nil || *snapshot.ReplicaCount != tc.want {
 				t.Fatalf("unexpected snapshot: %+v", snapshot)
 			}
-			if err := executor.PowerDown(ctx, ref); err != nil {
+			if err := executor.PowerDown(ctx, ref, *snapshot); err != nil {
 				t.Fatal(err)
 			}
 			if err := executor.Restore(ctx, ref, *snapshot); err != nil {
@@ -98,9 +99,115 @@ func TestQualityExecutorRefusesRecreatedWorkloadUID(t *testing.T) {
 	if _, err := executor.CaptureSnapshot(context.Background(), ref); err == nil {
 		t.Fatal("expected snapshot capture to reject a recreated workload UID")
 	}
-	if err := executor.PowerDown(context.Background(), ref); err == nil {
+	if err := executor.PowerDown(context.Background(), ref, domain.Snapshot{ResourceVersion: dep.ResourceVersion}); err == nil {
 		t.Fatal("expected mutation to reject a recreated workload UID")
 	}
+}
+
+func TestQualityPowerDownRejectsStaleSnapshotAndPreservesConcurrentScale(t *testing.T) {
+	ctx := context.Background()
+	replicas := int32(3)
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "fixtures", UID: "uid-api"},
+		Spec:       appsv1.DeploymentSpec{Replicas: &replicas},
+	}
+	c := fake.NewClientBuilder().WithScheme(qualityScheme(t)).WithObjects(dep).Build()
+	executor := NewExecutor(c)
+	ref := domain.WorkloadRef{Namespace: "fixtures", Name: "api", Kind: domain.WorkloadKindDeployment, UID: "uid-api"}
+
+	stale, err := executor.CaptureSnapshot(ctx, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var concurrent appsv1.Deployment
+	if err := c.Get(ctx, client.ObjectKeyFromObject(dep), &concurrent); err != nil {
+		t.Fatal(err)
+	}
+	five := int32(5)
+	concurrent.Spec.Replicas = &five
+	if err := c.Update(ctx, &concurrent); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := executor.PowerDown(ctx, ref, *stale); !errors.Is(err, ports.ErrSnapshotStale) {
+		t.Fatalf("stale snapshot was not rejected: %v", err)
+	}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(dep), &concurrent); err != nil {
+		t.Fatal(err)
+	}
+	if concurrent.Spec.Replicas == nil || *concurrent.Spec.Replicas != five {
+		t.Fatalf("stale power-down overwrote concurrent scale: %+v", concurrent.Spec.Replicas)
+	}
+
+	fresh, err := executor.CaptureSnapshot(ctx, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh.ReplicaCount == nil || *fresh.ReplicaCount != five || fresh.ResourceVersion == stale.ResourceVersion {
+		t.Fatalf("recapture did not bind the concurrent revision: stale=%+v fresh=%+v", stale, fresh)
+	}
+	if err := executor.PowerDown(ctx, ref, *fresh); err != nil {
+		t.Fatal(err)
+	}
+	if err := executor.Restore(ctx, ref, *fresh); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(dep), &concurrent); err != nil {
+		t.Fatal(err)
+	}
+	if concurrent.Spec.Replicas == nil || *concurrent.Spec.Replicas != five {
+		t.Fatalf("restore did not preserve the recaptured scale: %+v", concurrent.Spec.Replicas)
+	}
+}
+
+func TestQualityPowerDownConvertsUpdateConflictToSafeRecaptureSignal(t *testing.T) {
+	ctx := context.Background()
+	replicas := int32(3)
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "api-race", Namespace: "fixtures", UID: "uid-race"},
+		Spec:       appsv1.DeploymentSpec{Replicas: &replicas},
+	}
+	base := fake.NewClientBuilder().WithScheme(qualityScheme(t)).WithObjects(dep).Build()
+	raceClient := &conflictBeforeUpdateClient{Client: base}
+	executor := NewExecutor(raceClient)
+	ref := domain.WorkloadRef{Namespace: dep.Namespace, Name: dep.Name, Kind: domain.WorkloadKindDeployment, UID: string(dep.UID)}
+	snapshot, err := executor.CaptureSnapshot(ctx, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := executor.PowerDown(ctx, ref, *snapshot); !errors.Is(err, ports.ErrSnapshotStale) {
+		t.Fatalf("resourceVersion conflict was not converted to safe recapture signal: %v", err)
+	}
+	var live appsv1.Deployment
+	if err := base.Get(ctx, client.ObjectKeyFromObject(dep), &live); err != nil {
+		t.Fatal(err)
+	}
+	if live.Spec.Replicas == nil || *live.Spec.Replicas != 5 {
+		t.Fatalf("conflicting update did not preserve the external scale: %+v", live.Spec.Replicas)
+	}
+}
+
+type conflictBeforeUpdateClient struct {
+	client.Client
+	injected bool
+}
+
+func (c *conflictBeforeUpdateClient) Update(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
+	if !c.injected {
+		if dep, ok := obj.(*appsv1.Deployment); ok {
+			c.injected = true
+			var live appsv1.Deployment
+			if err := c.Client.Get(ctx, client.ObjectKeyFromObject(dep), &live); err != nil {
+				return err
+			}
+			five := int32(5)
+			live.Spec.Replicas = &five
+			if err := c.Client.Update(ctx, &live); err != nil {
+				return err
+			}
+		}
+	}
+	return c.Client.Update(ctx, obj, opts...)
 }
 
 func TestQualityAuditNotificationCorrelationRoundTrip(t *testing.T) {
@@ -237,10 +344,29 @@ func TestQualityAuditRecorderIsIdempotentForDeterministicID(t *testing.T) {
 	case <-time.After(8 * time.Second):
 		t.Fatal("notification for deterministic audit event was not delivered")
 	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		var persisted v1alpha1.PowerNotificationChannel
+		if err := c.Get(ctx, client.ObjectKeyFromObject(channel), &persisted); err != nil {
+			t.Fatal(err)
+		}
+		if persisted.Status.LastAttempt != nil && persisted.Status.LastAttempt.Phase == "Succeeded" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("successful notification attempt was not persisted: %+v", persisted.Status)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// Replaying the pending audit checkpoint after delivery must re-enqueue
+	// safely and be suppressed by the persisted per-channel attempt.
+	if err := recorder.Record(ctx, event); err != nil {
+		t.Fatalf("post-delivery durable audit replay failed: %v", err)
+	}
 	select {
 	case <-received:
 		t.Fatal("idempotent audit replay duplicated its notification")
-	case <-time.After(200 * time.Millisecond):
+	case <-time.After(6 * time.Second):
 	}
 	event.RuleName = "different"
 	if err := recorder.Record(ctx, event); err == nil {
@@ -271,7 +397,7 @@ func TestQualityCronJobRestorePreservesExactSuspendState(t *testing.T) {
 			if snapshot.Suspended == nil || *snapshot.Suspended != original {
 				t.Fatalf("captured suspend state = %v, want %t", snapshot.Suspended, original)
 			}
-			if err := executor.PowerDown(ctx, ref); err != nil {
+			if err := executor.PowerDown(ctx, ref, *snapshot); err != nil {
 				t.Fatal(err)
 			}
 			if err := executor.Restore(ctx, ref, *snapshot); err != nil {

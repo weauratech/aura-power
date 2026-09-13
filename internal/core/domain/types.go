@@ -135,6 +135,9 @@ type Snapshot struct {
 	Suspended    *bool
 	Resources    ResourceSummary
 	CapturedAt   time.Time
+	// ResourceVersion binds the snapshot to the exact Kubernetes revision that
+	// may be powered down. Restore remains UID-bound and uses the saved values.
+	ResourceVersion string
 }
 
 // ObservedState represents the current actual state of a workload.

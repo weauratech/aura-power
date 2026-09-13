@@ -191,6 +191,10 @@ type SnapshotSpec struct {
 	Suspended    *bool        `json:"suspended,omitempty"`
 	Resources    ResourceSpec `json:"resources,omitempty"`
 	CapturedAt   *metav1.Time `json:"capturedAt,omitempty"`
+	// ResourceVersion is the workload revision observed during capture.
+	// Power-down is conditional on this value to prevent stale restoration.
+	// +optional
+	ResourceVersion string `json:"resourceVersion,omitempty"`
 }
 
 // ResourceSpec captures resource requests for savings calculation.

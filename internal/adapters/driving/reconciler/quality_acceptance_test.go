@@ -189,6 +189,45 @@ func TestAcceptanceActionIntentMustPersistBeforeMutation(t *testing.T) {
 	}
 }
 
+func TestAcceptanceStaleSnapshotIsRetiredBeforeSafeRecapture(t *testing.T) {
+	s := runtime.NewScheme()
+	if err := v1alpha1.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+	target := &v1alpha1.PowerTarget{
+		ObjectMeta: metav1.ObjectMeta{Name: "snapshot-race", Namespace: "aura-system"},
+		Spec:       v1alpha1.PowerTargetSpec{TargetRef: v1alpha1.TargetReference{Namespace: "fixtures", Name: "api", Kind: "Deployment", UID: "uid-api"}},
+		Status:     v1alpha1.PowerTargetStatus{ObservedState: v1alpha1.ObservedStateSpec{Replicas: 3, PowerState: "on"}},
+	}
+	policy := &v1alpha1.PowerPolicy{ObjectMeta: metav1.ObjectMeta{Name: "off", Namespace: "aura-system"}, Spec: v1alpha1.PowerPolicySpec{Scope: v1alpha1.PolicyScope{Namespaces: []string{"fixtures"}}, Schedule: v1alpha1.PolicySchedule{DesiredState: "off"}}}
+	c := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&v1alpha1.PowerTarget{}).WithObjects(target, policy).Build()
+	executor := &staleOnceExecutor{}
+	r := TargetReconciler{Client: c, Config: domain.DefaultGuardrailConfig(), Executor: executor, Audit: noopAudit{}, Metrics: noopMetrics{}}
+	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(target)}
+
+	if _, err := r.Reconcile(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	var afterConflict v1alpha1.PowerTarget
+	if err := c.Get(context.Background(), request.NamespacedName, &afterConflict); err != nil {
+		t.Fatal(err)
+	}
+	if afterConflict.Status.Snapshot != nil || afterConflict.Status.Action == nil || afterConflict.Status.Action.Phase != "Failed" {
+		t.Fatalf("stale snapshot remained eligible for retry: %+v", afterConflict.Status)
+	}
+
+	if _, err := r.Reconcile(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	var afterRetry v1alpha1.PowerTarget
+	if err := c.Get(context.Background(), request.NamespacedName, &afterRetry); err != nil {
+		t.Fatal(err)
+	}
+	if executor.captures != 2 || executor.downs != 2 || afterRetry.Status.Snapshot == nil || afterRetry.Status.Snapshot.ReplicaCount == nil || *afterRetry.Status.Snapshot.ReplicaCount != 5 || afterRetry.Status.Snapshot.ResourceVersion != "rv-new" {
+		t.Fatalf("safe recapture did not use the concurrent revision: executor=%+v status=%+v", executor, afterRetry.Status)
+	}
+}
+
 func TestAcceptanceMutationSuccessRequiresDurableCompletionCheckpoint(t *testing.T) {
 	for _, desired := range []domain.PowerState{domain.PowerStateOff, domain.PowerStateOn} {
 		t.Run(string(desired), func(t *testing.T) {
@@ -624,12 +663,45 @@ type countingExecutor struct {
 	restores int
 }
 
+type staleOnceExecutor struct {
+	captures int
+	downs    int
+}
+
+func (e *staleOnceExecutor) CaptureSnapshot(context.Context, domain.WorkloadRef) (*domain.Snapshot, error) {
+	e.captures++
+	replicas := int32(3)
+	version := "rv-old"
+	if e.captures > 1 {
+		replicas = 5
+		version = "rv-new"
+	}
+	return &domain.Snapshot{ReplicaCount: &replicas, ResourceVersion: version}, nil
+}
+
+func (e *staleOnceExecutor) PowerDown(_ context.Context, _ domain.WorkloadRef, snapshot domain.Snapshot) error {
+	e.downs++
+	if e.downs == 1 {
+		return ports.ErrSnapshotStale
+	}
+	if snapshot.ReplicaCount == nil || *snapshot.ReplicaCount != 5 || snapshot.ResourceVersion != "rv-new" {
+		return errors.New("retry used stale snapshot")
+	}
+	return nil
+}
+
+func (*staleOnceExecutor) Restore(context.Context, domain.WorkloadRef, domain.Snapshot) error {
+	return nil
+}
+
 type captureFailingExecutor struct{}
 
 func (captureFailingExecutor) CaptureSnapshot(context.Context, domain.WorkloadRef) (*domain.Snapshot, error) {
 	return nil, errors.New("injected snapshot capture failure")
 }
-func (captureFailingExecutor) PowerDown(context.Context, domain.WorkloadRef) error { return nil }
+func (captureFailingExecutor) PowerDown(context.Context, domain.WorkloadRef, domain.Snapshot) error {
+	return nil
+}
 func (captureFailingExecutor) Restore(context.Context, domain.WorkloadRef, domain.Snapshot) error {
 	return nil
 }
@@ -638,7 +710,7 @@ func (*countingExecutor) CaptureSnapshot(context.Context, domain.WorkloadRef) (*
 	replicas := int32(3)
 	return &domain.Snapshot{ReplicaCount: &replicas}, nil
 }
-func (e *countingExecutor) PowerDown(context.Context, domain.WorkloadRef) error {
+func (e *countingExecutor) PowerDown(context.Context, domain.WorkloadRef, domain.Snapshot) error {
 	e.calls++
 	return nil
 }

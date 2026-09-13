@@ -21,10 +21,23 @@ metadata:
   labels:
     {{- include "aura-power.controller.labels" . | nindent 4 }}
 rules:
-  # Full CRD management
+  # Decision inputs are observed, never authored by the controller.
   - apiGroups: ["power.aura.sh"]
-    resources: ["powerpolicies", "poweroverrides", "powertargets", "powerauditevents", "powerschedules", "powernamespacegroups", "powernotificationchannels"]
+    resources: ["powerpolicies", "poweroverrides", "powerschedules", "powernamespacegroups"]
+    verbs: ["get", "list", "watch"]
+  # Discovery owns target lifecycle.
+  - apiGroups: ["power.aura.sh"]
+    resources: ["powertargets"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Audit events are append-only except for retention cleanup.
+  - apiGroups: ["power.aura.sh"]
+    resources: ["powerauditevents"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  # Notification channel configuration is owned by the API; the dispatcher
+  # only reads it and writes delivery status.
+  - apiGroups: ["power.aura.sh"]
+    resources: ["powernotificationchannels"]
+    verbs: ["get", "list", "watch"]
   - apiGroups: ["power.aura.sh"]
     resources: ["powerpolicies/status", "poweroverrides/status", "powertargets/status", "powernotificationchannels/status"]
     verbs: ["get", "update", "patch"]

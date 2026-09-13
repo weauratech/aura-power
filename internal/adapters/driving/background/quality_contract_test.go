@@ -217,6 +217,13 @@ func TestQualityDiscoverySkipsSystemAndExemptWorkloads(t *testing.T) {
 	}
 }
 
+func TestQualityDiscoveryRequiresLeaderElection(t *testing.T) {
+	loop := &DiscoveryLoop{}
+	if !loop.NeedLeaderElection() {
+		t.Fatal("discovery and orphan cleanup must run only on the elected leader")
+	}
+}
+
 func TestQualityExemptionRestoresBeforeTargetDeletion(t *testing.T) {
 	replicas := int32(3)
 	ref := domain.WorkloadRef{APIVersion: "apps/v1", Namespace: "fixtures", Name: "api", Kind: domain.WorkloadKindDeployment, UID: "uid-api"}
@@ -324,7 +331,9 @@ func (w *discoveryStatusFailingWriter) Patch(ctx context.Context, obj client.Obj
 func (*exemptionExecutor) CaptureSnapshot(context.Context, domain.WorkloadRef) (*domain.Snapshot, error) {
 	return nil, nil
 }
-func (*exemptionExecutor) PowerDown(context.Context, domain.WorkloadRef) error { return nil }
+func (*exemptionExecutor) PowerDown(context.Context, domain.WorkloadRef, domain.Snapshot) error {
+	return nil
+}
 func (e *exemptionExecutor) Restore(context.Context, domain.WorkloadRef, domain.Snapshot) error {
 	e.restores++
 	return nil

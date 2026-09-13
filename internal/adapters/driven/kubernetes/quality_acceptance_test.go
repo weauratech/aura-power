@@ -29,7 +29,7 @@ func TestAcceptanceCTRL01CronJobRestorePreservesOriginallySuspended(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := executor.PowerDown(ctx, ref); err != nil {
+	if err := executor.PowerDown(ctx, ref, *snapshot); err != nil {
 		t.Fatal(err)
 	}
 	if err := executor.Restore(ctx, ref, *snapshot); err != nil {

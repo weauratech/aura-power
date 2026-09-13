@@ -21,10 +21,18 @@ metadata:
   labels:
     {{- include "aura-power.server.labels" . | nindent 4 }}
 rules:
-  # Aura Power CRDs - full CRUD (server manages lifecycle)
+  # User-authored configuration resources.
   - apiGroups: ["power.aura.sh"]
-    resources: ["powerpolicies", "poweroverrides", "powertargets", "powerauditevents", "powerschedules", "powernamespacegroups", "powernotificationchannels"]
+    resources: ["powerpolicies", "poweroverrides", "powerschedules", "powernamespacegroups", "powernotificationchannels"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Targets are owned by discovery and are read-only through the API.
+  - apiGroups: ["power.aura.sh"]
+    resources: ["powertargets"]
+    verbs: ["get", "list", "watch"]
+  # The API reads audit history and appends approval decisions.
+  - apiGroups: ["power.aura.sh"]
+    resources: ["powerauditevents"]
+    verbs: ["get", "list", "watch", "create"]
   - apiGroups: ["power.aura.sh"]
     resources: ["powerpolicies/status", "poweroverrides/status", "powertargets/status", "powernotificationchannels/status"]
     verbs: ["get"]

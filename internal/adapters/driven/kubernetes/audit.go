@@ -86,14 +86,15 @@ func (a *AuditRecorder) Record(ctx context.Context, event ports.AuditEvent) erro
 			if !equality.Semantic.DeepEqual(existing.Spec, auditEvent.Spec) {
 				return fmt.Errorf("audit event %s/%s already exists with different semantics", a.namespace, event.ID)
 			}
-			return nil
+			auditEvent = &existing
+		} else {
+			return fmt.Errorf("failed to create audit event: %w", err)
 		}
-		return fmt.Errorf("failed to create audit event: %w", err)
 	}
 
 	// Dispatch notification only for real state transitions (not routine reconciliation)
 	if a.notifier != nil && isNotifiableAction(string(event.Action)) {
-		a.notifier.Enqueue(notifications.Event{
+		if err := a.notifier.Enqueue(notifications.Event{
 			AuditEventRef: fmt.Sprintf("%s/%s", auditEvent.Namespace, auditEvent.Name),
 			Action:        string(event.Action),
 			Target:        notifications.TargetRef{Namespace: event.Target.Namespace, Name: event.Target.Name, Kind: string(event.Target.Kind), UID: event.Target.UID},
@@ -101,7 +102,9 @@ func (a *AuditRecorder) Record(ctx context.Context, event ports.AuditEvent) erro
 			Reason:        event.Reason,
 			RuleName:      event.RuleName,
 			Timestamp:     event.Timestamp,
-		})
+		}); err != nil {
+			return fmt.Errorf("audit event persisted but notification enqueue must be retried: %w", err)
+		}
 	}
 
 	return nil

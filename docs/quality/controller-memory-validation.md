@@ -25,9 +25,9 @@ Enable `prometheusRule.enabled` in clusters with Prometheus Operator and kube-st
 
 ## Local validation evidence
 
-The release-default run `finalissues2` was exercised against the final campaign Kind
+The release-default run `finalissues3` was exercised against the final campaign Kind
 cluster with 1,000 workloads in 20 namespaces for 180 seconds. It recorded a
-16,962,040-byte peak heap, 72,011,776-byte peak RSS, 7,443,864 bytes of
+15,034,880-byte peak heap, 67,780,608-byte peak RSS, 4,234,736 bytes of
 second-half heap growth, and a 201,326,592-byte `GOMEMLIMIT`. No OOM occurred;
 heap profiles were captured from both leaders and failover succeeded. Cleanup
 returned the controller to one ready replica, disabled pprof, and removed every

@@ -21,7 +21,9 @@ outcome truthfully.
   Kind cluster, installs the v2.1.7 chart and binaries, and upgrades the complete
   release to the candidate. It verifies CRD migration, UID identity, server PVC
   and refresh-session continuity, auth and webhook TLS Secret stability, durable
-  off/on reconciliation, audit events, and fixture plus cluster cleanup.
+  off/on reconciliation, leader-elected discovery, audit events, and fixture plus
+  cluster cleanup. Power-down is conditional on the workload `resourceVersion`
+  captured with the snapshot, so a concurrent scale is recaptured instead of lost.
 - `scripts/quality/kind-cli-journey.sh` runs the CLI root, login, logout, whoami,
   discover, status, explain, YAML preview, override creation, and savings commands
   against the real Kind server. It checks failure exit codes and removes its
@@ -29,7 +31,10 @@ outcome truthfully.
 - `scripts/quality/kind-notification-journey.sh` sends real transition events to
   a controlled in-cluster HTTP receiver through a Secret-backed URL. It proves
   sanitized HTTP failure status, recovery on a later transition, durable
-  counters, receiver-to-audit correlation, and UID/label-guarded cleanup.
+  counters, receiver-to-audit correlation, and UID/label-guarded cleanup. Central
+  off/on events retry the audit-to-queue handoff by deterministic audit ID and
+  suppress replay once an attempt is persisted. Ambiguous provider outcomes use
+  at-most-once semantics; this is not an exactly-once delivery claim.
 - `make quality-envtest` starts a real local Kubernetes API server and proves that
   both registered validators accept valid resources and reject invalid resources
   through admission.

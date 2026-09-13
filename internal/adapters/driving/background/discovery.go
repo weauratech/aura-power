@@ -74,6 +74,11 @@ func (d *DiscoveryLoop) Start(ctx context.Context) error {
 	return nil
 }
 
+// NeedLeaderElection prevents competing discovery and orphan-cleanup loops.
+// This is also required during rolling upgrades, where an older binary must
+// not delete UID-bound targets created by the candidate.
+func (d *DiscoveryLoop) NeedLeaderElection() bool { return true }
+
 func (d *DiscoveryLoop) runDiscovery(ctx context.Context) {
 	log := ctrl.Log.WithName("discovery")
 	start := time.Now()

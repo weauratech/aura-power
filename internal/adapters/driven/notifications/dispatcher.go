@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -91,24 +92,17 @@ func (d *Dispatcher) RegisterSender(s Sender) {
 	d.senders[s.Type()] = s
 }
 
-// Enqueue adds an event to the notification queue.
-func (d *Dispatcher) Enqueue(event Event) {
+var ErrQueueFull = errors.New("notification queue is full")
+
+// Enqueue adds an event to the notification queue. It never evicts another
+// event: the caller owns the durable audit record and must retry when capacity
+// is unavailable.
+func (d *Dispatcher) Enqueue(event Event) error {
 	select {
 	case d.queue <- event:
+		return nil
 	default:
-		// Preserve the most recent controller state when producers outrun the
-		// dispatcher. The first non-blocking receive makes room by evicting the
-		// oldest pending event; a concurrent consumer may already have done so.
-		select {
-		case <-d.queue:
-		default:
-		}
-		select {
-		case d.queue <- event:
-			ctrl.Log.WithName("notifications").Info("queue full, dropped oldest event")
-		default:
-			ctrl.Log.WithName("notifications").Info("queue remained full, dropping newest event")
-		}
+		return ErrQueueFull
 	}
 }
 
@@ -174,6 +168,7 @@ func (d *Dispatcher) Run(ctx context.Context) {
 }
 
 const unknownDeliveryOutcome = "delivery outcome unknown after dispatcher interruption; automatic redelivery suppressed"
+const redactedDeliveryFailure = "notification delivery failed; endpoint and transport details <redacted>"
 
 // recoverIncompleteAttempts makes an interrupted delivery visible without
 // guessing whether the provider accepted it. It deliberately never calls a
@@ -286,6 +281,10 @@ func (d *Dispatcher) dispatchBatch(ctx context.Context, batch []Event) error {
 		if len(channelEvents) == 0 {
 			continue
 		}
+		channelEvents = excludeAttemptedEvents(ch.Status, channelEvents)
+		if len(channelEvents) == 0 {
+			continue
+		}
 
 		// A message must have one truthful action, result, and rule. Combining
 		// different decisions under the first event's metadata makes the webhook
@@ -365,6 +364,30 @@ func groupBatchEvents(events []Event) [][]Event {
 	return groups
 }
 
+func excludeAttemptedEvents(status v1alpha1.PowerNotificationChannelStatus, events []Event) []Event {
+	attempted := make(map[string]struct{})
+	for i := range status.RecentAttempts {
+		for _, ref := range status.RecentAttempts[i].AuditEventRefs {
+			attempted[ref] = struct{}{}
+		}
+	}
+	if status.LastAttempt != nil {
+		for _, ref := range status.LastAttempt.AuditEventRefs {
+			attempted[ref] = struct{}{}
+		}
+	}
+	filtered := make([]Event, 0, len(events))
+	for _, event := range events {
+		if event.AuditEventRef != "" {
+			if _, exists := attempted[event.AuditEventRef]; exists {
+				continue
+			}
+		}
+		filtered = append(filtered, event)
+	}
+	return filtered
+}
+
 func summarizeBatch(events []Event) Event {
 	batchEvent := events[0]
 	if len(events) == 1 {
@@ -410,6 +433,9 @@ func (d *Dispatcher) dispatch(ctx context.Context, event Event) error {
 
 		// Namespace filter
 		if len(ch.Spec.NamespaceFilter) > 0 && !contains(ch.Spec.NamespaceFilter, event.Target.Namespace) {
+			continue
+		}
+		if len(excludeAttemptedEvents(ch.Status, []Event{event})) == 0 {
 			continue
 		}
 
@@ -470,7 +496,7 @@ func (d *Dispatcher) pruneThrottle(now time.Time) {
 
 func (d *Dispatcher) resolveWebhookURL(ctx context.Context, channel *v1alpha1.PowerNotificationChannel) (string, error) {
 	if channel.Spec.URL != "" {
-		return channel.Spec.URL, nil
+		return validateWebhookURL(channel.Spec.URL)
 	}
 	if channel.Spec.URLFrom == nil {
 		return "", fmt.Errorf("channel has neither url nor urlFrom configured")
@@ -489,7 +515,15 @@ func (d *Dispatcher) resolveWebhookURL(ctx context.Context, channel *v1alpha1.Po
 	if url == "" {
 		return "", fmt.Errorf("referenced Secret %s/%s contains an empty key %q", key.Namespace, key.Name, channel.Spec.URLFrom.Key)
 	}
-	return url, nil
+	return validateWebhookURL(url)
+}
+
+func validateWebhookURL(value string) (string, error) {
+	parsed, err := url.ParseRequestURI(value)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil {
+		return "", errors.New("webhook endpoint must be an absolute HTTP(S) URL without userinfo; endpoint details <redacted>")
+	}
+	return value, nil
 }
 
 func (d *Dispatcher) recordUndelivered(ctx context.Context, channel *v1alpha1.PowerNotificationChannel, events []Event, operation string, err error, secretURL string) error {
@@ -627,11 +661,22 @@ func correlatedEventIDs(events []Event) ([]string, []string) {
 }
 
 func redactDeliveryError(err error, secretURL string) error {
-	message := err.Error()
-	if secretURL != "" {
-		message = strings.ReplaceAll(message, secretURL, "<redacted>")
+	if err == nil {
+		return nil
 	}
-	return fmt.Errorf("%s", message)
+	// Transport libraries may normalize or escape a URL before returning it,
+	// so replacing the original byte string is not a safe redaction boundary.
+	// Endpoint values frequently contain credentials even when configured
+	// directly. Provider status/attempt counts remain available as structured
+	// fields; logs and status receive only this stable classification.
+	_ = secretURL
+	if errors.Is(err, context.Canceled) {
+		return errors.New("notification delivery canceled; endpoint details <redacted>")
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return errors.New("notification delivery timed out; endpoint details <redacted>")
+	}
+	return errors.New(redactedDeliveryFailure)
 }
 
 func batchThrottleKey(channel *v1alpha1.PowerNotificationChannel, events []Event) string {

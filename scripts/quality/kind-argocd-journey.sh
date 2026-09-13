@@ -407,21 +407,46 @@ wait_for "manual sync restoring CronJob suspension" cron_suspend_is manual-cronj
 set_policy_state "manual-${RUN_ID}" on
 
 # Real automated self-heal, with no field delegation, must cause one Aura
-# transition and then settle in Contended. Aura must not replay the mutation.
-create_policy "contended-${RUN_ID}" off "Deployment:contended-deployment"
-contended_target="$(target_name Deployment contended-deployment)"
-wait_for "candidate power-down audit before Argo self-heal" single_successful_audit_exists contended-deployment Deployment
-contended_attempted_at="$(kubectl get powertarget "$contended_target" -n aura-system -o jsonpath='{.status.action.attemptedAt}')"
-contended_audit_id="$(kubectl get powertarget "$contended_target" -n aura-system -o jsonpath='{.status.action.auditEventID}')"
-[[ -n "$contended_attempted_at" && -n "$contended_audit_id" ]] || { echo "FAIL: self-heal action checkpoint is incomplete" >&2; exit 18; }
-wait_for "Argo automated self-heal restoring replicas" replicas_are deployment contended-deployment 2
-wait_for "candidate stable contention phase" target_action_phase_is "$contended_target" Contended
+# transition per supported workload kind and then settle in Contended. Aura
+# must not replay any of the three mutations.
+contended_resources=(
+  "Deployment:contended-deployment"
+  "StatefulSet:contended-statefulset"
+  "CronJob:contended-cronjob"
+)
+create_policy "contended-${RUN_ID}" off "${contended_resources[@]}"
+contended_checkpoints=""
+for pair in "${contended_resources[@]}"; do
+  IFS=: read -r kind name <<<"$pair"
+  target="$(target_name "$kind" "$name")"
+  wait_for "$kind candidate audit before Argo self-heal" single_successful_audit_exists "$name" "$kind"
+  attempted_at="$(kubectl get powertarget "$target" -n aura-system -o jsonpath='{.status.action.attemptedAt}')"
+  audit_id="$(kubectl get powertarget "$target" -n aura-system -o jsonpath='{.status.action.auditEventID}')"
+  audit_phase="$(kubectl get powertarget "$target" -n aura-system -o jsonpath='{.status.action.auditPhase}')"
+  [[ -n "$attempted_at" && -n "$audit_id" && "$audit_phase" == "Recorded" ]] || { echo "FAIL: $kind self-heal action checkpoint is incomplete" >&2; exit 18; }
+  contended_checkpoints+="${kind}"$'\t'"${name}"$'\t'"${target}"$'\t'"${attempted_at}"$'\t'"${audit_id}"$'\n'
+done
+[[ "$(cut -f5 <<<"$contended_checkpoints" | sed '/^$/d' | sort -u | wc -l | tr -d ' ')" == "3" ]] || { echo "FAIL: contended targets do not have distinct audit IDs" >&2; exit 18; }
+
+wait_for "Argo automated self-heal restoring Deployment replicas" replicas_are deployment contended-deployment 2
+wait_for "Argo automated self-heal restoring StatefulSet replicas" replicas_are statefulset contended-statefulset 1
+wait_for "Argo automated self-heal restoring CronJob suspension" cron_suspend_is contended-cronjob false
+while IFS=$'\t' read -r kind name target attempted_at audit_id; do
+  [[ -n "$kind" ]] || continue
+  wait_for "$kind candidate contention phase" target_action_phase_is "$target" Contended
+done <<<"$contended_checkpoints"
+
 sleep 45
-[[ "$(kubectl get powertarget "$contended_target" -n aura-system -o jsonpath='{.status.action.phase}')" == "Contended" ]] || { echo "FAIL: contention phase was not stable" >&2; exit 18; }
-[[ "$(kubectl get powertarget "$contended_target" -n aura-system -o jsonpath='{.status.action.attemptedAt}')" == "$contended_attempted_at" ]] || { echo "FAIL: candidate replayed the contended action" >&2; exit 18; }
-[[ "$(kubectl get powertarget "$contended_target" -n aura-system -o jsonpath='{.status.action.auditEventID}')" == "$contended_audit_id" ]] || { echo "FAIL: candidate replaced the original audit identity" >&2; exit 18; }
-[[ "$(successful_audit_count contended-deployment Deployment)" == "1" ]] || { echo "FAIL: self-heal produced duplicate successful mutation audits" >&2; exit 18; }
-replicas_are deployment contended-deployment 2 || { echo "FAIL: Aura and Argo still oscillate after contention" >&2; exit 18; }
+while IFS=$'\t' read -r kind name target attempted_at audit_id; do
+  [[ -n "$kind" ]] || continue
+  [[ "$(kubectl get powertarget "$target" -n aura-system -o jsonpath='{.status.action.phase}')" == "Contended" ]] || { echo "FAIL: $kind contention phase was not stable" >&2; exit 18; }
+  [[ "$(kubectl get powertarget "$target" -n aura-system -o jsonpath='{.status.action.attemptedAt}')" == "$attempted_at" ]] || { echo "FAIL: candidate replayed the contended $kind action" >&2; exit 18; }
+  [[ "$(kubectl get powertarget "$target" -n aura-system -o jsonpath='{.status.action.auditEventID}')" == "$audit_id" ]] || { echo "FAIL: candidate replaced the original $kind audit identity" >&2; exit 18; }
+  [[ "$(successful_audit_count "$name" "$kind")" == "1" ]] || { echo "FAIL: $kind self-heal produced duplicate successful mutation audits" >&2; exit 18; }
+done <<<"$contended_checkpoints"
+replicas_are deployment contended-deployment 2 || { echo "FAIL: Deployment still oscillates after contention" >&2; exit 18; }
+replicas_are statefulset contended-statefulset 1 || { echo "FAIL: StatefulSet still oscillates after contention" >&2; exit 18; }
+cron_suspend_is contended-cronjob false || { echo "FAIL: CronJob still oscillates after contention" >&2; exit 18; }
 
 # ignoreDifferences alone hides drift, but a later sync still reapplies replicas.
 create_policy "ignore-${RUN_ID}" off "Deployment:ignore-only-deployment"
@@ -488,4 +513,4 @@ wait_for "ApplicationSet Deployment restore" replicas_are deployment appset-depl
 wait_for "ApplicationSet StatefulSet restore" replicas_are statefulset appset-statefulset 1
 wait_for "ApplicationSet CronJob restore" cron_suspend_is appset-cronjob false
 
-echo "kind_argocd_journey=passed argocd=${ARGO_CD_VERSION} annotation_tracking=true manual_sync_all_kinds=true self_heal_contended_single_action=true ignore_only=true respect_ignore_differences=true unrelated_git_update=true applicationset_all_kinds=true deployment=true statefulset=true cronjob=true existing_job_name_uid=true missed_scheduled_timestamp=true"
+echo "kind_argocd_journey=passed argocd=${ARGO_CD_VERSION} annotation_tracking=true manual_sync_all_kinds=true self_heal_contended_all_kinds_single_action=true ignore_only=true respect_ignore_differences=true unrelated_git_update=true applicationset_all_kinds=true deployment=true statefulset=true cronjob=true existing_job_name_uid=true missed_scheduled_timestamp=true"

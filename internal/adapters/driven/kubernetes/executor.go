@@ -6,10 +6,12 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/weauratech/aura-power/internal/core/domain"
+	"github.com/weauratech/aura-power/internal/ports"
 )
 
 type Executor struct {
@@ -33,14 +35,14 @@ func (e *Executor) CaptureSnapshot(ctx context.Context, ref domain.WorkloadRef) 
 	}
 }
 
-func (e *Executor) PowerDown(ctx context.Context, ref domain.WorkloadRef) error {
+func (e *Executor) PowerDown(ctx context.Context, ref domain.WorkloadRef, snapshot domain.Snapshot) error {
 	switch ref.Kind {
 	case domain.WorkloadKindDeployment:
-		return e.powerDownDeployment(ctx, ref)
+		return e.powerDownDeployment(ctx, ref, snapshot.ResourceVersion)
 	case domain.WorkloadKindStatefulSet:
-		return e.powerDownStatefulSet(ctx, ref)
+		return e.powerDownStatefulSet(ctx, ref, snapshot.ResourceVersion)
 	case domain.WorkloadKindCronJob:
-		return e.powerDownCronJob(ctx, ref)
+		return e.powerDownCronJob(ctx, ref, snapshot.ResourceVersion)
 	default:
 		return fmt.Errorf("unsupported workload kind: %s", ref.Kind)
 	}
@@ -69,12 +71,13 @@ func (e *Executor) captureDeployment(ctx context.Context, ref domain.WorkloadRef
 	}
 	replicas := ptrInt32Val(dep.Spec.Replicas)
 	return &domain.Snapshot{
-		ReplicaCount: &replicas,
-		Resources:    computeDeploymentResources(&dep),
+		ReplicaCount:    &replicas,
+		Resources:       computeDeploymentResources(&dep),
+		ResourceVersion: dep.ResourceVersion,
 	}, nil
 }
 
-func (e *Executor) powerDownDeployment(ctx context.Context, ref domain.WorkloadRef) error {
+func (e *Executor) powerDownDeployment(ctx context.Context, ref domain.WorkloadRef, resourceVersion string) error {
 	var dep appsv1.Deployment
 	if err := e.client.Get(ctx, types.NamespacedName{Namespace: ref.Namespace, Name: ref.Name}, &dep); err != nil {
 		return err
@@ -82,9 +85,15 @@ func (e *Executor) powerDownDeployment(ctx context.Context, ref domain.WorkloadR
 	if err := verifyUID(ref, string(dep.UID)); err != nil {
 		return err
 	}
+	if err := verifySnapshotRevision(ref, resourceVersion, dep.ResourceVersion); err != nil {
+		return err
+	}
 	zero := int32(0)
 	dep.Spec.Replicas = &zero
 	if err := e.client.Update(ctx, &dep); err != nil {
+		if apierrors.IsConflict(err) {
+			return fmt.Errorf("%w: deployment %s/%s changed during power-down", ports.ErrSnapshotStale, ref.Namespace, ref.Name)
+		}
 		return fmt.Errorf("failed to scale down deployment %s/%s: %w", ref.Namespace, ref.Name, err)
 	}
 	return nil
@@ -100,12 +109,13 @@ func (e *Executor) captureStatefulSet(ctx context.Context, ref domain.WorkloadRe
 	}
 	replicas := ptrInt32Val(ss.Spec.Replicas)
 	return &domain.Snapshot{
-		ReplicaCount: &replicas,
-		Resources:    computeStatefulSetResources(&ss),
+		ReplicaCount:    &replicas,
+		Resources:       computeStatefulSetResources(&ss),
+		ResourceVersion: ss.ResourceVersion,
 	}, nil
 }
 
-func (e *Executor) powerDownStatefulSet(ctx context.Context, ref domain.WorkloadRef) error {
+func (e *Executor) powerDownStatefulSet(ctx context.Context, ref domain.WorkloadRef, resourceVersion string) error {
 	var ss appsv1.StatefulSet
 	if err := e.client.Get(ctx, types.NamespacedName{Namespace: ref.Namespace, Name: ref.Name}, &ss); err != nil {
 		return err
@@ -113,9 +123,15 @@ func (e *Executor) powerDownStatefulSet(ctx context.Context, ref domain.Workload
 	if err := verifyUID(ref, string(ss.UID)); err != nil {
 		return err
 	}
+	if err := verifySnapshotRevision(ref, resourceVersion, ss.ResourceVersion); err != nil {
+		return err
+	}
 	zero := int32(0)
 	ss.Spec.Replicas = &zero
 	if err := e.client.Update(ctx, &ss); err != nil {
+		if apierrors.IsConflict(err) {
+			return fmt.Errorf("%w: statefulset %s/%s changed during power-down", ports.ErrSnapshotStale, ref.Namespace, ref.Name)
+		}
 		return fmt.Errorf("failed to scale down statefulset %s/%s: %w", ref.Namespace, ref.Name, err)
 	}
 	return nil
@@ -132,12 +148,13 @@ func (e *Executor) captureCronJob(ctx context.Context, ref domain.WorkloadRef) (
 
 	suspended := ptrBoolVal(cj.Spec.Suspend)
 	return &domain.Snapshot{
-		Suspended: &suspended,
-		Resources: computeCronJobResources(&cj),
+		Suspended:       &suspended,
+		Resources:       computeCronJobResources(&cj),
+		ResourceVersion: cj.ResourceVersion,
 	}, nil
 }
 
-func (e *Executor) powerDownCronJob(ctx context.Context, ref domain.WorkloadRef) error {
+func (e *Executor) powerDownCronJob(ctx context.Context, ref domain.WorkloadRef, resourceVersion string) error {
 	var cj batchv1.CronJob
 	if err := e.client.Get(ctx, types.NamespacedName{Namespace: ref.Namespace, Name: ref.Name}, &cj); err != nil {
 		return err
@@ -145,9 +162,15 @@ func (e *Executor) powerDownCronJob(ctx context.Context, ref domain.WorkloadRef)
 	if err := verifyUID(ref, string(cj.UID)); err != nil {
 		return err
 	}
+	if err := verifySnapshotRevision(ref, resourceVersion, cj.ResourceVersion); err != nil {
+		return err
+	}
 	trueBool := true
 	cj.Spec.Suspend = &trueBool
 	if err := e.client.Update(ctx, &cj); err != nil {
+		if apierrors.IsConflict(err) {
+			return fmt.Errorf("%w: cronjob %s/%s changed during power-down", ports.ErrSnapshotStale, ref.Namespace, ref.Name)
+		}
 		return fmt.Errorf("failed to suspend cronjob %s/%s: %w", ref.Namespace, ref.Name, err)
 	}
 	return nil
@@ -212,6 +235,16 @@ func (e *Executor) restoreCronJob(ctx context.Context, ref domain.WorkloadRef, s
 func verifyUID(ref domain.WorkloadRef, actual string) error {
 	if ref.UID != "" && ref.UID != actual {
 		return fmt.Errorf("workload UID changed for %s %s/%s: expected %s, got %s", ref.Kind, ref.Namespace, ref.Name, ref.UID, actual)
+	}
+	return nil
+}
+
+func verifySnapshotRevision(ref domain.WorkloadRef, expected, actual string) error {
+	if expected == "" {
+		return fmt.Errorf("%w: snapshot for %s %s/%s has no resourceVersion", ports.ErrSnapshotStale, ref.Kind, ref.Namespace, ref.Name)
+	}
+	if expected != actual {
+		return fmt.Errorf("%w: %s %s/%s expected resourceVersion %s, got %s", ports.ErrSnapshotStale, ref.Kind, ref.Namespace, ref.Name, expected, actual)
 	}
 	return nil
 }

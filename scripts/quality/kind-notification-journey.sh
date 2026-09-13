@@ -394,8 +394,8 @@ jq -e '
   .status.lastAttempt.phase == "Failed" and
   .status.lastAttempt.providerStatusCode == 503 and
   .status.lastAttempt.attemptCount == 3 and
-  .status.lastAttempt.response == "webhook returned 503" and
-  .status.lastError == "webhook returned 503" and
+  .status.lastAttempt.response == "notification delivery failed; endpoint and transport details <redacted>" and
+  .status.lastError == "notification delivery failed; endpoint and transport details <redacted>" and
   (.status.lastAttempt.eventIDs | length) == 1 and
   (.status.lastAttempt.auditEventRefs | length) == 1
 ' <<<"$channel_json" >/dev/null || { echo "FAIL: first HTTP failure was not persisted as one sanitized attempt" >&2; exit 11; }
