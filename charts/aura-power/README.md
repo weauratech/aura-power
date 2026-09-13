@@ -70,7 +70,7 @@ helm install aura-power oci://ghcr.io/weauratech/charts/aura-power \
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `webhook.enabled` | Register runtime validation for policies and overrides | `false` |
+| `webhook.enabled` | Register fail-closed runtime validation for policies and overrides | `true` |
 | `webhook.failurePolicy` | API server behavior when the webhook is unavailable | `Fail` |
 | `webhook.timeoutSeconds` | Admission request timeout | `5` |
 | `webhook.existingSecret` | Existing TLS Secret for deterministic GitOps rendering | `""` |
@@ -79,7 +79,7 @@ helm install aura-power oci://ghcr.io/weauratech/charts/aura-power \
 | `webhook.certManager.issuerRef.name` | Existing Issuer or ClusterIssuer | `""` |
 
 Runtime admission rejects invalid IANA timezones and expired overrides at the
-Kubernetes API boundary. Enable the chart-managed self-signed certificate with:
+Kubernetes API boundary. The default chart-managed self-signed certificate can be installed with:
 
 ```bash
 helm upgrade --install aura-power ./charts/aura-power \

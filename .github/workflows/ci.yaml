@@ -161,8 +161,10 @@ jobs:
             --set controller.image.repository=aura-power-controller \
             --set controller.image.tag=ci \
             --set controller.image.pullPolicy=Never
+          ./scripts/quality/kind-helm-upgrade-admission.sh
           ./scripts/quality/kind-core-journey.sh
           ./scripts/quality/kind-legacy-upgrade-journey.sh
+          ./scripts/quality/kind-approval-journey.sh
       - name: Install browser test dependencies
         run: |
           cd tests/e2e/playwright
@@ -174,20 +176,31 @@ jobs:
           kubectl annotate namespace aura-power-e2e-browser aura.sh/power-eligible=true
           kubectl create deployment browser-fixture -n aura-power-e2e-browser --image=registry.k8s.io/pause:3.10 --replicas=1
           for attempt in $(seq 1 40); do
-            kubectl get powertarget -n aura-system -l power.aura.sh/target-namespace=aura-power-e2e-browser -o name | grep -q . && break
+            if kubectl get powertarget -n aura-system -l power.aura.sh/target-namespace=aura-power-e2e-browser -o name | grep -q .; then break; fi
             sleep 5
           done
           kubectl get powertarget -n aura-system -l power.aura.sh/target-namespace=aura-power-e2e-browser -o name | grep -q .
           kubectl port-forward -n aura-system statefulset/aura-power-server 19091:8080 >/tmp/aura-power-port-forward.log 2>&1 &
           forward_pid=$!
           trap 'kill "$forward_pid" 2>/dev/null || true' EXIT
-          for attempt in $(seq 1 30); do curl -fsS http://127.0.0.1:19091/api/v1/health >/dev/null && break || sleep 1; done
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:19091/api/v1/health >/dev/null; then break; fi
+            sleep 1
+          done
           curl -fsS http://127.0.0.1:19091/api/v1/health >/dev/null
           admin_password="$(kubectl get secret aura-power-server-secret -n aura-system -o jsonpath='{.data.admin-password}' | base64 -d)"
           cd tests/e2e/playwright
           CI=true AURA_E2E_BASE_URL=http://127.0.0.1:19091 AURA_E2E_ADMIN_USER=admin \
             AURA_E2E_ADMIN_PASSWORD="$admin_password" AURA_E2E_FIXTURE_NAMESPACE=aura-power-e2e-browser \
             AURA_E2E_ALLOW_MUTATION=true AURA_E2E_BROWSERS=all npx playwright test
+      - name: Upload browser diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-kind
+          path: |
+            tests/e2e/playwright/playwright-report
+            tests/e2e/playwright/test-results
 
   load-contract:
     runs-on: ubuntu-latest

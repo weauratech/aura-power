@@ -93,7 +93,7 @@ export function Schedule() {
             Power policies and temporary overrides.
           </Typography>
         </Box>
-        <Button variant="contained" startIcon={<AddIcon />} onClick={() => { setEditingPolicy(null); setDrawerOpen(true); }}>
+        <Button aria-label="Create a new schedule" variant="contained" startIcon={<AddIcon />} onClick={() => { setEditingPolicy(null); setDrawerOpen(true); }}>
           New Schedule
         </Button>
       </Stack>

@@ -5,7 +5,7 @@ test.describe('schedules', () => {
   test.beforeEach(async ({ page }) => openPage(page, 'Schedules', 'Schedules'));
 
   const openScheduleDrawer = async (page: import('@playwright/test').Page) => {
-    await page.getByRole('main').getByRole('button', { name: 'New Schedule', exact: true }).first().click();
+    await page.getByRole('button', { name: 'Create a new schedule', exact: true }).click();
     return page.getByRole('dialog', { name: 'New Schedule' });
   };
 

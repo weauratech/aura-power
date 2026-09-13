@@ -179,7 +179,7 @@ export function Notifications() {
             Webhook channels for power event alerts.
           </Typography>
         </Box>
-        <Button variant="contained" startIcon={<AddIcon />} onClick={openCreate}>
+        <Button aria-label="Create a new notification channel" variant="contained" startIcon={<AddIcon />} onClick={openCreate}>
           New Channel
         </Button>
       </Stack>

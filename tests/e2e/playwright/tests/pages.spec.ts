@@ -17,7 +17,7 @@ test('blocked targets exposes a guardrail result', async ({ page }) => {
 
 test('notifications exposes configuration controls and a result', async ({ page }) => {
   await openPage(page, 'Notifications', 'Notifications');
-  await expect(page.getByRole('button', { name: 'New Channel' }).first()).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Create a new notification channel', exact: true })).toBeVisible();
   await expect(page.getByText('No notification channels').or(page.getByRole('table'))).toBeVisible();
 });
 
@@ -65,4 +65,8 @@ test('logout clears the session and returns to login', async ({ page }) => {
   await navigation.getByRole('button', { name: 'Sign out' }).click();
   await expect(page.getByLabel('Password')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Cluster Overview' })).not.toBeVisible();
+  const me = await page.request.get('/api/v1/auth/me');
+  expect(me.status()).toBe(401);
+  await page.reload();
+  await expect(page.getByLabel('Password')).toBeVisible();
 });
