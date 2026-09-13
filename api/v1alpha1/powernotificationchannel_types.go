@@ -7,7 +7,9 @@ import (
 // PowerNotificationChannelSpec defines a webhook notification destination.
 type PowerNotificationChannelSpec struct {
 	// Type determines the payload format.
-	// +kubebuilder:validation:Enum=google-chat;slack;generic
+	// Discord is retained for backward-compatible CRD upgrades. New UI flows do
+	// not advertise it until a Discord-specific payload adapter is implemented.
+	// +kubebuilder:validation:Enum=google-chat;slack;discord;generic
 	Type string `json:"type"`
 
 	// URL is the webhook endpoint.

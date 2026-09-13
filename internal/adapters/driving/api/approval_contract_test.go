@@ -59,6 +59,27 @@ func TestPendingApprovalLifecycleAppliesAndCannotRepeat(t *testing.T) {
 	}
 }
 
+func TestPendingApprovalDefaultsPayloadNamespaceToControlNamespace(t *testing.T) {
+	f := newContractFixture(t)
+	payload := pendingPolicyPayload("member-policy", v1alpha1.PowerPolicySpec{})
+	payload["metadata"].(map[string]any)["namespace"] = ""
+	created := requestContract(t, f.server.Handler(), "POST", "/api/v1/pending", f.token(t, auth.RoleMember), map[string]any{
+		"action": "create", "resourceKind": "PowerPolicy", "resourceName": "member-policy", "payload": payload,
+	})
+	if created.Code != 201 {
+		t.Fatalf("create request: %d %s", created.Code, created.Body.String())
+	}
+	change := decodeContract[auth.PendingChange](t, created)
+	approved := requestContract(t, f.server.Handler(), "POST", "/api/v1/pending/"+change.ID+"/approve", f.token(t, auth.RoleApprover), nil)
+	if approved.Code != 200 {
+		t.Fatalf("approve namespace-defaulted payload: %d %s", approved.Code, approved.Body.String())
+	}
+	var policy v1alpha1.PowerPolicy
+	if err := f.client.Get(context.Background(), client.ObjectKey{Namespace: "aura-system", Name: "member-policy"}, &policy); err != nil {
+		t.Fatalf("approved member policy was not created in control namespace: %v", err)
+	}
+}
+
 func TestFailedApprovalPreservesPendingState(t *testing.T) {
 	f := newContractFixture(t)
 	pending, err := f.store.CreatePendingChange(auth.PendingChange{

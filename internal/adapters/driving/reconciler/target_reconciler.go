@@ -2,6 +2,7 @@ package reconciler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -103,6 +104,9 @@ func (r *TargetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 				if err := r.captureAndPersistSnapshot(ctx, &target, domainTarget.Ref); err != nil {
 					logger.Error(err, "failed to capture and persist snapshot before power-down")
 					target.Status.ConsecutiveFailures++
+					if statusErr := r.Status().Update(ctx, &target); statusErr != nil {
+						logger.Error(statusErr, "failed to persist snapshot failure status")
+					}
 					r.Metrics.RecordAction(ports.ActionPowerDown, req.String(), false)
 					r.recordAudit(ctx, domainTarget.Ref, ports.AuditExecutionError, "error", err.Error(), "")
 					return ctrl.Result{RequeueAfter: errorRequeueAfter}, nil
@@ -308,7 +312,7 @@ func (r *TargetReconciler) captureAndPersistSnapshot(ctx context.Context, target
 
 func (r *TargetReconciler) executeRestore(ctx context.Context, target *v1alpha1.PowerTarget, ref domain.WorkloadRef) error {
 	if target.Status.Snapshot == nil || !target.Status.Snapshot.Available {
-		return nil // Snapshot missing — will be caught by decision engine (BlockSnapshotMissing)
+		return errors.New("refusing restore without an available snapshot")
 	}
 	snapshot := domain.Snapshot{
 		ReplicaCount: target.Status.Snapshot.ReplicaCount,

@@ -44,7 +44,7 @@ spec:
               properties:
                 type:
                   type: string
-                  enum: ["google-chat", "slack", "generic"]
+                  enum: ["google-chat", "slack", "discord", "generic"]
                 url:
                   type: string
                 urlFrom:

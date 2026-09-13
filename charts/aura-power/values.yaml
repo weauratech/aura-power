@@ -119,7 +119,7 @@ controller:
 # -- Kubernetes admission for invariants that cannot be expressed by the CRD
 # schema (for example IANA timezones and future override expiration).
 webhook:
-  enabled: false
+  enabled: true
   port: 9443
   failurePolicy: Fail
   timeoutSeconds: 5

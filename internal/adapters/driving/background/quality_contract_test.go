@@ -60,12 +60,36 @@ func TestQualityDiscoveryMigratesLegacyIdentityAndClearsSnapshotOnNewUID(t *test
 	}
 }
 
-func TestQualityDiscoveryDoesNotMigrateSnapshotWithoutLegacyUID(t *testing.T) {
+func TestQualityDiscoveryBindsLegacySnapshotForPoweredDownWorkload(t *testing.T) {
 	replicas := int32(3)
+	now := metav1.Now()
 	legacy := &v1alpha1.PowerTarget{
 		ObjectMeta: metav1.ObjectMeta{Name: "fixtures--api", Namespace: "aura-system"},
 		Spec:       v1alpha1.PowerTargetSpec{TargetRef: v1alpha1.TargetReference{Namespace: "fixtures", Name: "api", Kind: "Deployment"}},
-		Status:     v1alpha1.PowerTargetStatus{Snapshot: &v1alpha1.SnapshotSpec{Available: true, ReplicaCount: &replicas}},
+		Status:     v1alpha1.PowerTargetStatus{ObservedState: v1alpha1.ObservedStateSpec{Replicas: 0, PowerState: "off"}, Snapshot: &v1alpha1.SnapshotSpec{Available: true, ReplicaCount: &replicas, CapturedAt: &now}},
+	}
+	c := fake.NewClientBuilder().WithScheme(discoveryScheme(t)).WithStatusSubresource(&v1alpha1.PowerTarget{}).WithObjects(legacy).Build()
+	loop := DiscoveryLoop{Client: c, Config: DiscoveryConfig{Namespace: "aura-system", ExemptAnnotation: "aura.sh/power-exempt", OptInAnnotation: "aura.sh/power-eligible"}}
+	ref := domain.WorkloadRef{APIVersion: "apps/v1", Namespace: "fixtures", Name: "api", Kind: domain.WorkloadKindDeployment, UID: "uid-current"}
+	if _, err := loop.ensurePowerTarget(context.Background(), ports.DiscoveredWorkload{Ref: ref, Replicas: 0}); err != nil {
+		t.Fatal(err)
+	}
+	var migrated v1alpha1.PowerTarget
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "aura-system", Name: powerTargetName(ref)}, &migrated); err != nil {
+		t.Fatal(err)
+	}
+	if migrated.Status.Snapshot == nil || migrated.Status.Snapshot.ReplicaCount == nil || *migrated.Status.Snapshot.ReplicaCount != 3 || migrated.Spec.TargetRef.UID != "uid-current" {
+		t.Fatalf("powered-down legacy workload lost its only recovery snapshot: %+v", migrated)
+	}
+}
+
+func TestQualityDiscoveryDropsAmbiguousLegacySnapshotForRunningWorkload(t *testing.T) {
+	replicas := int32(3)
+	now := metav1.Now()
+	legacy := &v1alpha1.PowerTarget{
+		ObjectMeta: metav1.ObjectMeta{Name: "fixtures--api", Namespace: "aura-system"},
+		Spec:       v1alpha1.PowerTargetSpec{TargetRef: v1alpha1.TargetReference{Namespace: "fixtures", Name: "api", Kind: "Deployment"}},
+		Status:     v1alpha1.PowerTargetStatus{ObservedState: v1alpha1.ObservedStateSpec{Replicas: 0, PowerState: "off"}, Snapshot: &v1alpha1.SnapshotSpec{Available: true, ReplicaCount: &replicas, CapturedAt: &now}},
 	}
 	c := fake.NewClientBuilder().WithScheme(discoveryScheme(t)).WithStatusSubresource(&v1alpha1.PowerTarget{}).WithObjects(legacy).Build()
 	loop := DiscoveryLoop{Client: c, Config: DiscoveryConfig{Namespace: "aura-system", ExemptAnnotation: "aura.sh/power-exempt", OptInAnnotation: "aura.sh/power-eligible"}}
@@ -77,8 +101,26 @@ func TestQualityDiscoveryDoesNotMigrateSnapshotWithoutLegacyUID(t *testing.T) {
 	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "aura-system", Name: powerTargetName(ref)}, &migrated); err != nil {
 		t.Fatal(err)
 	}
-	if migrated.Status.Snapshot != nil || migrated.Spec.TargetRef.UID != "uid-current" {
-		t.Fatalf("UID-less legacy state was trusted: %+v", migrated)
+	if migrated.Status.Snapshot != nil {
+		t.Fatalf("running workload inherited an ambiguous legacy snapshot: %+v", migrated.Status)
+	}
+}
+
+func TestLegacySnapshotRequiresRecoveryProvenance(t *testing.T) {
+	replicas := int32(3)
+	legacy := &v1alpha1.PowerTarget{Status: v1alpha1.PowerTargetStatus{
+		ObservedState: v1alpha1.ObservedStateSpec{Replicas: 0, PowerState: "off"},
+		Snapshot:      &v1alpha1.SnapshotSpec{Available: true, ReplicaCount: &replicas},
+	}}
+	wl := ports.DiscoveredWorkload{Ref: domain.WorkloadRef{Kind: domain.WorkloadKindDeployment}, Replicas: 0}
+	if legacySnapshotProvesPoweredDown(legacy, wl) {
+		t.Fatal("legacy snapshot without capture time was trusted")
+	}
+	now := metav1.Now()
+	legacy.Status.Snapshot.CapturedAt = &now
+	legacy.Status.ObservedState.PowerState = ""
+	if legacySnapshotProvesPoweredDown(legacy, wl) {
+		t.Fatal("legacy snapshot without an observed off state was trusted")
 	}
 }
 

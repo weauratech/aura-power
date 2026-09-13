@@ -498,6 +498,9 @@ func applyPendingObject(ctx context.Context, c client.Client, change *auth.Pendi
 		if err := decoder.Decode(desired); err != nil {
 			return fmt.Errorf("decode approved payload: %w", err)
 		}
+		if desired.GetNamespace() == "" {
+			desired.SetNamespace(change.ResourceNamespace)
+		}
 		if desired.GetName() != change.ResourceName || desired.GetNamespace() != change.ResourceNamespace {
 			return errors.New("payload identity does not match pending change")
 		}

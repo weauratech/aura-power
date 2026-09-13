@@ -176,11 +176,14 @@ func (d *DiscoveryLoop) ensurePowerTarget(ctx context.Context, wl ports.Discover
 	var legacy v1alpha1.PowerTarget
 	legacyErr := d.Client.Get(ctx, legacyKey, &legacy)
 	if legacyErr == nil && legacy.Spec.TargetRef.Kind == string(wl.Ref.Kind) {
-		// Preserve execution state only when the legacy record was already bound
-		// to this exact Kubernetes object. UID-less snapshots have no safe proof
-		// of ownership and must not be replayed onto a recreated workload.
+		// Legacy releases did not persist a UID. A snapshot on a workload that is
+		// still observably powered down is the only recovery record available
+		// during upgrade, so bind it once to the currently observed UID. An
+		// already-running workload does not need that ambiguous legacy snapshot.
 		var previous *v1alpha1.PowerTargetStatus
 		if legacy.Spec.TargetRef.UID != "" && legacy.Spec.TargetRef.UID == wl.Ref.UID {
+			previous = &legacy.Status
+		} else if legacy.Spec.TargetRef.UID == "" && legacySnapshotProvesPoweredDown(&legacy, wl) {
 			previous = &legacy.Status
 		}
 		created, createErr := d.newPowerTarget(ctx, targetName, wl, previous)
@@ -197,6 +200,24 @@ func (d *DiscoveryLoop) ensurePowerTarget(ctx context.Context, wl ports.Discover
 	}
 
 	return d.newPowerTarget(ctx, targetName, wl, nil)
+}
+
+func legacySnapshotProvesPoweredDown(legacy *v1alpha1.PowerTarget, wl ports.DiscoveredWorkload) bool {
+	snapshot := legacy.Status.Snapshot
+	if snapshot == nil || !snapshot.Available || snapshot.CapturedAt == nil || legacy.Status.ObservedState.PowerState != "off" || !workloadIsPoweredDown(wl) {
+		return false
+	}
+	if wl.Ref.Kind == domain.WorkloadKindCronJob {
+		return snapshot.Suspended != nil
+	}
+	return snapshot.ReplicaCount != nil
+}
+
+func workloadIsPoweredDown(wl ports.DiscoveredWorkload) bool {
+	if wl.Ref.Kind == domain.WorkloadKindCronJob {
+		return wl.Suspended
+	}
+	return wl.Replicas == 0
 }
 
 // restoreBeforeExemption guarantees that opting out cannot strand a workload

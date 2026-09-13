@@ -63,6 +63,41 @@ func TestAcceptanceCTRL06StatusConflictCannotLoseSnapshotAndRepeatMutation(t *te
 	}
 }
 
+func TestAcceptanceSnapshotCaptureFailureIsPersisted(t *testing.T) {
+	s := runtime.NewScheme()
+	if err := v1alpha1.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+	target := &v1alpha1.PowerTarget{ObjectMeta: metav1.ObjectMeta{Name: "fixtures--api", Namespace: "aura-system"}, Spec: v1alpha1.PowerTargetSpec{TargetRef: v1alpha1.TargetReference{Namespace: "fixtures", Name: "api", Kind: "Deployment", UID: "uid-api"}}, Status: v1alpha1.PowerTargetStatus{ObservedState: v1alpha1.ObservedStateSpec{Replicas: 3, PowerState: "on"}}}
+	policy := &v1alpha1.PowerPolicy{ObjectMeta: metav1.ObjectMeta{Name: "off", Namespace: "aura-system"}, Spec: v1alpha1.PowerPolicySpec{Scope: v1alpha1.PolicyScope{Namespaces: []string{"fixtures"}}, Schedule: v1alpha1.PolicySchedule{DesiredState: "off"}}}
+	c := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&v1alpha1.PowerTarget{}).WithObjects(target, policy).Build()
+	r := TargetReconciler{Client: c, Config: domain.DefaultGuardrailConfig(), Executor: captureFailingExecutor{}, Audit: noopAudit{}, Metrics: noopMetrics{}}
+	req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(target)}
+
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	var got v1alpha1.PowerTarget
+	if err := c.Get(context.Background(), req.NamespacedName, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.ConsecutiveFailures != 1 {
+		t.Fatalf("snapshot capture failure was not persisted: %+v", got.Status)
+	}
+}
+
+func TestAcceptanceRestoreWithoutSnapshotReturnsErrorAndDoesNotMutate(t *testing.T) {
+	executor := &countingExecutor{}
+	r := TargetReconciler{Executor: executor}
+	target := &v1alpha1.PowerTarget{}
+	if err := r.executeRestore(context.Background(), target, domain.WorkloadRef{Kind: domain.WorkloadKindDeployment}); err == nil {
+		t.Fatal("restore without snapshot reported success")
+	}
+	if executor.restores != 0 {
+		t.Fatalf("restore without snapshot mutated a workload %d times", executor.restores)
+	}
+}
+
 func TestAcceptanceArgoContentionDoesNotRepeatPowerDown(t *testing.T) {
 	s := runtime.NewScheme()
 	if err := v1alpha1.AddToScheme(s); err != nil {
@@ -85,7 +120,19 @@ func TestAcceptanceArgoContentionDoesNotRepeatPowerDown(t *testing.T) {
 
 	// The fake workload observation deliberately remains at two replicas, as it
 	// would when Argo CD self-heal immediately reclaims spec.replicas.
-	for i := 0; i < 3; i++ {
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	var settling v1alpha1.PowerTarget
+	if err := c.Get(context.Background(), req.NamespacedName, &settling); err != nil {
+		t.Fatal(err)
+	}
+	settledAt := metav1.NewTime(time.Now().Add(-actionConvergenceGrace - time.Second))
+	settling.Status.Action.CompletedAt = &settledAt
+	if err := c.Status().Update(context.Background(), &settling); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
 		if _, err := r.Reconcile(context.Background(), req); err != nil {
 			t.Fatal(err)
 		}
@@ -297,6 +344,16 @@ func (failingStatusWriter) Patch(context.Context, client.Object, client.Patch, .
 type countingExecutor struct {
 	calls    int
 	restores int
+}
+
+type captureFailingExecutor struct{}
+
+func (captureFailingExecutor) CaptureSnapshot(context.Context, domain.WorkloadRef) (*domain.Snapshot, error) {
+	return nil, errors.New("injected snapshot capture failure")
+}
+func (captureFailingExecutor) PowerDown(context.Context, domain.WorkloadRef) error { return nil }
+func (captureFailingExecutor) Restore(context.Context, domain.WorkloadRef, domain.Snapshot) error {
+	return nil
 }
 
 func (*countingExecutor) CaptureSnapshot(context.Context, domain.WorkloadRef) (*domain.Snapshot, error) {
