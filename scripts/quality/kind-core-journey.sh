@@ -106,6 +106,10 @@ while (( SECONDS < deadline )); do
   sleep 5
 done
 [[ "$replicas" == "0" ]] || { echo "FAIL: power-down did not converge" >&2; exit 10; }
+target="$(kubectl get powertarget -n aura-system -l "power.aura.sh/target-namespace=${FIXTURE_NAMESPACE},power.aura.sh/target-name=${WORKLOAD_NAME},power.aura.sh/target-kind=Deployment" -o jsonpath='{.items[0].metadata.name}')"
+[[ -n "$target" ]] || { echo "FAIL: discovered PowerTarget not found" >&2; exit 10; }
+snapshot="$(kubectl get powertarget "$target" -n aura-system -o jsonpath='{.status.snapshot.replicaCount}')"
+[[ "$snapshot" == "2" ]] || { echo "FAIL: snapshot expected replicas=2 observed=${snapshot:-missing}" >&2; exit 12; }
 
 kubectl patch powerpolicy "$POLICY_NAME" -n aura-system --type=merge -p '{"spec":{"schedule":{"desiredState":"on","windows":[]}}}'
 deadline=$((SECONDS + TIMEOUT_SECONDS))

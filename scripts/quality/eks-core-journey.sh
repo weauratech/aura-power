@@ -174,6 +174,7 @@ done
 target="$(kube get powertarget -n "$CONTROL_NAMESPACE" -l "power.aura.sh/target-namespace=${FIXTURE_NAMESPACE},power.aura.sh/target-name=${WORKLOAD_NAME},power.aura.sh/target-kind=Deployment" -o jsonpath='{.items[0].metadata.name}')"
 [[ -n "$target" ]] || { echo "FAIL: discovered PowerTarget not found" >&2; exit 10; }
 snapshot="$(kube get powertarget "$target" -n "$CONTROL_NAMESPACE" -o jsonpath='{.status.snapshot.replicaCount}')"
+[[ "$snapshot" == "2" ]] || { echo "FAIL: snapshot expected replicas=2 observed=${snapshot:-missing}" >&2; exit 12; }
 echo "power_down=passed original_replicas=2 snapshot_replicas=${snapshot:-missing}"
 
 kube patch powerpolicy "$POLICY_NAME" -n "$CONTROL_NAMESPACE" --type=merge -p '{"spec":{"schedule":{"desiredState":"on","windows":[]}}}'
