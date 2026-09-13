@@ -12,6 +12,8 @@ export default defineConfig({
     environmentOptions: { jsdom: { url: 'http://localhost/' } },
     restoreMocks: true,
     testTimeout: 10000,
-    poolOptions: { forks: { maxForks: 2, minForks: 1 } },
+	pool: 'forks',
+	maxWorkers: 2,
+	minWorkers: 1,
   },
 });

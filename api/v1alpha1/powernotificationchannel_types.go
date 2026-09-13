@@ -7,7 +7,7 @@ import (
 // PowerNotificationChannelSpec defines a webhook notification destination.
 type PowerNotificationChannelSpec struct {
 	// Type determines the payload format.
-	// +kubebuilder:validation:Enum=google-chat;slack;discord;generic
+	// +kubebuilder:validation:Enum=google-chat;slack;generic
 	Type string `json:"type"`
 
 	// URL is the webhook endpoint.

@@ -76,7 +76,7 @@ export function Overrides() {
       const targetRefs = parseTargetRefs(workloadRefs);
       const selectedNamespaces = namespaces.split(',').map(s => s.trim()).filter(Boolean);
       await apiPost('/overrides', {
-        metadata: { name, namespace: 'aura-system' },
+        metadata: { name },
         spec: {
           scope: {
             namespaces: selectedNamespaces.length > 0 ? selectedNamespaces : undefined,

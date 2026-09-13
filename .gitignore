@@ -52,3 +52,6 @@ aidlc-docs/
 
 # Dev tooling
 .ast-graph/
+
+# TypeScript incremental build state
+*.tsbuildinfo

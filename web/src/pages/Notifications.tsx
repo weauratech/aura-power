@@ -113,7 +113,7 @@ export function Notifications() {
       } else {
         // Create new
         await apiPost('/notification-channels', {
-          metadata: { name, namespace: 'aura-system' },
+          metadata: { name },
           spec,
         });
         notify(`Channel "${name}" created`);

@@ -95,7 +95,6 @@ func runOverrideCreate(target, kind, uid, state, durationStr, reason, ref string
 	expiresAt := time.Now().Add(dur).Format(time.RFC3339)
 	payload := overrideCreateRequest{}
 	payload.Metadata.GenerateName = "override-"
-	payload.Metadata.Namespace = "aura-system"
 	payload.Spec.Scope.Namespaces = namespaces
 	payload.Spec.Scope.TargetRefs = targetRefs
 	payload.Spec.State = state
@@ -149,7 +148,7 @@ type overrideTargetReference struct {
 type overrideCreateRequest struct {
 	Metadata struct {
 		GenerateName string `json:"generateName"`
-		Namespace    string `json:"namespace"`
+		Namespace    string `json:"namespace,omitempty"`
 	} `json:"metadata"`
 	Spec struct {
 		Scope struct {
