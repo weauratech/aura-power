@@ -98,6 +98,9 @@ controller:
     # Keep the Go heap below the pod limit so the runtime can collect before
     # Kubernetes terminates the process. Adjust together with resources.limits.memory.
     goMemLimit: "192MiB"
+    # Optional Go profiler. The process rejects non-loopback bind addresses;
+    # access it with kubectl port-forward during an authorized diagnostic run.
+    pprofBindAddress: ""
     systemNamespaceBlocklist:
       - kube-system
       - kube-public
@@ -149,6 +152,14 @@ serviceMonitor:
   enabled: false
   interval: 30s
   namespace: ""
+
+# -- Optional Prometheus alerts for controller memory pressure.
+prometheusRule:
+  enabled: false
+  labels: {}
+  heapLimitRatio: 0.85
+  workingSetLimitRatio: 0.85
+  for: 10m
 
 # -- NetworkPolicies
 networkPolicy:

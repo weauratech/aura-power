@@ -353,8 +353,11 @@ func (h *AuthHandlers) handleApprove(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{"error": "pending change already has another decision"})
 		return
 	}
+	decisionOwner := h.decisionOwner(change, reviewer)
 	if err := h.applyPendingChange(c.Request.Context(), change); err != nil {
-		_ = h.store.CancelPendingDecision(id, reviewerID)
+		if errors.Is(err, errPendingMutationNotApplied) {
+			_ = h.store.CancelPendingDecision(id, decisionOwner.ID)
+		}
 		status := http.StatusUnprocessableEntity
 		if errors.Is(err, errStalePendingChange) || apierrors.IsAlreadyExists(err) {
 			status = http.StatusConflict
@@ -362,12 +365,11 @@ func (h *AuthHandlers) handleApprove(c *gin.Context) {
 		c.JSON(status, gin.H{"error": err.Error(), "status": change.Status})
 		return
 	}
-	if err := h.recordApprovalDecision(c.Request.Context(), change, reviewer, true); err != nil {
-		_ = h.store.CancelPendingDecision(id, reviewerID)
+	if err := h.recordApprovalDecision(c.Request.Context(), change, decisionOwner, true); err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error(), "status": change.Status})
 		return
 	}
-	change, err = h.store.FinalizePendingDecision(id, reviewerID, "approve")
+	change, err = h.store.FinalizePendingDecision(id, decisionOwner.ID, "approve")
 	if err != nil {
 		// The Kubernetes operation is intentionally replayable. Returning an
 		// error is truthful; a retry after restart observes the intended state
@@ -400,12 +402,13 @@ func (h *AuthHandlers) handleReject(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{"error": "pending change already has another decision"})
 		return
 	}
-	if err := h.recordApprovalDecision(c.Request.Context(), change, reviewer, false); err != nil {
-		_ = h.store.CancelPendingDecision(id, reviewerID)
+	decisionOwner := h.decisionOwner(change, reviewer)
+	if err := h.recordApprovalDecision(c.Request.Context(), change, decisionOwner, false); err != nil {
+		_ = h.store.CancelPendingDecision(id, decisionOwner.ID)
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error(), "status": change.Status})
 		return
 	}
-	change, err = h.store.FinalizePendingDecision(id, reviewerID, "reject")
+	change, err = h.store.FinalizePendingDecision(id, decisionOwner.ID, "reject")
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 		return
@@ -423,6 +426,19 @@ func (h *AuthHandlers) requireCurrentReviewer(userID string) (*auth.User, error)
 		return nil, errors.New("reviewer no longer has approval permission")
 	}
 	return user, nil
+}
+
+func (h *AuthHandlers) decisionOwner(change *auth.PendingChange, current *auth.User) *auth.User {
+	if change.ReviewedBy == "" || change.ReviewedBy == current.ID {
+		return current
+	}
+	owner, err := h.store.GetUserByID(change.ReviewedBy)
+	if err == nil {
+		return owner
+	}
+	// Keep the durable reviewer identifier even if that account was removed.
+	// The immutable audit event remains the source for its historical username.
+	return &auth.User{ID: change.ReviewedBy, Username: change.ReviewedBy}
 }
 
 func (h *AuthHandlers) recordApprovalDecision(ctx context.Context, change *auth.PendingChange, reviewer *auth.User, approved bool) error {
@@ -447,13 +463,23 @@ func (h *AuthHandlers) recordApprovalDecision(ctx context.Context, change *auth.
 			Result: result, Reason: fmt.Sprintf("approval request %s was %s", change.ID, decision),
 		},
 	}
-	if err := h.client.Create(ctx, event); err != nil && !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("record approval audit: %w", err)
+	if err := h.client.Create(ctx, event); err != nil {
+		if !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("record approval audit: %w", err)
+		}
+		var existing v1alpha1.PowerAuditEvent
+		if getErr := h.client.Get(ctx, client.ObjectKeyFromObject(event), &existing); getErr != nil {
+			return fmt.Errorf("verify existing approval audit: %w", getErr)
+		}
+		if existing.Spec.Action != event.Spec.Action || existing.Spec.Result != event.Spec.Result || existing.Spec.Target != event.Spec.Target || existing.Spec.Reason != event.Spec.Reason {
+			return errors.New("existing approval audit does not match the durable decision")
+		}
 	}
 	return nil
 }
 
 var errStalePendingChange = errors.New("resource changed since the approval request")
+var errPendingMutationNotApplied = errors.New("approved mutation was not applied")
 
 func (h *AuthHandlers) applyPendingChange(ctx context.Context, change *auth.PendingChange) error {
 	if h.client == nil {
@@ -463,7 +489,7 @@ func (h *AuthHandlers) applyPendingChange(ctx context.Context, change *auth.Pend
 		ResourceNamespace: change.ResourceNamespace, ResourceName: change.ResourceName,
 		ResourceVersion: change.ResourceVersion, Payload: json.RawMessage(change.Payload)}
 	if err := validatePendingRequest(req); err != nil {
-		return err
+		return fmt.Errorf("%w: %w", errPendingMutationNotApplied, err)
 	}
 	switch change.ResourceKind {
 	case "PowerPolicy":
@@ -486,60 +512,78 @@ func applyPendingObject(ctx context.Context, c client.Client, change *auth.Pendi
 			return nil // replay after a successful delete
 		}
 		if err != nil {
-			return fmt.Errorf("read resource before delete: %w", err)
+			return fmt.Errorf("%w: read resource before delete: %w", errPendingMutationNotApplied, err)
 		}
 		if live.GetResourceVersion() != change.ResourceVersion {
-			return errStalePendingChange
+			return fmt.Errorf("%w: %w", errPendingMutationNotApplied, errStalePendingChange)
 		}
 		if err := c.Delete(ctx, live, client.Preconditions{ResourceVersion: &change.ResourceVersion}); err != nil {
-			return fmt.Errorf("delete approved resource: %w", err)
+			fresh := desired.DeepCopyObject().(client.Object)
+			if readErr := c.Get(ctx, key, fresh); apierrors.IsNotFound(readErr) {
+				return nil
+			} else if readErr == nil && fresh.GetResourceVersion() == change.ResourceVersion {
+				return fmt.Errorf("%w: delete approved resource: %w", errPendingMutationNotApplied, err)
+			}
+			return fmt.Errorf("delete result is uncertain; retry the same approval: %w", err)
 		}
 		return nil
 	case "create", "update":
 		decoder := json.NewDecoder(bytes.NewBufferString(change.Payload))
 		decoder.DisallowUnknownFields()
 		if err := decoder.Decode(desired); err != nil {
-			return fmt.Errorf("decode approved payload: %w", err)
+			return fmt.Errorf("%w: decode approved payload: %w", errPendingMutationNotApplied, err)
 		}
 		if desired.GetNamespace() == "" {
 			desired.SetNamespace(change.ResourceNamespace)
 		}
 		if desired.GetName() != change.ResourceName || desired.GetNamespace() != change.ResourceNamespace {
-			return errors.New("payload identity does not match pending change")
+			return fmt.Errorf("%w: payload identity does not match pending change", errPendingMutationNotApplied)
 		}
 		if change.Action == "create" {
 			if apierrors.IsNotFound(err) {
 				desired.SetResourceVersion("")
 				clearPendingObjectStatus(desired)
 				if err := c.Create(ctx, desired); err != nil {
-					return fmt.Errorf("create approved resource: %w", err)
+					fresh := desired.DeepCopyObject().(client.Object)
+					if readErr := c.Get(ctx, key, fresh); readErr == nil && pendingObjectEqual(fresh, desired) {
+						return nil
+					} else if apierrors.IsNotFound(readErr) {
+						return fmt.Errorf("%w: create approved resource: %w", errPendingMutationNotApplied, err)
+					}
+					return fmt.Errorf("create result is uncertain; retry the same approval: %w", err)
 				}
 				return nil
 			}
 			if err != nil {
-				return fmt.Errorf("read resource before create: %w", err)
+				return fmt.Errorf("%w: read resource before create: %w", errPendingMutationNotApplied, err)
 			}
 			if pendingObjectEqual(live, desired) {
 				return nil // replay after create succeeded but SQLite did not finalize
 			}
-			return apierrors.NewAlreadyExists(schema.GroupResource{Group: v1alpha1.GroupVersion.Group, Resource: strings.ToLower(change.ResourceKind) + "s"}, change.ResourceName)
+			return fmt.Errorf("%w: %w", errPendingMutationNotApplied, apierrors.NewAlreadyExists(schema.GroupResource{Group: v1alpha1.GroupVersion.Group, Resource: strings.ToLower(change.ResourceKind) + "s"}, change.ResourceName))
 		}
 		if err != nil {
-			return fmt.Errorf("read resource before update: %w", err)
+			return fmt.Errorf("%w: read resource before update: %w", errPendingMutationNotApplied, err)
 		}
 		if pendingObjectEqual(live, desired) {
 			return nil // replay after update succeeded but SQLite did not finalize
 		}
 		if live.GetResourceVersion() != change.ResourceVersion {
-			return errStalePendingChange
+			return fmt.Errorf("%w: %w", errPendingMutationNotApplied, errStalePendingChange)
 		}
 		applyPendingObjectSpec(live, desired)
 		if err := c.Update(ctx, live); err != nil {
-			return fmt.Errorf("update approved resource: %w", err)
+			fresh := desired.DeepCopyObject().(client.Object)
+			if readErr := c.Get(ctx, key, fresh); readErr == nil && pendingObjectEqual(fresh, desired) {
+				return nil
+			} else if readErr == nil && fresh.GetResourceVersion() == change.ResourceVersion {
+				return fmt.Errorf("%w: update approved resource: %w", errPendingMutationNotApplied, err)
+			}
+			return fmt.Errorf("update result is uncertain; retry the same approval: %w", err)
 		}
 		return nil
 	default:
-		return fmt.Errorf("%w: unsupported action %q", auth.ErrInvalidPendingChange, change.Action)
+		return fmt.Errorf("%w: %w: unsupported action %q", errPendingMutationNotApplied, auth.ErrInvalidPendingChange, change.Action)
 	}
 }
 

@@ -6,6 +6,8 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -70,20 +72,35 @@ func (a *AuditRecorder) Record(ctx context.Context, event ports.AuditEvent) erro
 			RuleName: event.RuleName,
 		},
 	}
+	if event.ID != "" {
+		auditEvent.Name = event.ID
+		auditEvent.GenerateName = ""
+	}
 
 	if err := a.client.Create(ctx, auditEvent); err != nil {
+		if event.ID != "" && apierrors.IsAlreadyExists(err) {
+			var existing v1alpha1.PowerAuditEvent
+			if getErr := a.reader.Get(ctx, client.ObjectKey{Namespace: a.namespace, Name: event.ID}, &existing); getErr != nil {
+				return fmt.Errorf("failed to verify existing audit event: %w", getErr)
+			}
+			if !equality.Semantic.DeepEqual(existing.Spec, auditEvent.Spec) {
+				return fmt.Errorf("audit event %s/%s already exists with different semantics", a.namespace, event.ID)
+			}
+			return nil
+		}
 		return fmt.Errorf("failed to create audit event: %w", err)
 	}
 
 	// Dispatch notification only for real state transitions (not routine reconciliation)
 	if a.notifier != nil && isNotifiableAction(string(event.Action)) {
 		a.notifier.Enqueue(notifications.Event{
-			Action:    string(event.Action),
-			Target:    notifications.TargetRef{Namespace: event.Target.Namespace, Name: event.Target.Name, Kind: string(event.Target.Kind), UID: event.Target.UID},
-			Result:    event.Result,
-			Reason:    event.Reason,
-			RuleName:  event.RuleName,
-			Timestamp: event.Timestamp,
+			AuditEventRef: fmt.Sprintf("%s/%s", auditEvent.Namespace, auditEvent.Name),
+			Action:        string(event.Action),
+			Target:        notifications.TargetRef{Namespace: event.Target.Namespace, Name: event.Target.Name, Kind: string(event.Target.Kind), UID: event.Target.UID},
+			Result:        event.Result,
+			Reason:        event.Reason,
+			RuleName:      event.RuleName,
+			Timestamp:     event.Timestamp,
 		})
 	}
 

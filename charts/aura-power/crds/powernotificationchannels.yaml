@@ -79,3 +79,68 @@ spec:
                   type: integer
                 totalErrors:
                   type: integer
+                lastAttempt:
+                  type: object
+                  required: [id, eventIDs, phase, startedAt, attemptCount]
+                  properties:
+                    id:
+                      type: string
+                    eventIDs:
+                      type: array
+                      items:
+                        type: string
+                    auditEventRefs:
+                      type: array
+                      items:
+                        type: string
+                    phase:
+                      type: string
+                      enum: [InProgress, Succeeded, Failed]
+                    startedAt:
+                      type: string
+                      format: date-time
+                    completedAt:
+                      type: string
+                      format: date-time
+                    providerStatusCode:
+                      type: integer
+                      format: int32
+                    attemptCount:
+                      type: integer
+                      format: int32
+                    response:
+                      type: string
+                recentAttempts:
+                  type: array
+                  maxItems: 20
+                  items:
+                    type: object
+                    required: [id, eventIDs, phase, startedAt, attemptCount]
+                    properties:
+                      id:
+                        type: string
+                      eventIDs:
+                        type: array
+                        items:
+                          type: string
+                      auditEventRefs:
+                        type: array
+                        items:
+                          type: string
+                      phase:
+                        type: string
+                        enum: [InProgress, Succeeded, Failed]
+                      startedAt:
+                        type: string
+                        format: date-time
+                      completedAt:
+                        type: string
+                        format: date-time
+                      providerStatusCode:
+                        type: integer
+                        format: int32
+                      attemptCount:
+                        type: integer
+                        format: int32
+                      response:
+                        type: string

@@ -31,7 +31,7 @@ trap 'exit 143' TERM HUP
 
 kubectl port-forward -n aura-system statefulset/aura-power-server 19092:8080 >/tmp/aura-power-approval-port-forward.log 2>&1 &
 forward_pid=$!
-for attempt in $(seq 1 30); do
+for _ in $(seq 1 30); do
   if curl -fsS "$base_url/api/v1/health" >/dev/null 2>&1; then break; fi
   sleep 1
 done

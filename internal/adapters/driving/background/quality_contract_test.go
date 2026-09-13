@@ -2,11 +2,13 @@ package background
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	v1alpha1 "github.com/weauratech/aura-power/api/v1alpha1"
@@ -83,6 +85,37 @@ func TestQualityDiscoveryBindsLegacySnapshotForPoweredDownWorkload(t *testing.T)
 	}
 }
 
+func TestQualityDiscoveryResumesLegacyMigrationAfterStatusFailure(t *testing.T) {
+	replicas := int32(3)
+	now := metav1.Now()
+	legacy := &v1alpha1.PowerTarget{
+		ObjectMeta: metav1.ObjectMeta{Name: "fixtures--api", Namespace: "aura-system"},
+		Spec:       v1alpha1.PowerTargetSpec{TargetRef: v1alpha1.TargetReference{Namespace: "fixtures", Name: "api", Kind: "Deployment"}},
+		Status:     v1alpha1.PowerTargetStatus{ObservedState: v1alpha1.ObservedStateSpec{Replicas: 0, PowerState: "off"}, Snapshot: &v1alpha1.SnapshotSpec{Available: true, ReplicaCount: &replicas, CapturedAt: &now}},
+	}
+	base := fake.NewClientBuilder().WithScheme(discoveryScheme(t)).WithStatusSubresource(&v1alpha1.PowerTarget{}).WithObjects(legacy).Build()
+	flaky := &discoveryStatusFailingClient{Client: base, fail: true}
+	loop := DiscoveryLoop{Client: flaky, Config: DiscoveryConfig{Namespace: "aura-system", ExemptAnnotation: "aura.sh/power-exempt"}}
+	wl := ports.DiscoveredWorkload{Ref: domain.WorkloadRef{APIVersion: "apps/v1", Namespace: "fixtures", Name: "api", Kind: domain.WorkloadKindDeployment, UID: "uid-current"}, Replicas: 0}
+	if _, err := loop.ensurePowerTarget(context.Background(), wl); err == nil {
+		t.Fatal("initial status failure was not surfaced")
+	}
+	flaky.fail = false
+	if _, err := loop.ensurePowerTarget(context.Background(), wl); err != nil {
+		t.Fatalf("partial migration was not resumed: %v", err)
+	}
+	var migrated v1alpha1.PowerTarget
+	if err := base.Get(context.Background(), types.NamespacedName{Namespace: "aura-system", Name: powerTargetName(wl.Ref)}, &migrated); err != nil {
+		t.Fatal(err)
+	}
+	if migrated.Status.Snapshot == nil || migrated.Status.Snapshot.ReplicaCount == nil || *migrated.Status.Snapshot.ReplicaCount != replicas {
+		t.Fatalf("resumed migration lost recovery snapshot: %+v", migrated.Status)
+	}
+	if err := base.Get(context.Background(), types.NamespacedName{Namespace: "aura-system", Name: legacy.Name}, &v1alpha1.PowerTarget{}); err == nil {
+		t.Fatal("legacy identity remained after resumed migration")
+	}
+}
+
 func TestQualityDiscoveryDropsAmbiguousLegacySnapshotForRunningWorkload(t *testing.T) {
 	replicas := int32(3)
 	now := metav1.Now()
@@ -121,6 +154,45 @@ func TestLegacySnapshotRequiresRecoveryProvenance(t *testing.T) {
 	legacy.Status.ObservedState.PowerState = ""
 	if legacySnapshotProvesPoweredDown(legacy, wl) {
 		t.Fatal("legacy snapshot without an observed off state was trusted")
+	}
+}
+
+func TestQualityLegacyZeroReplicaSnapshotIsAmbiguous(t *testing.T) {
+	zero := int32(0)
+	now := metav1.Now()
+	legacy := &v1alpha1.PowerTarget{Status: v1alpha1.PowerTargetStatus{
+		ObservedState: v1alpha1.ObservedStateSpec{Replicas: 0, PowerState: "off"},
+		Snapshot:      &v1alpha1.SnapshotSpec{Available: true, ReplicaCount: &zero, CapturedAt: &now},
+	}}
+	wl := ports.DiscoveredWorkload{Ref: domain.WorkloadRef{Kind: domain.WorkloadKindDeployment}, Replicas: 0}
+	if legacySnapshotProvesPoweredDown(legacy, wl) {
+		t.Fatal("ambiguous v2.1 zero snapshot was trusted")
+	}
+}
+
+func TestQualityDiscoveryRetainsAmbiguousLegacyZeroUntilOperatorRecovery(t *testing.T) {
+	zero := int32(0)
+	now := metav1.Now()
+	legacyName := "fixtures--api"
+	legacy := &v1alpha1.PowerTarget{
+		ObjectMeta: metav1.ObjectMeta{Name: legacyName, Namespace: "aura-system"},
+		Spec:       v1alpha1.PowerTargetSpec{TargetRef: v1alpha1.TargetReference{Namespace: "fixtures", Name: "api", Kind: "Deployment"}},
+		Status:     v1alpha1.PowerTargetStatus{ObservedState: v1alpha1.ObservedStateSpec{Replicas: 0, PowerState: "off"}, Snapshot: &v1alpha1.SnapshotSpec{Available: true, ReplicaCount: &zero, CapturedAt: &now}},
+	}
+	c := fake.NewClientBuilder().WithScheme(discoveryScheme(t)).WithStatusSubresource(&v1alpha1.PowerTarget{}).WithObjects(legacy).Build()
+	loop := DiscoveryLoop{Client: c, Config: DiscoveryConfig{Namespace: "aura-system", ExemptAnnotation: "aura.sh/power-exempt"}}
+	ref := domain.WorkloadRef{APIVersion: "apps/v1", Namespace: "fixtures", Name: "api", Kind: domain.WorkloadKindDeployment, UID: "uid-current"}
+	if _, err := loop.ensurePowerTarget(context.Background(), ports.DiscoveredWorkload{Ref: ref, Replicas: 0}); err == nil {
+		t.Fatal("ambiguous zero snapshot was reported as migrated")
+	}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "aura-system", Name: legacyName}, &v1alpha1.PowerTarget{}); err != nil {
+		t.Fatalf("ambiguous recovery record was discarded: %v", err)
+	}
+	if _, err := loop.ensurePowerTarget(context.Background(), ports.DiscoveredWorkload{Ref: ref, Replicas: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "aura-system", Name: legacyName}, &v1alpha1.PowerTarget{}); err == nil {
+		t.Fatal("legacy record remained after verified operator recovery")
 	}
 }
 
@@ -215,6 +287,39 @@ func TestQualityExemptionMigratesAndRestoresLegacySnapshot(t *testing.T) {
 }
 
 type exemptionExecutor struct{ restores int }
+
+type discoveryStatusFailingClient struct {
+	client.Client
+	fail bool
+}
+
+func (c *discoveryStatusFailingClient) Status() client.SubResourceWriter {
+	return &discoveryStatusFailingWriter{delegate: c.Client.Status(), owner: c}
+}
+
+type discoveryStatusFailingWriter struct {
+	delegate client.SubResourceWriter
+	owner    *discoveryStatusFailingClient
+}
+
+func (w *discoveryStatusFailingWriter) Create(ctx context.Context, obj, sub client.Object, opts ...client.SubResourceCreateOption) error {
+	if w.owner.fail {
+		return errors.New("injected migration status failure")
+	}
+	return w.delegate.Create(ctx, obj, sub, opts...)
+}
+func (w *discoveryStatusFailingWriter) Update(ctx context.Context, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+	if w.owner.fail {
+		return errors.New("injected migration status failure")
+	}
+	return w.delegate.Update(ctx, obj, opts...)
+}
+func (w *discoveryStatusFailingWriter) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+	if w.owner.fail {
+		return errors.New("injected migration status failure")
+	}
+	return w.delegate.Patch(ctx, obj, patch, opts...)
+}
 
 func (*exemptionExecutor) CaptureSnapshot(context.Context, domain.WorkloadRef) (*domain.Snapshot, error) {
 	return nil, nil

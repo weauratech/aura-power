@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -172,9 +173,77 @@ func TestSQLitePendingDecisionCanCancelOrReclaimExpiredLease(t *testing.T) {
 	if _, err := s.db.Exec("UPDATE pending_changes SET reviewed_at = ? WHERE id = ?", time.Now().Add(-6*time.Minute), change.ID); err != nil {
 		t.Fatal(err)
 	}
-	reclaimed, err := s.BeginPendingDecision(change.ID, "reviewer-two", "reject")
-	if err != nil || reclaimed.Status != "rejecting" || reclaimed.ReviewedBy != "reviewer-two" {
+	if _, err := s.BeginPendingDecision(change.ID, "reviewer-two", "reject"); !errors.Is(err, ErrPendingDecisionConflict) {
+		t.Fatalf("expired approval was reversed: %v", err)
+	}
+	reclaimed, err := s.BeginPendingDecision(change.ID, "reviewer-two", "approve")
+	if err != nil || reclaimed.Status != "approving" || reclaimed.ReviewedBy != "reviewer-one" {
 		t.Fatalf("expired decision lease was not reclaimable: %+v %v", reclaimed, err)
+	}
+	if _, err := s.FinalizePendingDecision(change.ID, "reviewer-two", "approve"); !errors.Is(err, ErrPendingDecisionConflict) {
+		t.Fatalf("takeover replaced the durable decision owner: %v", err)
+	}
+	finalized, err := s.FinalizePendingDecision(change.ID, "reviewer-one", "approve")
+	if err != nil || finalized.Status != "approved" || finalized.ReviewedBy != "reviewer-one" {
+		t.Fatalf("original decision owner could not be finalized after takeover: %+v %v", finalized, err)
+	}
+}
+
+func TestSQLitePendingDecisionLeaseIsExclusiveForSameReviewer(t *testing.T) {
+	s, err := NewSQLiteStore(filepath.Join(t.TempDir(), "auth.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	change, err := s.CreatePendingChange(PendingChange{UserID: "requester", Username: "member", Action: "create", ResourceKind: "PowerPolicy", ResourceName: "nightly", Payload: `{}`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.BeginPendingDecision(change.ID, "reviewer", "approve"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.BeginPendingDecision(change.ID, "reviewer", "approve"); !errors.Is(err, ErrPendingDecisionConflict) {
+		t.Fatalf("same reviewer acquired the live lease twice: %v", err)
+	}
+}
+
+func TestSQLitePendingDecisionConcurrentAcquisitionHasOneWinner(t *testing.T) {
+	s, err := NewSQLiteStore(filepath.Join(t.TempDir(), "auth.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	change, err := s.CreatePendingChange(PendingChange{UserID: "requester", Username: "member", Action: "create", ResourceKind: "PowerPolicy", ResourceName: "nightly", Payload: `{}`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, acquireErr := s.BeginPendingDecision(change.ID, "same-reviewer", "approve")
+			results <- acquireErr
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	successes, conflicts := 0, 0
+	for result := range results {
+		if result == nil {
+			successes++
+		} else if errors.Is(result, ErrPendingDecisionConflict) {
+			conflicts++
+		} else {
+			t.Fatalf("unexpected acquisition error: %v", result)
+		}
+	}
+	if successes != 1 || conflicts != 1 {
+		t.Fatalf("lease winners=%d conflicts=%d", successes, conflicts)
 	}
 }
 

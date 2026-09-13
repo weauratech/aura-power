@@ -42,7 +42,7 @@ func acceptanceDispatcher(t *testing.T, objects ...client.Object) (*Dispatcher, 
 		t.Fatal(err)
 	}
 	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&v1alpha1.PowerNotificationChannel{}).WithObjects(objects...).Build()
-	dispatcher := NewDispatcher(c)
+	dispatcher := NewDispatcher(c, c)
 	sender := &recordingSender{}
 	dispatcher.RegisterSender(sender)
 	return dispatcher, sender

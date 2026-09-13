@@ -1,4 +1,4 @@
-.PHONY: test-core bench-core test-core-pbt lint-core-deps test-all quality quality-acceptance build-controller build-server build-cli build-web helm-lint lint docker-build docker-push
+.PHONY: test-core bench-core test-core-pbt lint-core-deps test-all quality quality-acceptance quality-envtest build-controller build-server build-cli build-web helm-lint lint docker-build docker-push
 
 ## Core Engine targets
 
@@ -83,6 +83,10 @@ quality-acceptance:
 	go test -tags=acceptance ./... -race -count=1; go_status=$$?; \
 	cd web && npm run test:acceptance; web_status=$$?; \
 	if [ $$go_status -ne 0 ] || [ $$web_status -ne 0 ]; then exit 1; fi
+
+quality-envtest:
+	@test -n "$$KUBEBUILDER_ASSETS" || { echo 'KUBEBUILDER_ASSETS is required; run eval "$$(setup-envtest use -p env 1.31.x!)"' >&2; exit 2; }
+	go test -tags=envtest ./internal/adapters/driving/webhook -race -count=1
 
 quality-load:
 	go test -tags=load ./internal/adapters/driven/kubernetes -run TestDiscoveryMemoryBudget -count=3

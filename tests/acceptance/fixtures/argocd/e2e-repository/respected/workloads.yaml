@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: respected-deployment
+  namespace: __NAMESPACE__
+  annotations:
+    aura.sh/power-eligible: "true"
+  labels:
+    aura-power-quality/revision: v1
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app: respected-deployment}
+  template:
+    metadata:
+      labels: {app: respected-deployment}
+    spec:
+      containers:
+        - name: pause
+          image: registry.k8s.io/pause:3.10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: respected-statefulset
+  namespace: __NAMESPACE__
+spec:
+  clusterIP: None
+  selector: {app: respected-statefulset}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: respected-statefulset
+  namespace: __NAMESPACE__
+  annotations:
+    aura.sh/power-eligible: "true"
+  labels:
+    aura-power-quality/revision: v1
+spec:
+  serviceName: respected-statefulset
+  replicas: 1
+  selector:
+    matchLabels: {app: respected-statefulset}
+  template:
+    metadata:
+      labels: {app: respected-statefulset}
+    spec:
+      containers:
+        - name: pause
+          image: registry.k8s.io/pause:3.10
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: respected-cronjob
+  namespace: __NAMESPACE__
+  annotations:
+    aura.sh/power-eligible: "true"
+  labels:
+    aura-power-quality/revision: v1
+spec:
+  schedule: "* * * * *"
+  suspend: false
+  startingDeadlineSeconds: 300
+  concurrencyPolicy: Allow
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: existing-job
+              image: registry.k8s.io/pause:3.10

@@ -2,9 +2,13 @@ package kubernetes
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
@@ -16,7 +20,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	"github.com/weauratech/aura-power/api/v1alpha1"
+	"github.com/weauratech/aura-power/internal/adapters/driven/notifications"
 	"github.com/weauratech/aura-power/internal/core/domain"
+	"github.com/weauratech/aura-power/internal/ports"
 )
 
 func qualityScheme(t *testing.T) *runtime.Scheme {
@@ -93,6 +100,151 @@ func TestQualityExecutorRefusesRecreatedWorkloadUID(t *testing.T) {
 	}
 	if err := executor.PowerDown(context.Background(), ref); err == nil {
 		t.Fatal("expected mutation to reject a recreated workload UID")
+	}
+}
+
+func TestQualityAuditNotificationCorrelationRoundTrip(t *testing.T) {
+	received := make(chan map[string]interface{}, 1)
+	receiver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var payload map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		received <- payload
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer receiver.Close()
+
+	scheme := qualityScheme(t)
+	if err := v1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	channel := &v1alpha1.PowerNotificationChannel{
+		ObjectMeta: metav1.ObjectMeta{Name: "audit-roundtrip", Namespace: "aura-system"},
+		Spec:       v1alpha1.PowerNotificationChannelSpec{Type: "generic", URL: receiver.URL, Enabled: true},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).
+		WithStatusSubresource(&v1alpha1.PowerNotificationChannel{}).
+		WithObjects(channel).Build()
+	dispatcher := notifications.NewDispatcher(c, c)
+	recorder := NewAuditRecorder(c, nil, "aura-system")
+	recorder.SetNotifier(dispatcher)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go dispatcher.Run(ctx)
+
+	event := ports.AuditEvent{
+		Timestamp: time.Now().UTC(), Action: ports.AuditWorkloadRestored, Actor: "quality/test",
+		Target: domain.WorkloadRef{APIVersion: "apps/v1", Namespace: "fixtures", Name: "api", Kind: domain.WorkloadKindDeployment, UID: "uid-1"},
+		Result: "success", Reason: "round trip", RuleName: "nightly",
+	}
+	if err := recorder.Record(ctx, event); err != nil {
+		t.Fatal(err)
+	}
+	var auditEvents v1alpha1.PowerAuditEventList
+	if err := c.List(ctx, &auditEvents, client.InNamespace("aura-system")); err != nil {
+		t.Fatal(err)
+	}
+	if len(auditEvents.Items) != 1 || auditEvents.Items[0].Name == "" {
+		t.Fatalf("persisted audit event missing: %+v", auditEvents.Items)
+	}
+	wantAuditRef := "aura-system/" + auditEvents.Items[0].Name
+
+	var payload map[string]interface{}
+	select {
+	case payload = <-received:
+	case <-time.After(8 * time.Second):
+		t.Fatal("notification receiver did not observe audit event")
+	}
+	correlation, ok := payload["correlation"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("receiver correlation missing: %+v", payload)
+	}
+	attemptID, _ := correlation["attemptID"].(string)
+	auditRefs, _ := correlation["auditEventRefs"].([]interface{})
+	if attemptID == "" || len(auditRefs) != 1 || auditRefs[0] != wantAuditRef {
+		t.Fatalf("receiver correlation=%+v want audit ref %q", correlation, wantAuditRef)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		var persisted v1alpha1.PowerNotificationChannel
+		if err := c.Get(ctx, client.ObjectKeyFromObject(channel), &persisted); err != nil {
+			t.Fatal(err)
+		}
+		attempt := persisted.Status.LastAttempt
+		if attempt != nil && attempt.Phase == "Succeeded" {
+			if attempt.ID != attemptID || len(attempt.AuditEventRefs) != 1 || attempt.AuditEventRefs[0] != wantAuditRef || attempt.ProviderStatusCode != http.StatusNoContent {
+				t.Fatalf("persisted correlation differs from receiver: %+v", attempt)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("notification status did not converge: %+v", persisted.Status)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestQualityAuditRecorderIsIdempotentForDeterministicID(t *testing.T) {
+	received := make(chan struct{}, 2)
+	receiver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		received <- struct{}{}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer receiver.Close()
+
+	scheme := qualityScheme(t)
+	if err := v1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	channel := &v1alpha1.PowerNotificationChannel{
+		ObjectMeta: metav1.ObjectMeta{Name: "idempotent-audit", Namespace: "aura-system"},
+		Spec:       v1alpha1.PowerNotificationChannelSpec{Type: "generic", URL: receiver.URL, Enabled: true},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).
+		WithStatusSubresource(&v1alpha1.PowerNotificationChannel{}).
+		WithObjects(channel).Build()
+	dispatcher := notifications.NewDispatcher(c, c)
+	recorder := NewAuditRecorder(c, nil, "aura-system")
+	recorder.SetNotifier(dispatcher)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go dispatcher.Run(ctx)
+	event := ports.AuditEvent{
+		ID: "action-stable", Timestamp: time.Unix(1700000000, 0).UTC(),
+		Action: ports.AuditWorkloadPoweredDown, Actor: "system/controller",
+		Target: domain.WorkloadRef{APIVersion: "apps/v1", Namespace: "fixtures", Name: "api", Kind: domain.WorkloadKindDeployment, UID: "uid-1"},
+		Result: "success", Reason: "Powered down by policy", RuleName: "nightly",
+	}
+	if err := recorder.Record(ctx, event); err != nil {
+		t.Fatal(err)
+	}
+	if err := recorder.Record(ctx, event); err != nil {
+		t.Fatalf("identical durable audit replay failed: %v", err)
+	}
+	var list v1alpha1.PowerAuditEventList
+	if err := c.List(context.Background(), &list, client.InNamespace("aura-system")); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Items) != 1 || list.Items[0].Name != event.ID {
+		t.Fatalf("audit replay created duplicates: %+v", list.Items)
+	}
+	select {
+	case <-received:
+	case <-time.After(8 * time.Second):
+		t.Fatal("notification for deterministic audit event was not delivered")
+	}
+	select {
+	case <-received:
+		t.Fatal("idempotent audit replay duplicated its notification")
+	case <-time.After(200 * time.Millisecond):
+	}
+	event.RuleName = "different"
+	if err := recorder.Record(ctx, event); err == nil {
+		t.Fatal("same audit identifier accepted different semantics")
 	}
 }
 

@@ -138,6 +138,23 @@ type PowerActionStatus struct {
 	// Changing that annotation explicitly authorizes one new attempt.
 	// +optional
 	RetryToken string `json:"retryToken,omitempty"`
+
+	// AuditEventID is the deterministic PowerAuditEvent name for this mutation.
+	// +optional
+	AuditEventID string `json:"auditEventID,omitempty"`
+
+	// AuditPhase is empty while the mutation outcome is unresolved, Pending
+	// after acceptance, and Recorded once the audit event exists.
+	// +optional
+	// +kubebuilder:validation:Enum=Pending;Recorded
+	AuditPhase string `json:"auditPhase,omitempty"`
+
+	// AuditAction and AuditRuleName preserve the accepted decision semantics so
+	// a later reconciliation does not attribute it to a newer winning rule.
+	// +optional
+	AuditAction string `json:"auditAction,omitempty"`
+	// +optional
+	AuditRuleName string `json:"auditRuleName,omitempty"`
 }
 
 // ObservedStateSpec captures the workload's current state.

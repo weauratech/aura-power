@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	v1alpha1 "github.com/weauratech/aura-power/api/v1alpha1"
@@ -10,6 +11,26 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
+
+type approvalAuditFailingClient struct {
+	client.Client
+	fail bool
+}
+
+func (c *approvalAuditFailingClient) Create(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
+	if c.fail {
+		if _, ok := obj.(*v1alpha1.PowerAuditEvent); ok {
+			return errors.New("injected audit failure")
+		}
+	}
+	return c.Client.Create(ctx, obj, opts...)
+}
+
+type finalizeFailingStore struct{ auth.Store }
+
+func (finalizeFailingStore) FinalizePendingDecision(string, string, string) (*auth.PendingChange, error) {
+	return nil, errors.New("injected finalize failure")
+}
 
 func pendingPolicyPayload(name string, spec v1alpha1.PowerPolicySpec) map[string]any {
 	return map[string]any{
@@ -175,6 +196,100 @@ func TestApprovedMutationCanBeReplayedAfterRestart(t *testing.T) {
 	restarted := NewAuthHandlers(f.store, f.jwt, f.client)
 	if err := restarted.applyPendingChange(context.Background(), change); err != nil {
 		t.Fatalf("replay: %v", err)
+	}
+}
+
+func TestAppliedApprovalCannotBeReversedWhenAuditFails(t *testing.T) {
+	f := newContractFixture(t)
+	wrapped := &approvalAuditFailingClient{Client: f.client, fail: true}
+	server := NewServer(wrapped, nil, f.server.config)
+	server.RegisterAuthRoutes(f.store, f.jwt)
+	server.FinalizeRoutes()
+	pending, err := f.store.CreatePendingChange(auth.PendingChange{UserID: "requester", Username: "member", Action: "create", ResourceKind: "PowerPolicy", ResourceNamespace: "aura-system", ResourceName: "audit-window", Payload: mustJSON(t, pendingPolicyPayload("audit-window", v1alpha1.PowerPolicySpec{}))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := requestContract(t, server.Handler(), "POST", "/api/v1/pending/"+pending.ID+"/approve", f.token(t, auth.RoleApprover), nil)
+	if response.Code != 422 {
+		t.Fatalf("audit failure returned %d: %s", response.Code, response.Body.String())
+	}
+	var policy v1alpha1.PowerPolicy
+	if err := f.client.Get(context.Background(), client.ObjectKey{Namespace: "aura-system", Name: "audit-window"}, &policy); err != nil {
+		t.Fatalf("approved mutation was not applied: %v", err)
+	}
+	got, _ := f.store.GetPendingChange(pending.ID)
+	if got.Status != "approving" {
+		t.Fatalf("applied mutation became reversible: %+v", got)
+	}
+	if rejected := requestContract(t, server.Handler(), "POST", "/api/v1/pending/"+pending.ID+"/reject", f.token(t, auth.RoleAdmin), nil); rejected.Code != 409 {
+		t.Fatalf("applied approval was reversed: %d %s", rejected.Code, rejected.Body.String())
+	}
+}
+
+func TestAppliedAndAuditedApprovalCannotBeReversedWhenFinalizeFails(t *testing.T) {
+	f := newContractFixture(t)
+	server := NewServer(f.client, nil, f.server.config)
+	server.RegisterAuthRoutes(finalizeFailingStore{Store: f.store}, f.jwt)
+	server.FinalizeRoutes()
+	pending, err := f.store.CreatePendingChange(auth.PendingChange{UserID: "requester", Username: "member", Action: "create", ResourceKind: "PowerPolicy", ResourceNamespace: "aura-system", ResourceName: "finalize-window", Payload: mustJSON(t, pendingPolicyPayload("finalize-window", v1alpha1.PowerPolicySpec{}))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := requestContract(t, server.Handler(), "POST", "/api/v1/pending/"+pending.ID+"/approve", f.token(t, auth.RoleApprover), nil)
+	if response.Code != 500 {
+		t.Fatalf("finalize failure returned %d: %s", response.Code, response.Body.String())
+	}
+	got, _ := f.store.GetPendingChange(pending.ID)
+	if got.Status != "approving" {
+		t.Fatalf("finalize failure made applied mutation reversible: %+v", got)
+	}
+	if rejected := requestContract(t, server.Handler(), "POST", "/api/v1/pending/"+pending.ID+"/reject", f.token(t, auth.RoleAdmin), nil); rejected.Code != 409 {
+		t.Fatalf("applied approval was reversed after finalize failure: %d %s", rejected.Code, rejected.Body.String())
+	}
+}
+
+func TestApprovalReplayPreservesOriginalDecisionOwner(t *testing.T) {
+	f := newContractFixture(t)
+	original, err := f.store.CreateUser("original-reviewer", "password", auth.RoleApprover)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retrying, err := f.store.CreateUser("retrying-reviewer", "password", auth.RoleApprover)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, err := f.store.CreatePendingChange(auth.PendingChange{
+		UserID: "requester", Username: "member", Action: "create", ResourceKind: "PowerPolicy",
+		ResourceNamespace: "aura-system", ResourceName: "owned-replay", Payload: mustJSON(t, pendingPolicyPayload("owned-replay", v1alpha1.PowerPolicySpec{})),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	change, err := f.store.BeginPendingDecision(pending.ID, original.ID, "approve")
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := NewAuthHandlers(f.store, f.jwt, f.client)
+	if err := handler.applyPendingChange(context.Background(), change); err != nil {
+		t.Fatal(err)
+	}
+	if err := handler.recordApprovalDecision(context.Background(), change, original, true); err != nil {
+		t.Fatal(err)
+	}
+
+	owner := handler.decisionOwner(change, retrying)
+	if owner.ID != original.ID || owner.Username != original.Username {
+		t.Fatalf("retry changed durable decision owner: %+v", owner)
+	}
+	if err := handler.applyPendingChange(context.Background(), change); err != nil {
+		t.Fatalf("applied mutation was not replayable: %v", err)
+	}
+	if err := handler.recordApprovalDecision(context.Background(), change, owner, true); err != nil {
+		t.Fatalf("durable audit was not replayable: %v", err)
+	}
+	finalized, err := f.store.FinalizePendingDecision(change.ID, owner.ID, "approve")
+	if err != nil || finalized.Status != "approved" || finalized.ReviewedBy != original.ID {
+		t.Fatalf("replay did not finalize original decision: %+v %v", finalized, err)
 	}
 }
 

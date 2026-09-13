@@ -247,21 +247,19 @@ func (s *SQLiteStore) BeginPendingDecision(id, reviewerID, decision string) (*Pe
 	}
 	now := time.Now()
 	leaseExpiredBefore := now.Add(-5 * time.Minute)
-	result, err := s.db.Exec(`UPDATE pending_changes SET status = ?, reviewed_by = ?, reviewed_at = ?
-		WHERE id = ? AND (status = 'pending' OR (status IN ('approving', 'rejecting') AND reviewed_at < ?))`, interim, reviewerID, now, id, leaseExpiredBefore)
+	result, err := s.db.Exec(`UPDATE pending_changes SET status = ?,
+		reviewed_by = CASE WHEN status = 'pending' THEN ? ELSE reviewed_by END,
+		reviewed_at = ?
+		WHERE id = ? AND (status = 'pending' OR (status = ? AND reviewed_at < ?))`, interim, reviewerID, now, id, interim, leaseExpiredBefore)
 	if err != nil {
 		return nil, err
 	}
 	rows, _ := result.RowsAffected()
 	if rows == 0 {
-		change, getErr := s.GetPendingChange(id)
-		if getErr != nil {
+		if _, getErr := s.GetPendingChange(id); getErr != nil {
 			return nil, getErr
 		}
-		if change.Status != interim || change.ReviewedBy != reviewerID {
-			return nil, ErrPendingDecisionConflict
-		}
-		return change, nil
+		return nil, ErrPendingDecisionConflict
 	}
 	return s.GetPendingChange(id)
 }

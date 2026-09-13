@@ -57,6 +57,7 @@ Complete reference for all environment variables and Helm values.
 | `controller.config.reconciliationInterval` | `RECONCILIATION_INTERVAL` | Controller |
 | `controller.config.discoveryInterval` | `DISCOVERY_INTERVAL` | Controller |
 | `controller.config.goMemLimit` | `GOMEMLIMIT` | Controller |
+| `controller.config.pprofBindAddress` | `PPROF_BIND_ADDRESS` | Controller; disabled by default and restricted to loopback |
 
 ## Annotations
 

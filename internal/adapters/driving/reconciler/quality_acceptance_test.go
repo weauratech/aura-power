@@ -189,6 +189,246 @@ func TestAcceptanceActionIntentMustPersistBeforeMutation(t *testing.T) {
 	}
 }
 
+func TestAcceptanceMutationSuccessRequiresDurableCompletionCheckpoint(t *testing.T) {
+	for _, desired := range []domain.PowerState{domain.PowerStateOff, domain.PowerStateOn} {
+		t.Run(string(desired), func(t *testing.T) {
+			s := runtime.NewScheme()
+			if err := v1alpha1.AddToScheme(s); err != nil {
+				t.Fatal(err)
+			}
+			replicas := int32(2)
+			observed := v1alpha1.ObservedStateSpec{Replicas: 2, PowerState: "on"}
+			status := v1alpha1.PowerTargetStatus{ObservedState: observed, Snapshot: &v1alpha1.SnapshotSpec{Available: true, ReplicaCount: &replicas}}
+			if desired == domain.PowerStateOn {
+				status.ObservedState = v1alpha1.ObservedStateSpec{Replicas: 0, PowerState: "off"}
+			}
+			target := &v1alpha1.PowerTarget{ObjectMeta: metav1.ObjectMeta{Name: "checkpoint", Namespace: "aura-system"}, Spec: v1alpha1.PowerTargetSpec{TargetRef: v1alpha1.TargetReference{Namespace: "fixtures", Name: "api", Kind: "Deployment", UID: "uid-api"}}, Status: status}
+			policy := &v1alpha1.PowerPolicy{ObjectMeta: metav1.ObjectMeta{Name: "rule", Namespace: "aura-system"}, Spec: v1alpha1.PowerPolicySpec{Scope: v1alpha1.PolicyScope{Namespaces: []string{"fixtures"}}, Schedule: v1alpha1.PolicySchedule{DesiredState: string(desired)}}}
+			base := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&v1alpha1.PowerTarget{}).WithObjects(target, policy).Build()
+			wrapped := &statusFailingOnCallClient{Client: base, failOn: 2}
+			executor := &countingExecutor{}
+			metrics := &recordingMetrics{}
+			audit := &recordingAudit{}
+			r := TargetReconciler{Client: wrapped, Config: domain.DefaultGuardrailConfig(), Executor: executor, Audit: audit, Metrics: metrics}
+			if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(target)}); err != nil {
+				t.Fatal(err)
+			}
+			if executor.calls+executor.restores != 1 {
+				t.Fatalf("mutation was not executed exactly once: powerDown=%d restore=%d", executor.calls, executor.restores)
+			}
+			if metrics.successes != 0 || metrics.failures != 1 {
+				t.Fatalf("checkpoint failure reported as success: %+v", metrics)
+			}
+			for _, event := range audit.events {
+				if event.Result == "success" {
+					t.Fatalf("checkpoint failure emitted success audit: %+v", event)
+				}
+			}
+			var persisted v1alpha1.PowerTarget
+			if err := base.Get(context.Background(), client.ObjectKeyFromObject(target), &persisted); err != nil {
+				t.Fatal(err)
+			}
+			if persisted.Status.Action == nil || persisted.Status.Action.Phase != "InProgress" {
+				t.Fatalf("durable recovery intent was lost: %+v", persisted.Status.Action)
+			}
+
+			// Simulate discovery after a controller crash: the workload mutation
+			// converged, while the completion status write above was lost. Recovery
+			// must checkpoint and audit that outcome without issuing the mutation a
+			// second time.
+			if desired == domain.PowerStateOff {
+				persisted.Status.ObservedState = v1alpha1.ObservedStateSpec{Replicas: 0, PowerState: "off"}
+			} else {
+				persisted.Status.ObservedState = v1alpha1.ObservedStateSpec{Replicas: replicas, PowerState: "on"}
+			}
+			if err := base.Status().Update(context.Background(), &persisted); err != nil {
+				t.Fatal(err)
+			}
+			request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(target)}
+			if _, err := r.Reconcile(context.Background(), request); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := r.Reconcile(context.Background(), request); err != nil {
+				t.Fatal(err)
+			}
+			successAudits := 0
+			for _, event := range audit.events {
+				if event.Result == "success" {
+					successAudits++
+				}
+			}
+			if executor.calls+executor.restores != 1 || successAudits != 1 || metrics.successes != 1 {
+				t.Fatalf("crash recovery repeated mutation or lost/duplicated success: powerDown=%d restore=%d successAudits=%d allAudits=%d metrics=%+v", executor.calls, executor.restores, successAudits, len(audit.events), metrics)
+			}
+			if err := base.Get(context.Background(), client.ObjectKeyFromObject(target), &persisted); err != nil {
+				t.Fatal(err)
+			}
+			if persisted.Status.Action == nil || persisted.Status.Action.AuditPhase != "Recorded" {
+				t.Fatalf("recovered audit checkpoint was not durable: %+v", persisted.Status.Action)
+			}
+		})
+	}
+}
+
+func TestAcceptanceRestoreKeepsSnapshotUntilRunningStateIsObserved(t *testing.T) {
+	s := runtime.NewScheme()
+	if err := v1alpha1.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+	replicas := int32(2)
+	target := &v1alpha1.PowerTarget{
+		ObjectMeta: metav1.ObjectMeta{Name: "restore-checkpoint", Namespace: "aura-system"},
+		Spec:       v1alpha1.PowerTargetSpec{TargetRef: v1alpha1.TargetReference{Namespace: "fixtures", Name: "api", Kind: "Deployment", UID: "uid-api"}},
+		Status: v1alpha1.PowerTargetStatus{
+			ObservedState: v1alpha1.ObservedStateSpec{Replicas: 0, PowerState: "off"},
+			Snapshot:      &v1alpha1.SnapshotSpec{Available: true, ReplicaCount: &replicas},
+		},
+	}
+	policy := &v1alpha1.PowerPolicy{ObjectMeta: metav1.ObjectMeta{Name: "restore", Namespace: "aura-system"}, Spec: v1alpha1.PowerPolicySpec{Scope: v1alpha1.PolicyScope{Namespaces: []string{"fixtures"}}, Schedule: v1alpha1.PolicySchedule{DesiredState: "on"}}}
+	c := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&v1alpha1.PowerTarget{}).WithObjects(target, policy).Build()
+	executor := &countingExecutor{}
+	r := TargetReconciler{Client: c, Config: domain.DefaultGuardrailConfig(), Executor: executor, Audit: noopAudit{}, Metrics: noopMetrics{}}
+	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(target)}
+	if _, err := r.Reconcile(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	var persisted v1alpha1.PowerTarget
+	if err := c.Get(context.Background(), request.NamespacedName, &persisted); err != nil {
+		t.Fatal(err)
+	}
+	if executor.restores != 1 || persisted.Status.Snapshot == nil || persisted.Status.Snapshot.ReplicaCount == nil || *persisted.Status.Snapshot.ReplicaCount != replicas {
+		t.Fatalf("restore checkpoint discarded recovery evidence before observation: restores=%d status=%+v", executor.restores, persisted.Status)
+	}
+	if persisted.Status.Action == nil || persisted.Status.Action.Phase != "Applied" {
+		t.Fatalf("restore acceptance checkpoint missing: %+v", persisted.Status.Action)
+	}
+
+	// Discovery confirms convergence; only this observation may retire the
+	// recovery snapshot.
+	persisted.Status.ObservedState = v1alpha1.ObservedStateSpec{Replicas: replicas, PowerState: "on"}
+	if err := c.Status().Update(context.Background(), &persisted); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Reconcile(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(context.Background(), request.NamespacedName, &persisted); err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Status.Snapshot != nil || persisted.Status.Action == nil || persisted.Status.Action.Phase != "Converged" {
+		t.Fatalf("snapshot was not retired after observed convergence: %+v", persisted.Status)
+	}
+}
+
+func TestAcceptanceAuditFailureRetriesWithoutRepeatingMutation(t *testing.T) {
+	s := runtime.NewScheme()
+	if err := v1alpha1.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+	replicas := int32(2)
+	target := &v1alpha1.PowerTarget{
+		ObjectMeta: metav1.ObjectMeta{Name: "audit-retry", Namespace: "aura-system"},
+		Spec:       v1alpha1.PowerTargetSpec{TargetRef: v1alpha1.TargetReference{APIVersion: "apps/v1", Namespace: "fixtures", Name: "api", Kind: "Deployment", UID: "uid-api"}},
+		Status: v1alpha1.PowerTargetStatus{
+			ObservedState: v1alpha1.ObservedStateSpec{Replicas: 0, PowerState: "off"},
+			Snapshot:      &v1alpha1.SnapshotSpec{Available: true, ReplicaCount: &replicas},
+		},
+	}
+	policy := &v1alpha1.PowerPolicy{ObjectMeta: metav1.ObjectMeta{Name: "restore-rule", Namespace: "aura-system"}, Spec: v1alpha1.PowerPolicySpec{Scope: v1alpha1.PolicyScope{Namespaces: []string{"fixtures"}}, Schedule: v1alpha1.PolicySchedule{DesiredState: "on"}}}
+	c := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&v1alpha1.PowerTarget{}).WithObjects(target, policy).Build()
+	executor := &countingExecutor{}
+	audit := &failOnceAudit{failuresRemaining: 1}
+	metrics := &recordingMetrics{}
+	r := TargetReconciler{Client: c, Config: domain.DefaultGuardrailConfig(), Executor: executor, Audit: audit, Metrics: metrics}
+	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(target)}
+
+	if _, err := r.Reconcile(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	var pending v1alpha1.PowerTarget
+	if err := c.Get(context.Background(), request.NamespacedName, &pending); err != nil {
+		t.Fatal(err)
+	}
+	if executor.restores != 1 || len(audit.events) != 0 || metrics.successes != 0 {
+		t.Fatalf("audit failure produced false success or wrong mutation count: restores=%d audits=%d metrics=%+v", executor.restores, len(audit.events), metrics)
+	}
+	if pending.Status.Action == nil || pending.Status.Action.Phase != "Applied" || pending.Status.Action.AuditPhase != "Pending" || pending.Status.Action.AuditEventID == "" {
+		t.Fatalf("pending audit checkpoint was not durable: %+v", pending.Status.Action)
+	}
+
+	if _, err := r.Reconcile(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	var recorded v1alpha1.PowerTarget
+	if err := c.Get(context.Background(), request.NamespacedName, &recorded); err != nil {
+		t.Fatal(err)
+	}
+	if executor.restores != 1 || len(audit.events) != 1 || metrics.successes != 1 {
+		t.Fatalf("audit retry repeated mutation or missed success: restores=%d audits=%d metrics=%+v", executor.restores, len(audit.events), metrics)
+	}
+	event := audit.events[0]
+	if event.ID != pending.Status.Action.AuditEventID || event.Action != ports.AuditWorkloadRestored || event.Actor != "system/controller" || event.RuleName != "restore-rule" || event.Target.UID != "uid-api" {
+		t.Fatalf("retried audit lost accepted semantics: %+v", event)
+	}
+	if recorded.Status.Action == nil || recorded.Status.Action.AuditPhase != "Recorded" {
+		t.Fatalf("recorded audit checkpoint was not persisted: %+v", recorded.Status.Action)
+	}
+	if _, err := r.Reconcile(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if executor.restores != 1 || len(audit.events) != 1 || metrics.successes != 1 {
+		t.Fatalf("recorded audit was repeated: restores=%d audits=%d metrics=%+v", executor.restores, len(audit.events), metrics)
+	}
+}
+
+func TestAcceptanceAuditCheckpointFailureDoesNotDuplicateSideEffects(t *testing.T) {
+	s := runtime.NewScheme()
+	if err := v1alpha1.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+	replicas := int32(2)
+	target := &v1alpha1.PowerTarget{
+		ObjectMeta: metav1.ObjectMeta{Name: "audit-checkpoint-retry", Namespace: "aura-system"},
+		Spec:       v1alpha1.PowerTargetSpec{TargetRef: v1alpha1.TargetReference{APIVersion: "apps/v1", Namespace: "fixtures", Name: "api", Kind: "Deployment", UID: "uid-api"}},
+		Status: v1alpha1.PowerTargetStatus{
+			ObservedState: v1alpha1.ObservedStateSpec{Replicas: 0, PowerState: "off"},
+			Snapshot:      &v1alpha1.SnapshotSpec{Available: true, ReplicaCount: &replicas},
+		},
+	}
+	policy := &v1alpha1.PowerPolicy{ObjectMeta: metav1.ObjectMeta{Name: "restore-rule", Namespace: "aura-system"}, Spec: v1alpha1.PowerPolicySpec{Scope: v1alpha1.PolicyScope{Namespaces: []string{"fixtures"}}, Schedule: v1alpha1.PolicySchedule{DesiredState: "on"}}}
+	base := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&v1alpha1.PowerTarget{}).WithObjects(target, policy).Build()
+	wrapped := &statusFailingOnCallClient{Client: base, failOn: 3}
+	executor := &countingExecutor{}
+	audit := &idempotentRecordingAudit{events: make(map[string]ports.AuditEvent)}
+	metrics := &recordingMetrics{}
+	r := TargetReconciler{Client: wrapped, Config: domain.DefaultGuardrailConfig(), Executor: executor, Audit: audit, Metrics: metrics}
+	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(target)}
+
+	if _, err := r.Reconcile(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if executor.restores != 1 || audit.calls != 1 || len(audit.events) != 1 || metrics.successes != 0 {
+		t.Fatalf("failed recorded checkpoint leaked side effects: restores=%d calls=%d events=%d metrics=%+v", executor.restores, audit.calls, len(audit.events), metrics)
+	}
+	var persisted v1alpha1.PowerTarget
+	if err := base.Get(context.Background(), request.NamespacedName, &persisted); err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Status.Action == nil || persisted.Status.Action.AuditPhase != "Pending" {
+		t.Fatalf("failed recorded checkpoint did not remain retryable: %+v", persisted.Status.Action)
+	}
+
+	if _, err := r.Reconcile(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Reconcile(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if executor.restores != 1 || audit.calls != 2 || len(audit.events) != 1 || metrics.successes != 1 {
+		t.Fatalf("checkpoint retry duplicated mutation, audit event, or metric: restores=%d calls=%d events=%d metrics=%+v", executor.restores, audit.calls, len(audit.events), metrics)
+	}
+}
+
 func TestAcceptanceArgoRestoredLiveStateIsNotOverwrittenByStaleSnapshot(t *testing.T) {
 	s := runtime.NewScheme()
 	if err := v1alpha1.AddToScheme(s); err != nil {
@@ -341,6 +581,44 @@ func (failingStatusWriter) Patch(context.Context, client.Object, client.Patch, .
 	return errors.New("injected status failure")
 }
 
+type statusFailingOnCallClient struct {
+	client.Client
+	calls  int
+	failOn int
+}
+
+func (c *statusFailingOnCallClient) Status() client.SubResourceWriter {
+	return &statusFailingOnCallWriter{delegate: c.Client.Status(), parent: c}
+}
+
+type statusFailingOnCallWriter struct {
+	delegate client.SubResourceWriter
+	parent   *statusFailingOnCallClient
+}
+
+func (w *statusFailingOnCallWriter) shouldFail() bool {
+	w.parent.calls++
+	return w.parent.calls == w.parent.failOn
+}
+func (w *statusFailingOnCallWriter) Create(ctx context.Context, obj, sub client.Object, opts ...client.SubResourceCreateOption) error {
+	if w.shouldFail() {
+		return errors.New("injected post-mutation status failure")
+	}
+	return w.delegate.Create(ctx, obj, sub, opts...)
+}
+func (w *statusFailingOnCallWriter) Update(ctx context.Context, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+	if w.shouldFail() {
+		return errors.New("injected post-mutation status failure")
+	}
+	return w.delegate.Update(ctx, obj, opts...)
+}
+func (w *statusFailingOnCallWriter) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+	if w.shouldFail() {
+		return errors.New("injected post-mutation status failure")
+	}
+	return w.delegate.Patch(ctx, obj, patch, opts...)
+}
+
 type countingExecutor struct {
 	calls    int
 	restores int
@@ -381,3 +659,62 @@ type noopMetrics struct{}
 func (noopMetrics) RecordReconciliation(time.Duration, error)             {}
 func (noopMetrics) RecordAction(ports.ActionType, string, bool)           {}
 func (noopMetrics) SetGauge(ports.MetricName, float64, map[string]string) {}
+
+type recordingMetrics struct{ successes, failures int }
+
+func (*recordingMetrics) RecordReconciliation(time.Duration, error) {}
+func (m *recordingMetrics) RecordAction(_ ports.ActionType, _ string, success bool) {
+	if success {
+		m.successes++
+	} else {
+		m.failures++
+	}
+}
+func (*recordingMetrics) SetGauge(ports.MetricName, float64, map[string]string) {}
+
+type recordingAudit struct{ events []ports.AuditEvent }
+
+func (a *recordingAudit) Record(_ context.Context, event ports.AuditEvent) error {
+	a.events = append(a.events, event)
+	return nil
+}
+func (*recordingAudit) List(context.Context, ports.AuditListOptions) ([]ports.AuditEvent, error) {
+	return nil, nil
+}
+
+type failOnceAudit struct {
+	failuresRemaining int
+	events            []ports.AuditEvent
+}
+
+func (a *failOnceAudit) Record(_ context.Context, event ports.AuditEvent) error {
+	if a.failuresRemaining > 0 {
+		a.failuresRemaining--
+		return errors.New("injected audit persistence failure")
+	}
+	a.events = append(a.events, event)
+	return nil
+}
+func (*failOnceAudit) List(context.Context, ports.AuditListOptions) ([]ports.AuditEvent, error) {
+	return nil, nil
+}
+
+type idempotentRecordingAudit struct {
+	calls  int
+	events map[string]ports.AuditEvent
+}
+
+func (a *idempotentRecordingAudit) Record(_ context.Context, event ports.AuditEvent) error {
+	a.calls++
+	if existing, ok := a.events[event.ID]; ok {
+		if existing.Action != event.Action || existing.Result != event.Result || existing.RuleName != event.RuleName || existing.Target != event.Target {
+			return errors.New("same audit ID has different semantics")
+		}
+		return nil
+	}
+	a.events[event.ID] = event
+	return nil
+}
+func (*idempotentRecordingAudit) List(context.Context, ports.AuditListOptions) ([]ports.AuditEvent, error) {
+	return nil, nil
+}

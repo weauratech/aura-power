@@ -64,6 +64,8 @@ helm install aura-power oci://ghcr.io/weauratech/charts/aura-power \
 | `controller.config.reconciliationInterval` | Target reconcile interval | `30s` |
 | `controller.config.discoveryInterval` | Workload discovery interval | `60s` |
 | `controller.config.auditRetentionDays` | Days to retain audit events | `7` |
+| `controller.config.goMemLimit` | Go runtime soft memory limit, kept below the pod limit | `192MiB` |
+| `controller.config.pprofBindAddress` | Optional loopback-only pprof listener for authorized diagnostics | `""` |
 | `controller.config.systemNamespaceBlocklist` | Namespaces blocked by guardrails | `[kube-system, kube-public, kube-node-lease]` |
 
 ### Admission validation
@@ -116,6 +118,10 @@ self-signed fallback produces different certificate material in a fresh render.
 | `serviceMonitor.enabled` | Create Prometheus ServiceMonitor | `false` |
 | `serviceMonitor.interval` | Scrape interval | `30s` |
 | `serviceMonitor.namespace` | Namespace in which to create ServiceMonitors | `""` |
+| `prometheusRule.enabled` | Create controller heap, working-set and OOM alerts | `false` |
+| `prometheusRule.heapLimitRatio` | Heap/GOMEMLIMIT warning ratio | `0.85` |
+| `prometheusRule.workingSetLimitRatio` | Container working-set/limit warning ratio | `0.85` |
+| `prometheusRule.for` | Required sustained pressure before warning | `10m` |
 | `networkPolicy.enabled` | Create NetworkPolicies | `false` |
 | `networkPolicy.additionalServerEgressPorts` | Extra TCP egress ports for providers/webhooks | `[]` |
 

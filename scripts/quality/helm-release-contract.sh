@@ -7,27 +7,27 @@ cd "$repo_root"
 for crd in powerpolicies poweroverrides; do
   chart="charts/aura-power/crds/${crd}.yaml"
   config="config/crd/bases/power.aura.sh_${crd}.yaml"
-  rg -q 'namespaceGroups:' "$chart"
-  rg -q 'namespaceGroups:' "$config"
+  grep -q 'namespaceGroups:' "$chart"
+  grep -q 'namespaceGroups:' "$config"
 done
 
 # Chart.appVersion omits the conventional Git tag prefix. The release workflow
 # must publish and sign the same unprefixed image tag used by Helm defaults.
-rg -q 'VERSION="?\$\{TAG#v\}"?' .github/workflows/release.yaml
-rg -q 'IMAGE_SERVER.*\$\{VERSION\}' .github/workflows/release.yaml
-rg -q 'IMAGE_CONTROLLER.*\$\{VERSION\}' .github/workflows/release.yaml
-rg -q 'run: make quality quality-acceptance quality-load' .github/workflows/release.yaml
-rg -U -q 'kind-acceptance:[\s\S]*needs: validate' .github/workflows/release.yaml
+grep -Eq 'VERSION="?\$\{TAG#v\}"?' .github/workflows/release.yaml
+grep -Eq 'IMAGE_SERVER.*\$\{VERSION\}' .github/workflows/release.yaml
+grep -Eq 'IMAGE_CONTROLLER.*\$\{VERSION\}' .github/workflows/release.yaml
+grep -q 'run: make quality quality-acceptance quality-envtest quality-load' .github/workflows/release.yaml
+perl -0ne 'exit(!/kind-acceptance:.*needs: validate/s)' .github/workflows/release.yaml
 [[ "$(grep -c 'needs: kind-acceptance' .github/workflows/release.yaml)" -eq 2 ]]
-rg -U -q 'goreleaser:[\s\S]*needs: sign' .github/workflows/release.yaml
-rg -U -q 'helm:[\s\S]*needs: \[sign, goreleaser\]' .github/workflows/release.yaml
-rg -U -q 'promote-latest:[\s\S]*needs: helm' .github/workflows/release.yaml
-if sed -n '/docker-manifest:/,/^  sign:/p' .github/workflows/release.yaml | rg -q ':latest'; then
+perl -0ne 'exit(!/goreleaser:.*needs: sign/s)' .github/workflows/release.yaml
+perl -0ne 'exit(!/helm:.*needs: \[sign, goreleaser\]/s)' .github/workflows/release.yaml
+perl -0ne 'exit(!/promote-latest:.*needs: helm/s)' .github/workflows/release.yaml
+if sed -n '/docker-manifest:/,/^  sign:/p' .github/workflows/release.yaml | grep -q ':latest'; then
   echo "mutable latest must not be published before signing and artifact release" >&2
   exit 1
 fi
-rg -q 'cosign sign --yes.*@\$\{SERVER_DIGEST\}' .github/workflows/release.yaml
-rg -q 'cosign sign --yes.*@\$\{CONTROLLER_DIGEST\}' .github/workflows/release.yaml
+grep -Eq 'cosign sign --yes.*@\$\{SERVER_DIGEST\}' .github/workflows/release.yaml
+grep -Eq 'cosign sign --yes.*@\$\{CONTROLLER_DIGEST\}' .github/workflows/release.yaml
 
 default_render="$(mktemp)"
 ephemeral_render="$(mktemp)"
@@ -38,18 +38,18 @@ helm template aura-power charts/aura-power >"$default_render"
 helm template aura-power charts/aura-power --set server.persistence.enabled=false >"$ephemeral_render"
 helm template aura-power charts/aura-power --set server.auth.existingSecret=managed-auth >"$external_secret_render"
 
-rg -q 'name: ACCESS_TOKEN_TTL' "$default_render"
-rg -q 'name: REFRESH_TOKEN_TTL' "$default_render"
-rg -q 'name: CONTROL_NAMESPACE' "$default_render"
-rg -q 'name: LEADER_ELECTION_ENABLED' "$default_render"
-rg -q 'name: SYSTEM_NAMESPACES' "$default_render"
-rg -U -q 'name: data\n[[:space:]]+emptyDir:' "$ephemeral_render"
-if rg -q '# Source: aura-power/templates/server-secret.yaml' "$external_secret_render"; then
+grep -q 'name: ACCESS_TOKEN_TTL' "$default_render"
+grep -q 'name: REFRESH_TOKEN_TTL' "$default_render"
+grep -q 'name: CONTROL_NAMESPACE' "$default_render"
+grep -q 'name: LEADER_ELECTION_ENABLED' "$default_render"
+grep -q 'name: SYSTEM_NAMESPACES' "$default_render"
+perl -0ne 'exit(!/name: data\n\s+emptyDir:/s)' "$ephemeral_render"
+if grep -q '# Source: aura-power/templates/server-secret.yaml' "$external_secret_render"; then
   echo "server.auth.existingSecret unexpectedly rendered a managed Secret" >&2
   exit 1
 fi
-rg -U -q 'name: managed-auth\n[[:space:]]+key: jwt-secret' "$external_secret_render"
-rg -U -q 'name: managed-auth\n[[:space:]]+key: admin-password' "$external_secret_render"
+perl -0ne 'exit(!/name: managed-auth\n\s+key: jwt-secret/s)' "$external_secret_render"
+perl -0ne 'exit(!/name: managed-auth\n\s+key: admin-password/s)' "$external_secret_render"
 
 if helm template aura-power charts/aura-power --set server.replicas=2 >/dev/null 2>&1; then
   echo "server.replicas=2 must be rejected while SQLite is pod-local" >&2
@@ -71,6 +71,22 @@ grep -q 'port: 8088' <<<"$controller_network_render"
 server_network_render="$(helm template aura-power charts/aura-power --set networkPolicy.enabled=true --set controller.enabled=false --set 'networkPolicy.additionalControllerEgressPorts[0]=8088')"
 if grep -q 'port: 8088' <<<"$server_network_render"; then
   echo "controller notification egress leaked into the server NetworkPolicy" >&2
+  exit 1
+fi
+
+memory_render="$(helm template aura-power charts/aura-power --set serviceMonitor.enabled=true --set prometheusRule.enabled=true --set controller.config.pprofBindAddress=127.0.0.1:6060)"
+grep -q 'name: PPROF_BIND_ADDRESS' <<<"$memory_render"
+grep -q 'value: "127.0.0.1:6060"' <<<"$memory_render"
+grep -q '^kind: PrometheusRule$' <<<"$memory_render"
+grep -q 'alert: AuraPowerControllerHeapNearLimit' <<<"$memory_render"
+grep -q 'alert: AuraPowerControllerWorkingSetNearLimit' <<<"$memory_render"
+grep -q 'alert: AuraPowerControllerOOMKilled' <<<"$memory_render"
+if helm template aura-power charts/aura-power --set prometheusRule.enabled=true >/dev/null 2>&1; then
+  echo "prometheusRule requires serviceMonitor so controller metrics are scraped" >&2
+  exit 1
+fi
+if helm template aura-power charts/aura-power --set controller.config.pprofBindAddress=0.0.0.0:6060 >/dev/null 2>&1; then
+  echo "non-loopback pprof address must be rejected" >&2
   exit 1
 fi
 

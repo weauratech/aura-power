@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: manual-deployment
+  namespace: __NAMESPACE__
+  annotations:
+    aura.sh/power-eligible: "true"
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app: manual-deployment}
+  template:
+    metadata:
+      labels: {app: manual-deployment}
+    spec:
+      containers:
+        - name: pause
+          image: registry.k8s.io/pause:3.10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: manual-statefulset
+  namespace: __NAMESPACE__
+spec:
+  clusterIP: None
+  selector: {app: manual-statefulset}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: manual-statefulset
+  namespace: __NAMESPACE__
+  annotations:
+    aura.sh/power-eligible: "true"
+spec:
+  serviceName: manual-statefulset
+  replicas: 1
+  selector:
+    matchLabels: {app: manual-statefulset}
+  template:
+    metadata:
+      labels: {app: manual-statefulset}
+    spec:
+      containers:
+        - name: pause
+          image: registry.k8s.io/pause:3.10
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: manual-cronjob
+  namespace: __NAMESPACE__
+  annotations:
+    aura.sh/power-eligible: "true"
+spec:
+  schedule: "0 0 31 2 *"
+  suspend: false
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: pause
+              image: registry.k8s.io/pause:3.10

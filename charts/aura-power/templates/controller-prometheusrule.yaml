@@ -1,0 +1,50 @@
+{{- $prometheusRule := .Values.prometheusRule | default dict -}}
+{{- if and ($prometheusRule.enabled | default false) .Values.controller.enabled }}
+{{- if not .Values.serviceMonitor.enabled }}
+{{- fail "prometheusRule.enabled requires serviceMonitor.enabled so controller memory metrics are scraped" }}
+{{- end }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "aura-power.controller.fullname" . }}-memory
+  {{- if .Values.serviceMonitor.namespace }}
+  namespace: {{ .Values.serviceMonitor.namespace }}
+  {{- end }}
+  labels:
+    {{- include "aura-power.labels" . | nindent 4 }}
+    {{- with $prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: aura-power.controller-memory
+      rules:
+        - alert: AuraPowerControllerHeapNearLimit
+          expr: aura_power_process_heap_alloc_bytes / aura_power_process_memory_limit_bytes > {{ $prometheusRule.heapLimitRatio }}
+          for: {{ $prometheusRule.for }}
+          labels:
+            severity: warning
+          annotations:
+            summary: Aura Power controller heap is near its configured Go memory limit
+            description: The live heap has exceeded the configured fraction of GOMEMLIMIT.
+        - alert: AuraPowerControllerWorkingSetNearLimit
+          expr: |
+            container_memory_working_set_bytes{namespace="{{ .Release.Namespace }}",container="controller",pod=~"{{ include "aura-power.controller.fullname" . }}-.*"}
+              / on(namespace,pod,container) kube_pod_container_resource_limits{namespace="{{ .Release.Namespace }}",container="controller",resource="memory",unit="byte"}
+              > {{ $prometheusRule.workingSetLimitRatio }}
+          for: {{ $prometheusRule.for }}
+          labels:
+            severity: warning
+          annotations:
+            summary: Aura Power controller working set is near its pod memory limit
+            description: The container working set has exceeded the configured fraction of its Kubernetes memory limit.
+        - alert: AuraPowerControllerOOMKilled
+          expr: |
+            increase(kube_pod_container_status_restarts_total{namespace="{{ .Release.Namespace }}",container="controller"}[15m]) > 0
+              and on(namespace,pod,container) kube_pod_container_status_last_terminated_reason{namespace="{{ .Release.Namespace }}",container="controller",reason="OOMKilled"} == 1
+          labels:
+            severity: critical
+          annotations:
+            summary: Aura Power controller restarted after an OOM kill
+            description: Investigate the heap profile and workload cardinality before raising the memory limit.
+{{- end }}

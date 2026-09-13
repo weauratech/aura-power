@@ -158,6 +158,26 @@ for `spec.suspend`. The same rule applies when restoring an originally suspended
 CronJob: Git must also declare the intended baseline or it can overwrite the
 restored value.
 
+### Reproducing the native compatibility gate
+
+`scripts/quality/kind-argocd-journey.sh` runs the supported contract against a
+disposable Kind cluster. The runner installs Argo CD v2.14.20 from a manifest
+with a pinned SHA-256, serves a two-revision Git fixture inside the cluster and
+tests manual sync, automated self-heal, `ignoreDifferences` with and without
+`RespectIgnoreDifferences=true`, and an ApplicationSet-generated Application.
+The workload matrix contains a Deployment, StatefulSet and CronJob. The CronJob
+case retains an existing Job, observes a schedule while suspended and verifies
+catch-up after resume.
+
+```bash
+export KUBECONFIG=/path/to/aura-power-quality.kubeconfig
+./scripts/quality/kind-argocd-journey.sh
+```
+
+The runner refuses any context other than `kind-aura-power-quality` by default,
+uses run-scoped names and labels, and verifies cleanup. `KIND_CLUSTER_NAME` may
+name another disposable Kind cluster for an isolated local run.
+
 ## Flux
 
 ### The Problem

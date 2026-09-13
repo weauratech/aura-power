@@ -41,6 +41,17 @@ spec:
                     attemptedAt:
                       format: date-time
                       type: string
+                    auditAction:
+                      type: string
+                    auditEventID:
+                      type: string
+                    auditPhase:
+                      enum:
+                      - Pending
+                      - Recorded
+                      type: string
+                    auditRuleName:
+                      type: string
                     completedAt:
                       format: date-time
                       type: string

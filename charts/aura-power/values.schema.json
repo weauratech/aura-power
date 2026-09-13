@@ -30,7 +30,9 @@
         "config": {
           "type": "object",
           "properties": {
-            "argoTrackingLabelKeys": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }
+            "argoTrackingLabelKeys": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+            "goMemLimit": { "type": "string", "minLength": 1 },
+            "pprofBindAddress": { "type": "string", "pattern": "^$|^(localhost|127\\.0\\.0\\.1|\\[::1\\]):[1-9][0-9]{0,4}$" }
           }
         }
       },
@@ -66,7 +68,22 @@
           "type": "array",
           "items": { "type": "integer", "minimum": 1, "maximum": 65535 },
           "uniqueItems": true
+        },
+        "additionalControllerEgressPorts": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 1, "maximum": 65535 },
+          "uniqueItems": true
         }
+      }
+    },
+    "prometheusRule": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "labels": { "type": "object", "additionalProperties": { "type": "string" } },
+        "heapLimitRatio": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+        "workingSetLimitRatio": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+        "for": { "type": "string", "pattern": "^[1-9][0-9]*(s|m|h|d|w)$" }
       }
     }
   }

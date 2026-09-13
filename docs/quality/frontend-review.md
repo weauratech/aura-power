@@ -36,7 +36,7 @@ AURA_E2E_FIXTURE_NAMESPACE=aura-power-e2e-run-id \
 npm test
 ```
 
-Set `AURA_E2E_ALLOW_MUTATION=true` only for a dedicated fixture environment. Set `AURA_E2E_BROWSERS=all` for Chromium, Firefox, WebKit, and mobile Chromium. Mutating tests create unique names and clean up in `finally` blocks. A failed cleanup fails the test rather than disappearing from the report.
+Set `AURA_E2E_ALLOW_MUTATION=true` only for a dedicated fixture environment and provide `AURA_E2E_KUBECONFIG`; the mutating target journey uses it to prove preconditions, effects, homonym isolation, and restoration directly against Kubernetes. Set `AURA_E2E_BROWSERS=all` for Chromium, Firefox, WebKit, and mobile Chromium. Mutating tests create unique names and clean up in `finally` blocks. A failed cleanup fails the test rather than disappearing from the report.
 
 ## Verified behavior
 
@@ -64,31 +64,31 @@ Security findings and reproductions are intentionally excluded from this public
 artifact. They are retained in restricted evidence storage and must follow the
 coordinated disclosure process in `SECURITY.md`.
 
-### FE-02: notification gateway timeout is presented as an empty configuration (P2)
+### FE-02: notification gateway timeout was presented as an empty configuration (P2, resolved)
 
-The notifications query converts HTTP 504 into `{items: [], count: 0}`. Operators are invited to create a channel even when existing channels could not be loaded. This is a false empty state and can cause duplicate or conflicting configuration.
+The original notifications query converted HTTP 504 into `{items: [], count: 0}`. It now renders the backend failure and does not show the empty-state action.
 
-Reproduction: `web/tests/acceptance/notification-errors.test.tsx`. Expected: visible load failure and no empty-state call to action. Observed: “No notification channels”.
+Original reproduction: `web/tests/acceptance/notification-errors.test.tsx`. Expected: visible load failure and no empty-state call to action. The original implementation showed “No notification channels”; the same contract now passes.
 
-### FE-03: Pending Approvals is a static placeholder (P1 functional gap)
+### FE-03: Pending Approvals was a static placeholder (P1, resolved)
 
-Approver and administrator navigation exposes `/pending`, but `PendingApprovals.tsx` performs no query and always states that there are no requests. There are no approve, reject, refresh, error, or detail states. The navigation promises an operational approval flow that the page cannot perform.
+`PendingApprovals.tsx` now loads pending requests, exposes their payload and revision, handles load/action failures, and provides named approve and reject actions. API, Kind, and browser contracts cover the applied decision and replay protection.
 
-### FE-04: workload selection loses pair identity (P1 with backend/controller scope validation)
+### FE-04: workload selection lost pair identity (P1, resolved)
 
-The drawer displays targets as `namespace/name`, then serializes separate `namespaces[]` and `workloadNames[]` arrays. Selecting `alpha/api` and `beta/worker` yields namespaces `[alpha,beta]` and names `[api,worker]`, which cannot represent the two intended pairs and can become a Cartesian selection. Kind and controller acceptance tests must confirm the resulting mutation set before this is published as a standalone frontend issue.
+The drawer now submits exact `targetRefs` carrying API version, kind, namespace, name, and UID. Controller, Kind, and browser tests verify that a selected Deployment is mutated while a homonym remains unchanged.
 
 ### FE-05: portable installation namespace is hard-coded (P2)
 
 Schedule, override, and notification creation always submit `metadata.namespace: aura-system`. The UI cannot honor a Helm release installed into another control namespace. This combines with the controller/API namespace assumptions and should be triaged as one cross-layer issue.
 
-### FE-06: destructive icon actions can also open edit flows (P2)
+### FE-06: destructive icon actions could also open edit flows (P2, resolved)
 
-Schedule and notification tables attach edit behavior to the entire row while delete buttons do not stop event propagation. Clicking Delete can therefore open the edit drawer underneath the confirmation dialog. The action is confusing for keyboard and pointer users and makes post-delete state harder to understand.
+Delete controls now stop row event propagation, and keyboard activation plus focus behavior have component regression coverage.
 
-### FE-07: icon-only controls lack explicit accessible names (P2 accessibility)
+### FE-07: icon-only controls lacked explicit accessible names (P2, resolved)
 
-Theme toggles, the mobile menu, several close buttons, target schedule icons, and disclosure buttons have no explicit accessible name. Some are wrapped in MUI Tooltip, but several are not; assistive technology and role/name based automation cannot identify their purpose reliably. Add `aria-label` or visible text and verify keyboard focus and announcement in the rendered app.
+Theme, navigation, close, row-action, sign-out, and disclosure controls now have explicit accessible names. Component tests and the real mobile browser journey cover their role/name and focus behavior.
 
 ### FE-08: error behavior is inconsistent between pages (P2)
 
@@ -115,23 +115,20 @@ The bundle contains the full application in one entry chunk. Route-level lazy lo
 | Area | Files reviewed | Main conclusion |
 |---|---|---|
 | Entry and routing | `main.tsx`, `App.tsx`, `ThemeContext.tsx` | Simple composition; authentication/error routing needs an explicit unavailable state and route contract |
-| Shared components | `ConfirmDialog.tsx`, `EmptyState.tsx`, `ErrorBoundary.tsx`, `Layout.tsx`, `Notifications.tsx`, `ScheduleDrawer.tsx` | Strong reusable primitives; accessibility names, event propagation, scope identity, and failure semantics need work |
+| Shared components | `ConfirmDialog.tsx`, `EmptyState.tsx`, `ErrorBoundary.tsx`, `Layout.tsx`, `Notifications.tsx`, `ScheduleDrawer.tsx` | Strong reusable primitives; named controls, event isolation, exact target refs, and notification failures now have regression coverage |
 | HTTP and state | `useApi.ts`, `useAuth.ts`, `useMetrics.ts`, `useProviderStatus.ts` | React Query is a sound base; duplicate transports and inconsistent error handling create inconsistent guarantees |
-| Operational pages | `Dashboard.tsx`, `Targets.tsx`, `NamespaceDetail.tsx`, `TargetDetail.tsx`, `Schedule.tsx`, `Policies.tsx`, `RuleDetail.tsx`, `Overrides.tsx` | Core surfaces exist; exact target identity and execution lifecycle are not preserved end to end |
+| Operational pages | `Dashboard.tsx`, `Targets.tsx`, `NamespaceDetail.tsx`, `TargetDetail.tsx`, `Schedule.tsx`, `Policies.tsx`, `RuleDetail.tsx`, `Overrides.tsx` | Exact target identity is preserved in creation; a shared execution lifecycle remains architectural work |
 | Evidence and integrations | `AuditLog.tsx`, `Notifications.tsx`, `Metrics.tsx`, `Savings.tsx`, `Blocked.tsx` | Useful views; partial dependency failures are often collapsed and audit is not correlated to completion |
-| Administration | `Login.tsx`, `PendingApprovals.tsx`, `Users.tsx` | Login and user CRUD exist; approval UI is not implemented and native dialogs fragment UX |
+| Administration | `Login.tsx`, `PendingApprovals.tsx`, `Users.tsx` | Login, user CRUD, pending review, approve, and reject flows exist; native dialogs still fragment UX |
 | Design system | all files under `design-system/` | Tokens and MUI theme provide a coherent base; interactive components need rendered accessibility validation |
 | Types and errors | `types/index.ts`, `utils/errors.ts` | Central types help, but public contracts need canonical schemas and exhaustive error/status enums |
-| Test/build config | `package.json`, Vite/Vitest/TypeScript files, Playwright package/config/specs | New deterministic layers are usable; lint dependency/config and browser execution against a real server remain required |
+| Test/build config | `package.json`, Vite/Vitest/TypeScript files, Playwright package/config/specs | Deterministic layers and real-server multi-browser execution are release gates; lint dependency/config remains required |
 
 ## Recommended delivery sequence
 
-1. Fix FE-02 with the failing acceptance test as a merge gate; handle restricted security findings through coordinated disclosure.
-2. Define canonical target identity and exact scope semantics across CRDs, API, CLI, and UI; migrate the drawer and routes together.
-3. Either implement approval APIs and UI completely or remove the navigation and claimed capability until ready.
-4. Introduce one typed transport client with explicit unauthenticated, unavailable, validation, forbidden, conflict, and timeout states.
-5. Add accessible names and keyboard tests, then run axe plus manual keyboard, focus, zoom, contrast, and screen-reader checks on the rendered product.
-6. Correlate preview, accepted operation, controller decision, workload effect, audit event, and recovery in the UI.
-7. Add ESLint with React, hooks, accessibility, and TypeScript rules; then measure route chunks and browser performance before optimizing.
+1. Introduce one typed transport client with explicit unauthenticated, unavailable, validation, forbidden, conflict, and timeout states.
+2. Correlate preview, accepted operation, controller decision, workload effect, audit event, and recovery in the UI.
+3. Add ESLint with React, hooks, accessibility, and TypeScript rules; then measure route chunks and browser performance before optimizing.
+4. Keep restricted security findings in the coordinated disclosure process.
 
-The frontend should not be declared functionally complete while FE-02 through FE-04 remain unresolved or while the browser suite has not passed against the same product build validated by the controller and API layers.
+FE-02, FE-03, FE-04, FE-06, and FE-07 are covered by regression contracts, and the browser suite runs against the same Kind candidate used by the controller and API journeys. FE-05, FE-08, and FE-09 remain explicit follow-up findings outside the thirteen remediated issue contracts.

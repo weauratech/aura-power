@@ -7,6 +7,9 @@ if (!process.env.AURA_E2E_FIXTURE_NAMESPACE) {
 }
 
 const mutationEnabled = process.env.AURA_E2E_ALLOW_MUTATION === 'true';
+if (mutationEnabled && !process.env.AURA_E2E_KUBECONFIG) {
+  throw new Error('AURA_E2E_KUBECONFIG is required for mutating journeys so workload effects can be verified independently.');
+}
 const expandedBrowsers = process.env.AURA_E2E_BROWSERS === 'all';
 const authenticatedProjects = expandedBrowsers
   ? [
@@ -24,15 +27,24 @@ export default defineConfig({
   expect: { timeout: 10_000 },
   fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),
-  retries: process.env.CI ? 1 : 0,
+  retries: 0,
   workers: process.env.CI ? 1 : undefined,
   grepInvert: mutationEnabled ? undefined : /@mutation/,
   reporter: [['html', { open: 'never' }], ['junit', { outputFile: 'test-results/junit.xml' }], ['list']],
-  use: { baseURL, trace: 'retain-on-failure', screenshot: 'only-on-failure', video: 'retain-on-failure' },
+  use: {
+    baseURL,
+    trace: 'retain-on-failure',
+    screenshot: 'only-on-failure',
+    video: 'retain-on-failure',
+  },
   projects: [
     { name: 'setup', testMatch: /auth\.setup\.ts/ },
-    { name: 'unauthenticated', testMatch: /auth\.spec\.ts/, use: { ...devices['Desktop Chrome'] } },
-    ...authenticatedProjects.map(project => ({
+    {
+      name: 'unauthenticated',
+      testMatch: /auth\.spec\.ts/,
+      use: { ...devices['Desktop Chrome'] },
+    },
+    ...authenticatedProjects.map((project) => ({
       ...project,
       dependencies: ['setup'],
       testIgnore: [/auth\.setup\.ts/, /auth\.spec\.ts/],

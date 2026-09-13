@@ -10,8 +10,29 @@ import (
 	"time"
 )
 
+func TestHTTPPostDetailedReportsProviderResponseAndRetryCount(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		if requests < 3 {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+
+	result, err := httpPostDetailed(context.Background(), server.URL, map[string]string{"event": "fixture"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.StatusCode != http.StatusAccepted || result.Attempts != 3 {
+		t.Fatalf("provider response correlation=%+v", result)
+	}
+}
+
 func TestGenericSenderContract(t *testing.T) {
-	event := Event{Action: "workload.powered_down", Target: TargetRef{Namespace: "team-a", Name: "api", Kind: "Deployment"}, Result: "success", Reason: "scheduled", RuleName: "nights", Timestamp: time.Unix(1700000000, 0).UTC()}
+	event := Event{Action: "workload.powered_down", Target: TargetRef{Namespace: "team-a", Name: "api", Kind: "Deployment"}, Result: "success", Reason: "scheduled", RuleName: "nights", Timestamp: time.Unix(1700000000, 0).UTC(), AttemptID: "attempt-1", EventIDs: []string{"event-1"}, AuditEventRefs: []string{"aura-system/evt-1"}}
 	var payload map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.Header.Get("Content-Type") != "application/json" {
@@ -32,6 +53,10 @@ func TestGenericSenderContract(t *testing.T) {
 	target := payload["target"].(map[string]any)
 	if target["namespace"] != "team-a" || target["name"] != "api" || target["kind"] != "Deployment" {
 		t.Fatalf("target identity lost: %#v", target)
+	}
+	correlation := payload["correlation"].(map[string]any)
+	if correlation["attemptID"] != "attempt-1" || correlation["eventIDs"].([]any)[0] != "event-1" || correlation["auditEventRefs"].([]any)[0] != "aura-system/evt-1" {
+		t.Fatalf("correlation identity lost: %#v", correlation)
 	}
 }
 

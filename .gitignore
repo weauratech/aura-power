@@ -55,3 +55,5 @@ aidlc-docs/
 
 # TypeScript incremental build state
 *.tsbuildinfo
+# Raw quality-run evidence is uploaded by CI and must not be committed.
+/artifacts/quality/memory-*/

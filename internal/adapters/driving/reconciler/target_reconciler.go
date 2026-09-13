@@ -2,6 +2,7 @@ package reconciler
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"time"
@@ -86,11 +87,17 @@ func (r *TargetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			return ctrl.Result{RequeueAfter: errorRequeueAfter}, nil
 		}
 	}
+	if handled, err := r.reconcilePendingAudit(ctx, &target, domainTarget.Ref, req.String()); err != nil {
+		logger.Error(err, "failed to persist action audit")
+		return ctrl.Result{RequeueAfter: errorRequeueAfter}, nil
+	} else if handled {
+		return ctrl.Result{RequeueAfter: r.requeueAfter()}, nil
+	}
 
 	// 6. Execute action if needed
 	if !decision.IsBlocked() && decision.IsManaged() {
 		observedState := domain.PowerStateFromObserved(domainTarget.ObservedState, domainTarget.Ref.Kind)
-		handled, err := r.reconcileExistingAction(ctx, &target, decision, observedState)
+		handled, err := r.reconcileExistingAction(ctx, &target, domainTarget.Ref, decision, observedState)
 		if err != nil {
 			logger.Error(err, "failed to persist action observation")
 			return ctrl.Result{RequeueAfter: errorRequeueAfter}, nil
@@ -112,7 +119,7 @@ func (r *TargetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 					return ctrl.Result{RequeueAfter: errorRequeueAfter}, nil
 				}
 			}
-			if err := r.beginAction(ctx, &target, decision); err != nil {
+			if err := r.beginAction(ctx, &target, decision, domainTarget.Ref, ports.AuditWorkloadPoweredDown, ruleNameFromDecision(decision)); err != nil {
 				logger.Error(err, "failed to persist power-down intent")
 				return ctrl.Result{RequeueAfter: errorRequeueAfter}, nil
 			}
@@ -127,18 +134,24 @@ func (r *TargetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			}
 			target.Status.ConsecutiveFailures = 0
 			r.completeAction(&target, "Applied", "workload mutation accepted; waiting for observation")
-			r.Metrics.RecordAction(ports.ActionPowerDown, req.String(), true)
-			r.recordAudit(ctx, domainTarget.Ref, ports.AuditWorkloadPoweredDown, "success", "Powered down by policy", ruleNameFromDecision(decision))
+			r.markActionAuditPending(&target)
 			// Requeue faster to confirm pods terminated
 			updateTargetStatus(&target, decision, time.Now())
 			if err := r.Status().Update(ctx, &target); err != nil {
 				logger.Error(err, "failed to update target status after power-down")
+				r.Metrics.RecordAction(ports.ActionPowerDown, req.String(), false)
+				r.recordAudit(ctx, domainTarget.Ref, ports.AuditExecutionError, "error", "power-down was accepted but its completion checkpoint was not persisted: "+err.Error(), ruleNameFromDecision(decision))
+				return ctrl.Result{RequeueAfter: errorRequeueAfter}, nil
+			}
+			if _, err := r.reconcilePendingAudit(ctx, &target, domainTarget.Ref, req.String()); err != nil {
+				logger.Error(err, "power-down checkpoint persisted but audit is still pending")
+				return ctrl.Result{RequeueAfter: errorRequeueAfter}, nil
 			}
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
 
 		if decision.DesiredState == domain.PowerStateOn && observedState == domain.PowerStateOff {
-			if err := r.beginAction(ctx, &target, decision); err != nil {
+			if err := r.beginAction(ctx, &target, decision, domainTarget.Ref, ports.AuditWorkloadRestored, ruleNameFromDecision(decision)); err != nil {
 				logger.Error(err, "failed to persist restore intent")
 				return ctrl.Result{RequeueAfter: errorRequeueAfter}, nil
 			}
@@ -153,12 +166,18 @@ func (r *TargetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			}
 			target.Status.ConsecutiveFailures = 0
 			r.completeAction(&target, "Applied", "workload mutation accepted; waiting for observation")
-			r.Metrics.RecordAction(ports.ActionRestore, req.String(), true)
-			r.recordAudit(ctx, domainTarget.Ref, ports.AuditWorkloadRestored, "success", "Restored from snapshot", ruleNameFromDecision(decision))
+			r.markActionAuditPending(&target)
 			// Requeue faster to confirm pods started
 			updateTargetStatus(&target, decision, time.Now())
 			if err := r.Status().Update(ctx, &target); err != nil {
 				logger.Error(err, "failed to update target status after restore")
+				r.Metrics.RecordAction(ports.ActionRestore, req.String(), false)
+				r.recordAudit(ctx, domainTarget.Ref, ports.AuditExecutionError, "error", "restore was accepted but its completion checkpoint was not persisted: "+err.Error(), ruleNameFromDecision(decision))
+				return ctrl.Result{RequeueAfter: errorRequeueAfter}, nil
+			}
+			if _, err := r.reconcilePendingAudit(ctx, &target, domainTarget.Ref, req.String()); err != nil {
+				logger.Error(err, "restore checkpoint persisted but audit is still pending")
+				return ctrl.Result{RequeueAfter: errorRequeueAfter}, nil
 			}
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
@@ -184,12 +203,13 @@ func (r *TargetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 // crash), the controller observes convergence instead of issuing the same
 // write again. A later divergence is reported as contention. This prevents
 // write loops with Argo CD self-heal and other field managers.
-func (r *TargetReconciler) reconcileExistingAction(ctx context.Context, target *v1alpha1.PowerTarget, decision domain.Decision, observed domain.PowerState) (bool, error) {
+func (r *TargetReconciler) reconcileExistingAction(ctx context.Context, target *v1alpha1.PowerTarget, ref domain.WorkloadRef, decision domain.Decision, observed domain.PowerState) (bool, error) {
 	desired := decision.DesiredState
 	decisionKey := powerDecisionKey(decision)
 	action := target.Status.Action
 	if desired == domain.PowerStateOn && observed == desired && target.Status.Snapshot != nil &&
-		(action == nil || action.DesiredState != string(domain.PowerStateOff) || action.Phase == "Converged") {
+		(action == nil || action.Phase == "Converged" ||
+			(action.DesiredState == string(desired) && action.Phase != "InProgress" && action.AuditPhase != "Pending")) {
 		// GitOps or an operator may already have restored the workload. Do not
 		// replay the stale replica snapshot over that legitimate live state.
 		target.Status.Snapshot = nil
@@ -211,6 +231,25 @@ func (r *TargetReconciler) reconcileExistingAction(ctx context.Context, target *
 		return false, nil
 	}
 
+	if observed == desired && action.Phase == "InProgress" {
+		// The controller may have stopped after Kubernetes accepted the mutation
+		// but before the completion checkpoint was written. The durable intent and
+		// the observed desired state let us resume at the audit boundary without
+		// issuing the workload mutation again.
+		if action.AuditEventID == "" {
+			auditAction := ports.AuditWorkloadPoweredDown
+			if desired == domain.PowerStateOn {
+				auditAction = ports.AuditWorkloadRestored
+			}
+			r.initializeActionAudit(target, ref, auditAction, ruleNameFromDecision(decision))
+		}
+		r.completeAction(target, "Applied", "workload mutation outcome recovered from observed state; audit pending")
+		r.markActionAuditPending(target)
+		if err := r.Status().Update(ctx, target); err != nil {
+			return true, err
+		}
+		return true, nil
+	}
 	if observed == desired {
 		if action.Phase != "Converged" {
 			r.completeAction(target, "Converged", "desired workload state observed")
@@ -241,7 +280,7 @@ func (r *TargetReconciler) reconcileExistingAction(ctx context.Context, target *
 	return true, nil
 }
 
-func (r *TargetReconciler) beginAction(ctx context.Context, target *v1alpha1.PowerTarget, decision domain.Decision) error {
+func (r *TargetReconciler) beginAction(ctx context.Context, target *v1alpha1.PowerTarget, decision domain.Decision, ref domain.WorkloadRef, auditAction ports.AuditAction, ruleName string) error {
 	now := metav1.Now()
 	target.Status.Action = &v1alpha1.PowerActionStatus{
 		DesiredState: string(decision.DesiredState),
@@ -250,6 +289,7 @@ func (r *TargetReconciler) beginAction(ctx context.Context, target *v1alpha1.Pow
 		AttemptedAt:  &now,
 		RetryToken:   target.Annotations[retryActionAnnotation],
 	}
+	r.initializeActionAudit(target, ref, auditAction, ruleName)
 	return r.Status().Update(ctx, target)
 }
 
@@ -269,6 +309,66 @@ func (r *TargetReconciler) completeAction(target *v1alpha1.PowerTarget, phase, m
 	target.Status.Action.Phase = phase
 	target.Status.Action.CompletedAt = &now
 	target.Status.Action.Message = message
+}
+
+func (r *TargetReconciler) initializeActionAudit(target *v1alpha1.PowerTarget, ref domain.WorkloadRef, action ports.AuditAction, ruleName string) {
+	if target.Status.Action == nil {
+		return
+	}
+	seed := fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%s\x00%s", ref.Cluster, ref.APIVersion, ref.Namespace, ref.Kind, ref.Name, ref.UID)
+	seed += "\x00" + target.Status.Action.DecisionKey
+	if target.Status.Action.AttemptedAt != nil {
+		seed += "\x00" + target.Status.Action.AttemptedAt.UTC().Format(time.RFC3339Nano)
+	}
+	digest := sha256.Sum256([]byte(seed))
+	target.Status.Action.AuditEventID = fmt.Sprintf("action-%x", digest[:16])
+	target.Status.Action.AuditAction = string(action)
+	target.Status.Action.AuditRuleName = ruleName
+}
+
+func (r *TargetReconciler) markActionAuditPending(target *v1alpha1.PowerTarget) {
+	if target.Status.Action != nil {
+		target.Status.Action.AuditPhase = "Pending"
+	}
+}
+
+func (r *TargetReconciler) reconcilePendingAudit(ctx context.Context, target *v1alpha1.PowerTarget, ref domain.WorkloadRef, metricTarget string) (bool, error) {
+	action := target.Status.Action
+	if action == nil || action.AuditPhase != "Pending" || action.AuditEventID == "" {
+		return false, nil
+	}
+	if r.Audit == nil {
+		return true, errors.New("audit recorder is unavailable")
+	}
+	var reason string
+	var metricAction ports.ActionType
+	switch action.AuditAction {
+	case string(ports.AuditWorkloadPoweredDown):
+		reason = "Powered down by policy"
+		metricAction = ports.ActionPowerDown
+	case string(ports.AuditWorkloadRestored):
+		reason = "Restored from snapshot"
+		metricAction = ports.ActionRestore
+	default:
+		return true, fmt.Errorf("unsupported pending audit action %q", action.AuditAction)
+	}
+	timestamp := time.Now()
+	if action.CompletedAt != nil {
+		timestamp = action.CompletedAt.Time
+	}
+	event := ports.AuditEvent{
+		ID: action.AuditEventID, Timestamp: timestamp, Action: ports.AuditAction(action.AuditAction),
+		Actor: "system/controller", Target: ref, Result: "success", Reason: reason, RuleName: action.AuditRuleName,
+	}
+	if err := r.Audit.Record(ctx, event); err != nil {
+		return true, err
+	}
+	action.AuditPhase = "Recorded"
+	if err := r.Status().Update(ctx, target); err != nil {
+		return true, fmt.Errorf("persist recorded audit checkpoint: %w", err)
+	}
+	r.Metrics.RecordAction(metricAction, metricTarget, true)
+	return true, nil
 }
 
 func (r *TargetReconciler) failAction(target *v1alpha1.PowerTarget, err error) {
@@ -321,8 +421,9 @@ func (r *TargetReconciler) executeRestore(ctx context.Context, target *v1alpha1.
 	if err := r.Executor.Restore(ctx, ref, snapshot); err != nil {
 		return err
 	}
-	// Clear snapshot after successful restore
-	target.Status.Snapshot = nil
+	// Keep the recovery snapshot until discovery observes the workload running.
+	// A successful Kubernetes write only proves that the mutation was accepted;
+	// another field owner may still revert it before the next observation.
 	return nil
 }
 

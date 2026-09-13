@@ -1,5 +1,7 @@
 # Aura Power quality campaign
 
+Controller cardinality, heap profiling, memory budgets and leader failover are documented in [controller-memory-validation.md](controller-memory-validation.md).
+
 This directory records the permanent quality campaign introduced against commit
 `4727bc56f144`. The product contract is: select exactly the intended workloads,
 change them at the intended time, restore their prior state, and explain the
@@ -12,12 +14,31 @@ outcome truthfully.
   They are release gates and must remain green; a reproduced bug is fixed rather
   than skipped, retried, or weakened.
 - Kind runs exercise native Kubernetes controllers, CRDs, status writes, workload
-  readiness, recovery, and Helm.
+  readiness, recovery, and Helm. `scripts/quality/kind-argocd-journey.sh` also
+  installs integrity-pinned Argo CD v2.14.20 and validates the supported field
+  ownership contract against real Application and ApplicationSet controllers.
+- `scripts/quality/kind-release-upgrade-journey.sh` creates its own disposable
+  Kind cluster, installs the v2.1.7 chart and binaries, and upgrades the complete
+  release to the candidate. It verifies CRD migration, UID identity, server PVC
+  and refresh-session continuity, auth and webhook TLS Secret stability, durable
+  off/on reconciliation, audit events, and fixture plus cluster cleanup.
+- `scripts/quality/kind-cli-journey.sh` runs the CLI root, login, logout, whoami,
+  discover, status, explain, YAML preview, override creation, and savings commands
+  against the real Kind server. It checks failure exit codes and removes its
+  UID-checked namespace, override, and targets.
+- `scripts/quality/kind-notification-journey.sh` sends real transition events to
+  a controlled in-cluster HTTP receiver through a Secret-backed URL. It proves
+  sanitized HTTP failure status, recovery on a later transition, durable
+  counters, receiver-to-audit correlation, and UID/label-guarded cleanup.
+- `make quality-envtest` starts a real local Kubernetes API server and proves that
+  both registered validators accept valid resources and reject invalid resources
+  through admission.
 - EKS runs are manual. They require an explicit kubeconfig and production-cluster
   acknowledgement, create a unique dedicated namespace, mutate one journey at a
   time, and restore/delete only campaign-labelled fixtures.
 - Browser mutation tests require `AURA_E2E_ALLOW_MUTATION=true`, an explicit base URL,
-  and credentials supplied at runtime. There is no production default.
+  `AURA_E2E_KUBECONFIG` for independent workload assertions, and credentials supplied
+  at runtime. There is no production default.
 
 Run the non-mutating layer:
 

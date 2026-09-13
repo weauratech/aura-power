@@ -87,7 +87,7 @@ func main() {
 	metricsExporter := observability.NewPrometheusExporter()
 
 	// Create notification dispatcher
-	notifDispatcher := notifications.NewDispatcher(k8sClient)
+	notifDispatcher := notifications.NewDispatcher(k8sClient, mgr.GetAPIReader())
 	auditRecorder.SetNotifier(notifDispatcher)
 
 	// Register reconcilers
@@ -140,6 +140,10 @@ func main() {
 
 	// Start audit cleanup (background)
 	ctx := ctrl.SetupSignalHandler()
+	if err := startPprofServer(ctx, os.Getenv("PPROF_BIND_ADDRESS")); err != nil {
+		log.Error(err, "unable to start optional pprof server")
+		os.Exit(1)
+	}
 	go runAuditCleanup(ctx, auditRecorder)
 
 	// Start notification dispatcher (background)

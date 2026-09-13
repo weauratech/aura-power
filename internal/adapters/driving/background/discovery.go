@@ -144,6 +144,46 @@ func (d *DiscoveryLoop) ensurePowerTarget(ctx context.Context, wl ports.Discover
 	var existing v1alpha1.PowerTarget
 	err := d.Client.Get(ctx, key, &existing)
 	if err == nil {
+		// A previous migration may have created the UID-bound object and then
+		// failed while writing its status. Resume that partial migration before
+		// treating the new object as authoritative, otherwise the legacy object
+		// can retain the only usable recovery snapshot indefinitely.
+		if existing.Status.ObservedState.PowerState == "" {
+			legacyKey := types.NamespacedName{Namespace: d.Config.Namespace, Name: fmt.Sprintf("%s--%s", wl.Ref.Namespace, wl.Ref.Name)}
+			var legacy v1alpha1.PowerTarget
+			legacyErr := d.Client.Get(ctx, legacyKey, &legacy)
+			if legacyErr == nil && legacy.Spec.TargetRef.Kind == string(wl.Ref.Kind) {
+				var previous *v1alpha1.PowerTargetStatus
+				if legacy.Spec.TargetRef.UID != "" && legacy.Spec.TargetRef.UID == wl.Ref.UID {
+					previous = &legacy.Status
+				} else if legacy.Spec.TargetRef.UID == "" && legacySnapshotProvesPoweredDown(&legacy, wl) {
+					previous = &legacy.Status
+				}
+				if workloadIsPoweredDown(wl) && legacy.Status.Snapshot != nil && previous == nil {
+					return false, fmt.Errorf("refusing to resume ambiguous legacy snapshot migration for %s/%s; restore a verified live state first", wl.Ref.Namespace, wl.Ref.Name)
+				}
+				if previous != nil {
+					previous.DeepCopyInto(&existing.Status)
+					// The copied legacy observation may equal the live projection, but it
+					// has not been written to the replacement object yet. Force the
+					// refresh path to issue the single durable status update.
+					existing.Status.ObservedState.PowerState = ""
+				}
+				if err := d.updateObservedState(ctx, &existing, wl); err != nil {
+					return false, fmt.Errorf("failed to resume legacy target status migration: %w", err)
+				}
+				if err := d.Client.Delete(ctx, &legacy); err != nil {
+					return false, fmt.Errorf("resumed target migration but failed to remove legacy identity: %w", err)
+				}
+				if exempt {
+					return false, d.restoreBeforeExemption(ctx, wl)
+				}
+				return false, nil
+			}
+			if legacyErr != nil && !apierrors.IsNotFound(legacyErr) {
+				return false, fmt.Errorf("failed to read legacy PowerTarget while resuming migration: %w", legacyErr)
+			}
+		}
 		if existing.Spec.TargetRef.UID != wl.Ref.UID || existing.Spec.TargetRef.Kind != string(wl.Ref.Kind) {
 			// A recreated object is a different Kubernetes identity. It must not
 			// inherit snapshots, completed actions, failures, savings, or decision
@@ -189,6 +229,9 @@ func (d *DiscoveryLoop) ensurePowerTarget(ctx context.Context, wl ports.Discover
 			previous = &legacy.Status
 		} else if legacy.Spec.TargetRef.UID == "" && legacySnapshotProvesPoweredDown(&legacy, wl) {
 			previous = &legacy.Status
+		}
+		if workloadIsPoweredDown(wl) && legacy.Status.Snapshot != nil && previous == nil {
+			return false, fmt.Errorf("refusing to migrate ambiguous legacy snapshot for %s/%s; restore a verified live state first", wl.Ref.Namespace, wl.Ref.Name)
 		}
 		created, createErr := d.newPowerTarget(ctx, targetName, wl, previous)
 		if createErr != nil {
@@ -244,7 +287,10 @@ func legacySnapshotProvesPoweredDown(legacy *v1alpha1.PowerTarget, wl ports.Disc
 	if wl.Ref.Kind == domain.WorkloadKindCronJob {
 		return snapshot.Suspended != nil
 	}
-	return snapshot.ReplicaCount != nil
+	// v2.1.x could persist the post-mutation value. Zero is therefore
+	// indistinguishable from a legitimately zero-scaled workload and must never
+	// be trusted as a recovery value during migration.
+	return snapshot.ReplicaCount != nil && *snapshot.ReplicaCount > 0
 }
 
 func workloadIsPoweredDown(wl ports.DiscoveredWorkload) bool {
@@ -363,7 +409,7 @@ func (d *DiscoveryLoop) newPowerTarget(ctx context.Context, targetName string, w
 }
 
 func powerTargetName(ref domain.WorkloadRef) string {
-	identity := fmt.Sprintf("%s\x00%s\x00%s", ref.Namespace, ref.Kind, ref.Name)
+	identity := fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%s\x00%s", ref.Cluster, ref.APIVersion, ref.Namespace, ref.Kind, ref.Name, ref.UID)
 	sum := sha256.Sum256([]byte(identity))
 	return fmt.Sprintf("target-%x", sum[:16])
 }
@@ -444,6 +490,11 @@ func (d *DiscoveryLoop) cleanupOrphans(ctx context.Context, currentWorkloads []p
 			continue
 		}
 		expected[powerTargetName(wl.Ref)] = true
+		if workloadIsPoweredDown(wl) {
+			// Preserve legacy recovery evidence until migration succeeds or an
+			// operator establishes a verified running state.
+			expected[fmt.Sprintf("%s--%s", wl.Ref.Namespace, wl.Ref.Name)] = true
+		}
 	}
 
 	// List all PowerTargets

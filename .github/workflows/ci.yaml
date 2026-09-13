@@ -14,6 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -75,11 +77,14 @@ jobs:
       - run: |
           helm lint charts/aura-power
           ./scripts/quality/helm-webhook-contract.sh
+          ./scripts/quality/helm-release-contract.sh
 
   frontend:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -94,6 +99,11 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: Install envtest assets
+        run: |
+          go install sigs.k8s.io/controller-runtime/tools/setup-envtest@v0.0.0-20250308055145-5fe7bb3edc86
+          setup_envtest="$(go env GOPATH)/bin/setup-envtest"
+          echo "KUBEBUILDER_ASSETS=$("$setup_envtest" use -p path 1.31.x!)" >> "$GITHUB_ENV"
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -107,6 +117,8 @@ jobs:
         run: |
           set -o pipefail
           go test -tags=acceptance ./... -race -count=1 | tee acceptance-go.txt
+      - name: Run real API-server webhook contracts
+        run: make quality-envtest
       - name: Run violated frontend contracts
         id: web-acceptance
         continue-on-error: true
@@ -134,6 +146,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -150,6 +164,9 @@ jobs:
           docker build -f Dockerfile.server -t aura-power-server:ci .
           docker build -f Dockerfile.controller -t aura-power-controller:ci .
           kind load docker-image --name aura-power-quality aura-power-server:ci aura-power-controller:ci
+          CGO_ENABLED=0 go build -ldflags="-s -w" -o bin/aura-power ./cmd/aura-power/
+      - name: Prove v2.1.7 full release upgrade
+        run: ./scripts/quality/kind-release-upgrade-journey.sh
       - name: Install candidate and run native journey
         run: |
           export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config}"
@@ -166,6 +183,19 @@ jobs:
           ./scripts/quality/kind-legacy-upgrade-journey.sh
           ./scripts/quality/kind-core-journey.sh
           ./scripts/quality/kind-approval-journey.sh
+          ./scripts/quality/kind-notification-journey.sh
+          ./scripts/quality/kind-argocd-journey.sh
+          ./scripts/quality/kind-cli-journey.sh
+      - name: Run controller cardinality, memory and leader failover soak
+        run: |
+          export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config}"
+          ./scripts/quality/kind-memory-soak.sh
+      - name: Upload controller memory diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: controller-memory-kind
+          path: artifacts/quality/memory-*
       - name: Install browser test dependencies
         run: |
           cd tests/e2e/playwright
@@ -176,7 +206,10 @@ jobs:
           kubectl create namespace aura-power-e2e-browser
           kubectl annotate namespace aura-power-e2e-browser aura.sh/power-eligible=true
           kubectl create deployment browser-fixture -n aura-power-e2e-browser --image=registry.k8s.io/pause:3.10 --replicas=1
-          for attempt in $(seq 1 40); do
+          kubectl create namespace aura-power-e2e-browser-homonym
+          kubectl annotate namespace aura-power-e2e-browser-homonym aura.sh/power-eligible=true
+          kubectl create deployment browser-fixture -n aura-power-e2e-browser-homonym --image=registry.k8s.io/pause:3.10 --replicas=1
+          for _ in $(seq 1 40); do
             if kubectl get powertarget -n aura-system -l power.aura.sh/target-namespace=aura-power-e2e-browser -o name | grep -q .; then break; fi
             sleep 5
           done
@@ -184,7 +217,7 @@ jobs:
           kubectl port-forward -n aura-system statefulset/aura-power-server 19091:8080 >/tmp/aura-power-port-forward.log 2>&1 &
           forward_pid=$!
           trap 'kill "$forward_pid" 2>/dev/null || true' EXIT
-          for attempt in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:19091/api/v1/health >/dev/null; then break; fi
             sleep 1
           done
@@ -193,6 +226,7 @@ jobs:
           cd tests/e2e/playwright
           CI=true AURA_E2E_BASE_URL=http://127.0.0.1:19091 AURA_E2E_ADMIN_USER=admin \
             AURA_E2E_ADMIN_PASSWORD="$admin_password" AURA_E2E_FIXTURE_NAMESPACE=aura-power-e2e-browser \
+            AURA_E2E_KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config}" \
             AURA_E2E_ALLOW_MUTATION=true AURA_E2E_BROWSERS=all npx playwright test
       - name: Upload browser diagnostics
         if: always()

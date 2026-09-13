@@ -84,6 +84,10 @@ spec:
               value: {{ .Values.controller.config.discoveryInterval | default "60s" | quote }}
             - name: GOMEMLIMIT
               value: {{ .Values.controller.config.goMemLimit | default "192MiB" | quote }}
+            {{- if .Values.controller.config.pprofBindAddress }}
+            - name: PPROF_BIND_ADDRESS
+              value: {{ .Values.controller.config.pprofBindAddress | quote }}
+            {{- end }}
             {{- with .Values.controller.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

@@ -11,21 +11,24 @@ import (
 type AuditAction string
 
 const (
-	AuditPolicyCreated     AuditAction = "policy.created"
-	AuditPolicyModified    AuditAction = "policy.modified"
-	AuditPolicyDeleted     AuditAction = "policy.deleted"
-	AuditOverrideCreated   AuditAction = "override.created"
-	AuditOverrideExpired   AuditAction = "override.expired"
+	AuditPolicyCreated       AuditAction = "policy.created"
+	AuditPolicyModified      AuditAction = "policy.modified"
+	AuditPolicyDeleted       AuditAction = "policy.deleted"
+	AuditOverrideCreated     AuditAction = "override.created"
+	AuditOverrideExpired     AuditAction = "override.expired"
 	AuditWorkloadPoweredDown AuditAction = "workload.powered_down"
-	AuditWorkloadRestored  AuditAction = "workload.restored"
-	AuditActionBlocked     AuditAction = "action.blocked"
-	AuditExecutionError    AuditAction = "execution.error"
-	AuditDivergenceDetected AuditAction = "divergence.detected"
-	AuditWorkloadOptedIn   AuditAction = "workload.opted_in"
+	AuditWorkloadRestored    AuditAction = "workload.restored"
+	AuditActionBlocked       AuditAction = "action.blocked"
+	AuditExecutionError      AuditAction = "execution.error"
+	AuditDivergenceDetected  AuditAction = "divergence.detected"
+	AuditWorkloadOptedIn     AuditAction = "workload.opted_in"
 )
 
 // AuditEvent represents a structured audit record.
 type AuditEvent struct {
+	// ID requests an idempotent, deterministic record name. Empty IDs retain
+	// append-only generated-name behavior for callers without a durable saga.
+	ID        string
 	Timestamp time.Time
 	Action    AuditAction
 	Actor     string // "system/policy", "system/override", "user/<name>"
@@ -37,10 +40,10 @@ type AuditEvent struct {
 
 // AuditListOptions provides filtering for audit events.
 type AuditListOptions struct {
-	Target    *domain.WorkloadRef
-	Action    *AuditAction
-	Since     *time.Time
-	Limit     int
+	Target *domain.WorkloadRef
+	Action *AuditAction
+	Since  *time.Time
+	Limit  int
 }
 
 // AuditRecorder creates and queries audit events.

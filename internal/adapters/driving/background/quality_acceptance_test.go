@@ -30,3 +30,19 @@ func TestAcceptanceCTRL03HomonymousKindsHaveDistinctPowerTargets(t *testing.T) {
 		t.Fatalf("CTRL-03: kind is absent from target identity; expected 3 targets, got %d (%+v)", len(targets.Items), targets.Items)
 	}
 }
+
+func TestAcceptancePowerTargetIdentityIncludesClusterAPIAndUID(t *testing.T) {
+	base := domain.WorkloadRef{Cluster: "cluster-a", APIVersion: "apps/v1", Namespace: "fixtures", Name: "api", Kind: domain.WorkloadKindDeployment, UID: "uid-a"}
+	names := map[string]bool{powerTargetName(base): true}
+	variants := []domain.WorkloadRef{base, base, base}
+	variants[0].Cluster = "cluster-b"
+	variants[1].APIVersion = "extensions/v1beta1"
+	variants[2].UID = "uid-b"
+	for _, ref := range variants {
+		name := powerTargetName(ref)
+		if names[name] {
+			t.Fatalf("identity collision for %+v", ref)
+		}
+		names[name] = true
+	}
+}
