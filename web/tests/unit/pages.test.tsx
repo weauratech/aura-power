@@ -145,6 +145,20 @@ describe('operational pages', () => {
     expect(screen.queryByText('No audit events')).not.toBeInTheDocument();
   });
 
+  it('shows when an external audit notification was intentionally suppressed', async () => {
+    server.use(http.get(`${origin}/audit`, () => HttpResponse.json({
+      events: [{ spec: {
+        timestamp: new Date().toISOString(), action: 'workload.powered_down', actor: 'system/controller',
+        target: { namespace: 'campaign', name: 'fixture', kind: 'Deployment', uid: 'workload-uid' },
+        result: 'success', reason: 'campaign fixture', ruleName: 'quality',
+        notificationSuppressed: true, notificationSuppressionSource: 'namespace-label',
+        notificationSuppressionNamespaceUID: 'namespace-uid',
+      }}], count: 1, total: 1,
+    })));
+    renderUI(<AuditLog />);
+    expect(await screen.findByText('External notification suppressed')).toBeVisible();
+  });
+
   it('distinguishes an empty approvals queue', async () => {
     server.use(http.get(`${origin}/pending`, () => HttpResponse.json({ items: [], count: 0 })));
     renderUI(<PendingApprovals />);

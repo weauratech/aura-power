@@ -99,7 +99,7 @@ spec:
             periodSeconds: 20
           readinessProbe:
             httpGet:
-              path: /readyz
+              path: /readyz/notification-suppression-v1
               port: health
             initialDelaySeconds: 5
             periodSeconds: 10

@@ -9,6 +9,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -125,7 +126,9 @@ func (r *TargetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 						logger.Error(statusErr, "failed to persist snapshot failure status")
 					}
 					r.Metrics.RecordAction(ports.ActionPowerDown, req.String(), false)
-					r.recordAudit(ctx, &target, domainTarget.Ref, ports.AuditExecutionError, "error", err.Error(), "")
+					// Snapshot capture failed before beginAction created a fresh intent.
+					// Do not reuse a stale action's notification disposition.
+					r.recordAudit(ctx, nil, domainTarget.Ref, ports.AuditExecutionError, "error", err.Error(), "")
 					return ctrl.Result{RequeueAfter: errorRequeueAfter}, nil
 				}
 			}
@@ -306,13 +309,20 @@ func (r *TargetReconciler) reconcileExistingAction(ctx context.Context, target *
 }
 
 func (r *TargetReconciler) beginAction(ctx context.Context, target *v1alpha1.PowerTarget, decision domain.Decision, ref domain.WorkloadRef, auditAction ports.AuditAction, ruleName string) error {
+	disposition, err := r.liveNotificationSuppression(ctx, target, ref)
+	if err != nil {
+		return fmt.Errorf("capture live notification policy: %w", err)
+	}
 	now := metav1.Now()
 	target.Status.Action = &v1alpha1.PowerActionStatus{
-		DesiredState: string(decision.DesiredState),
-		DecisionKey:  powerDecisionKey(decision),
-		Phase:        "InProgress",
-		AttemptedAt:  &now,
-		RetryToken:   target.Annotations[retryActionAnnotation],
+		DesiredState:                        string(decision.DesiredState),
+		DecisionKey:                         powerDecisionKey(decision),
+		Phase:                               "InProgress",
+		AttemptedAt:                         &now,
+		RetryToken:                          target.Annotations[retryActionAnnotation],
+		NotificationSuppressed:              disposition.Suppressed,
+		NotificationSuppressionSource:       disposition.Source,
+		NotificationSuppressionNamespaceUID: disposition.NamespaceUID,
 	}
 	r.initializeActionAudit(target, ref, auditAction, ruleName)
 	return r.Status().Update(ctx, target)
@@ -384,7 +394,9 @@ func (r *TargetReconciler) reconcilePendingAudit(ctx context.Context, target *v1
 	event := ports.AuditEvent{
 		ID: action.AuditEventID, Timestamp: timestamp, Action: ports.AuditAction(action.AuditAction),
 		Actor: "system/controller", Target: ref, Result: "success", Reason: reason, RuleName: action.AuditRuleName,
-		SuppressNotification: targetSuppressesNotifications(target),
+		SuppressNotification:                action.NotificationSuppressed,
+		NotificationSuppressionSource:       action.NotificationSuppressionSource,
+		NotificationSuppressionNamespaceUID: action.NotificationSuppressionNamespaceUID,
 	}
 	if err := r.Audit.Record(ctx, event); err != nil {
 		return true, err
@@ -623,24 +635,77 @@ func (r *TargetReconciler) loadOverrides(ctx context.Context) ([]domain.Override
 }
 
 func (r *TargetReconciler) recordAudit(ctx context.Context, target *v1alpha1.PowerTarget, ref domain.WorkloadRef, action ports.AuditAction, result, reason, ruleName string) {
+	disposition := notificationDisposition{}
+	if target != nil && target.Status.Action != nil {
+		disposition = notificationDisposition{
+			Suppressed:   target.Status.Action.NotificationSuppressed,
+			Source:       target.Status.Action.NotificationSuppressionSource,
+			NamespaceUID: target.Status.Action.NotificationSuppressionNamespaceUID,
+		}
+	} else if liveDisposition, err := r.liveNotificationSuppression(ctx, target, ref); err == nil {
+		disposition = liveDisposition
+	} else {
+		disposition = notificationDisposition{Suppressed: true, Source: "resolution-error"}
+	}
 	_ = r.Audit.Record(ctx, ports.AuditEvent{
-		Timestamp:            time.Now(),
-		Action:               action,
-		Actor:                "system/controller",
-		Target:               ref,
-		Result:               result,
-		Reason:               reason,
-		RuleName:             ruleName,
-		SuppressNotification: targetSuppressesNotifications(target),
+		Timestamp:                           time.Now(),
+		Action:                              action,
+		Actor:                               "system/controller",
+		Target:                              ref,
+		Result:                              result,
+		Reason:                              reason,
+		RuleName:                            ruleName,
+		SuppressNotification:                disposition.Suppressed,
+		NotificationSuppressionSource:       disposition.Source,
+		NotificationSuppressionNamespaceUID: disposition.NamespaceUID,
 	})
 }
 
-func targetSuppressesNotifications(target *v1alpha1.PowerTarget) bool {
-	if target == nil {
-		return false
+type notificationDisposition struct {
+	Suppressed   bool
+	Source       string
+	NamespaceUID string
+}
+
+// liveNotificationSuppression binds the namespace-owned policy to the exact
+// workload incarnation immediately before the action checkpoint.
+func (r *TargetReconciler) liveNotificationSuppression(ctx context.Context, target *v1alpha1.PowerTarget, ref domain.WorkloadRef) (notificationDisposition, error) {
+	if r.APIReader == nil {
+		return notificationDisposition{}, errors.New("live API reader is unavailable")
 	}
-	return target.Status.WorkloadLabels[ports.NotificationPolicyLabel] == ports.NotificationPolicyDisabled ||
-		target.Status.NamespaceLabels[ports.NotificationPolicyLabel] == ports.NotificationPolicyDisabled
+
+	var workload client.Object
+	switch ref.Kind {
+	case domain.WorkloadKindDeployment:
+		workload = &appsv1.Deployment{}
+	case domain.WorkloadKindStatefulSet:
+		workload = &appsv1.StatefulSet{}
+	case domain.WorkloadKindCronJob:
+		workload = &batchv1.CronJob{}
+	default:
+		return notificationDisposition{}, fmt.Errorf("unsupported workload kind %q", ref.Kind)
+	}
+	key := client.ObjectKey{Namespace: ref.Namespace, Name: ref.Name}
+	if err := r.APIReader.Get(ctx, key, workload); err != nil {
+		return notificationDisposition{}, fmt.Errorf("read workload %s: %w", key, err)
+	}
+	if ref.UID == "" || string(workload.GetUID()) != ref.UID {
+		return notificationDisposition{}, fmt.Errorf("workload %s UID changed: expected %q, observed %q", key, ref.UID, workload.GetUID())
+	}
+
+	var namespace corev1.Namespace
+	if err := r.APIReader.Get(ctx, client.ObjectKey{Name: ref.Namespace}, &namespace); err != nil {
+		return notificationDisposition{}, fmt.Errorf("read namespace %s: %w", ref.Namespace, err)
+	}
+	if !namespace.DeletionTimestamp.IsZero() {
+		return notificationDisposition{}, fmt.Errorf("namespace %s is terminating", ref.Namespace)
+	}
+	disposition := notificationDisposition{NamespaceUID: string(namespace.UID)}
+	if namespace.Labels[ports.NotificationPolicyLabel] == ports.NotificationPolicyDisabled {
+		disposition.Suppressed = true
+		disposition.Source = "namespace-label"
+	}
+	return disposition, nil
 }
 
 func ruleNameFromDecision(d domain.Decision) string {

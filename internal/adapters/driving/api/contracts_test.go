@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	v1alpha1 "github.com/weauratech/aura-power/api/v1alpha1"
 	"github.com/weauratech/aura-power/internal/adapters/driven/auth"
@@ -173,6 +175,38 @@ func TestHTTPRoleMatrix(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestAuditAPIAndCSVExposeNotificationSuppressionDecision(t *testing.T) {
+	event := &v1alpha1.PowerAuditEvent{
+		ObjectMeta: metav1.ObjectMeta{Name: "suppressed-audit", Namespace: "aura-system"},
+		Spec: v1alpha1.PowerAuditEventSpec{
+			Timestamp: metav1.NewTime(time.Unix(1700000000, 0).UTC()),
+			Action:    "workload.powered_down", Actor: "system/controller",
+			Target: v1alpha1.AuditResourceReference{Namespace: "campaign", Name: "fixture", Kind: "Deployment", UID: "workload-uid"},
+			Result: "success", Reason: "campaign", RuleName: "quality",
+			NotificationSuppressed: true, NotificationSuppressionSource: "namespace-label", NotificationSuppressionNamespaceUID: "namespace-uid",
+		},
+	}
+	f := newContractFixture(t, event)
+	token := f.token(t, auth.RoleMember)
+
+	response := requestContract(t, f.server.Handler(), http.MethodGet, "/api/v1/audit", token, nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("audit list returned %d: %s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"notificationSuppressed":true`) || !strings.Contains(response.Body.String(), `"notificationSuppressionNamespaceUID":"namespace-uid"`) {
+		t.Fatalf("audit JSON lost suppression decision: %s", response.Body.String())
+	}
+
+	export := requestContract(t, f.server.Handler(), http.MethodGet, "/api/v1/audit/export", token, nil)
+	if export.Code != http.StatusOK {
+		t.Fatalf("audit export returned %d: %s", export.Code, export.Body.String())
+	}
+	wantHeader := "notification_suppressed,notification_suppression_source,notification_suppression_namespace_uid"
+	if !strings.Contains(export.Body.String(), wantHeader) || !strings.Contains(export.Body.String(), "true,namespace-label,namespace-uid") {
+		t.Fatalf("audit CSV lost suppression decision: %s", export.Body.String())
 	}
 }
 

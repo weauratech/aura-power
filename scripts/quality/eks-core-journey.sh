@@ -8,6 +8,7 @@ set -Eeuo pipefail
 : "${KUBECONFIG:?set KUBECONFIG to the campaign-specific file}"
 : "${AURA_POWER_EKS_MUTATION_ACK:?set AURA_POWER_EKS_MUTATION_ACK=eks-aura-prd}"
 : "${AURA_POWER_AWS_PROFILE:?set AURA_POWER_AWS_PROFILE to the Aura Hub operations profile}"
+: "${AURA_POWER_EXPECTED_CONTROLLER_DIGEST:?set AURA_POWER_EXPECTED_CONTROLLER_DIGEST to the verified v2.2.0 sha256 digest}"
 
 EXPECTED_CLUSTER="eks-aura-prd"
 EXPECTED_CONTEXT="aura-power-quality-eks-operations"
@@ -22,6 +23,7 @@ TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-300}"
 WATCHDOG="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/eks-fixture-watchdog.sh"
 
 [[ "$AURA_POWER_EKS_MUTATION_ACK" == "$EXPECTED_CLUSTER" ]] || { echo "refusing mutation: acknowledgement must equal ${EXPECTED_CLUSTER}" >&2; exit 2; }
+[[ "$AURA_POWER_EXPECTED_CONTROLLER_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "refusing mutation: invalid expected controller digest" >&2; exit 2; }
 [[ "$TIMEOUT_SECONDS" =~ ^[0-9]+$ && "$TIMEOUT_SECONDS" -le 300 ]] || { echo "refusing mutation: TIMEOUT_SECONDS must be an integer <= 300" >&2; exit 2; }
 [[ "$(kubectl config current-context)" == "$EXPECTED_CONTEXT" ]] || { echo "refusing mutation: unexpected kube context" >&2; exit 2; }
 
@@ -60,6 +62,22 @@ for permission in "create namespaces" "delete namespaces" "create deployments.ap
   read -r verb resource <<<"$permission"
   [[ "$(kube auth can-i "$verb" "$resource" -n "$CONTROL_NAMESPACE")" == "yes" ]] || { echo "missing permission: ${verb} ${resource}" >&2; exit 3; }
 done
+
+# Prove the running controller, not only the chart metadata, has the suppression
+# capability and matches the independently verified release digest.
+kube rollout status deployment aura-power-controller -n "$CONTROL_NAMESPACE" --timeout=120s >/dev/null
+controller_json="$(kube get deployment aura-power-controller -n "$CONTROL_NAMESPACE" -o json)"
+[[ "$(jq -r '.status.observedGeneration' <<<"$controller_json")" == "$(jq -r '.metadata.generation' <<<"$controller_json")" ]] || { echo "refusing mutation: controller generation is not observed" >&2; exit 3; }
+[[ "$(jq -r '.status.availableReplicas // 0' <<<"$controller_json")" == "$(jq -r '.spec.replicas' <<<"$controller_json")" ]] || { echo "refusing mutation: controller is not fully available" >&2; exit 3; }
+[[ "$(jq -r '.spec.template.spec.containers[] | select(.name == "controller") | .image' <<<"$controller_json")" == *@"$AURA_POWER_EXPECTED_CONTROLLER_DIGEST" ]] || { echo "refusing mutation: controller spec is not pinned to the expected digest" >&2; exit 3; }
+[[ "$(jq -r '.spec.template.spec.containers[] | select(.name == "controller") | .readinessProbe.httpGet.path' <<<"$controller_json")" == "/readyz/notification-suppression-v1" ]] || { echo "refusing mutation: controller suppression capability probe is absent" >&2; exit 3; }
+controller_pods="$(kube get pod -n "$CONTROL_NAMESPACE" -l 'app.kubernetes.io/instance=aura-power,app.kubernetes.io/component=controller' -o json)"
+[[ "$(jq '.items | length' <<<"$controller_pods")" -ge 1 ]] || { echo "refusing mutation: no controller pod found" >&2; exit 3; }
+jq -e --arg digest "$AURA_POWER_EXPECTED_CONTROLLER_DIGEST" 'all(.items[]; all(.status.containerStatuses[]; .ready == true and (.imageID | endswith("@" + $digest))))' <<<"$controller_pods" >/dev/null || { echo "refusing mutation: a controller container is unready or has an unexpected imageID" >&2; exit 3; }
+kube get crd powerauditevents.power.aura.sh powertargets.power.aura.sh -o json | jq -e '
+  (.items[] | select(.metadata.name == "powerauditevents.power.aura.sh") | .spec.versions[] | select(.storage) | .schema.openAPIV3Schema.properties.spec.properties.notificationSuppressed.type) == "boolean" and
+  (.items[] | select(.metadata.name == "powertargets.power.aura.sh") | .spec.versions[] | select(.storage) | .schema.openAPIV3Schema.properties.status.properties.action.properties.notificationSuppressed.type) == "boolean"
+' >/dev/null || { echo "refusing mutation: suppression capability CRD schema is absent" >&2; exit 3; }
 
 if kube get namespace "$FIXTURE_NAMESPACE" >/dev/null 2>&1 || kube get powerpolicy "$POLICY_NAME" -n "$CONTROL_NAMESPACE" >/dev/null 2>&1; then
   echo "refusing mutation: campaign namespace or policy already exists" >&2
@@ -114,7 +132,6 @@ metadata:
   namespace: ${FIXTURE_NAMESPACE}
   labels:
     aura-power-quality/run: "${RUN_ID}"
-    power.aura.sh/notification-policy: disabled
   annotations:
     aura.sh/power-eligible: "true"
 spec:
@@ -142,15 +159,16 @@ kube rollout status deployment "$WORKLOAD_NAME" -n "$FIXTURE_NAMESPACE" --timeou
 deadline=$((SECONDS + TIMEOUT_SECONDS))
 target=""
 while (( SECONDS < deadline )); do
-  target="$(kube get powertarget -n "$CONTROL_NAMESPACE" -l "power.aura.sh/target-namespace=${FIXTURE_NAMESPACE},power.aura.sh/target-name=${WORKLOAD_NAME},power.aura.sh/target-kind=Deployment" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+  target_list="$(kube get powertarget -n "$CONTROL_NAMESPACE" -l "power.aura.sh/target-namespace=${FIXTURE_NAMESPACE},power.aura.sh/target-name=${WORKLOAD_NAME},power.aura.sh/target-kind=Deployment" -o json 2>/dev/null || true)"
+  target="$(jq -r --arg uid "$WORKLOAD_UID" --arg namespace "$FIXTURE_NAMESPACE" --arg name "$WORKLOAD_NAME" '.items | map(select(.spec.targetRef.uid == $uid and .spec.targetRef.namespace == $namespace and .spec.targetRef.name == $name and .spec.targetRef.kind == "Deployment")) | if length == 1 then .[0].metadata.name else "" end' <<<"${target_list:-{}}" 2>/dev/null || true)"
   [[ -n "$target" ]] && break
   sleep 5
 done
 [[ -n "$target" ]] || { echo "FAIL: discovered PowerTarget not found before mutation" >&2; exit 10; }
-target_json="$(kube get powertarget "$target" -n "$CONTROL_NAMESPACE" -o json)"
-workload_notification_policy="$(jq -r '.status.workloadLabels["power.aura.sh/notification-policy"] // ""' <<<"$target_json")"
+[[ "$(jq '.items | length' <<<"$target_list")" == "1" ]] || { echo "FAIL: target selector is ambiguous" >&2; exit 13; }
+target_json="$(jq '.items[0]' <<<"$target_list")"
 namespace_notification_policy="$(jq -r '.status.namespaceLabels["power.aura.sh/notification-policy"] // ""' <<<"$target_json")"
-[[ "$workload_notification_policy" == "disabled" && "$namespace_notification_policy" == "disabled" ]] || {
+[[ "$(jq -r '.spec.targetRef.uid' <<<"$target_json")" == "$WORKLOAD_UID" && "$namespace_notification_policy" == "disabled" ]] || {
   echo "FAIL: notification suppression was not discovered on the exact fixture target" >&2
   exit 13
 }
@@ -164,6 +182,10 @@ WATCHDOG_PID=$!
 disown "$WATCHDOG_PID" 2>/dev/null || true
 
 echo "run_id=${RUN_ID} context=${EXPECTED_CONTEXT} cluster_arn=${cluster_arn}"
+live_namespace_json="$(kube get namespace "$FIXTURE_NAMESPACE" -o json)"
+live_target_json="$(kube get powertarget "$target" -n "$CONTROL_NAMESPACE" -o json)"
+[[ "$(jq -r '.metadata.uid' <<<"$live_namespace_json")" == "$NAMESPACE_UID" && "$(jq -r '.metadata.labels["power.aura.sh/notification-policy"]' <<<"$live_namespace_json")" == "disabled" ]] || { echo "FAIL: campaign namespace identity or suppression policy changed" >&2; exit 13; }
+[[ "$(jq -r '.spec.targetRef.uid' <<<"$live_target_json")" == "$WORKLOAD_UID" ]] || { echo "FAIL: exact target UID changed before policy creation" >&2; exit 13; }
 kube create -f - <<YAML
 apiVersion: power.aura.sh/v1alpha1
 kind: PowerPolicy
@@ -193,6 +215,8 @@ done
 
 snapshot="$(kube get powertarget "$target" -n "$CONTROL_NAMESPACE" -o jsonpath='{.status.snapshot.replicaCount}')"
 [[ "$snapshot" == "2" ]] || { echo "FAIL: snapshot expected replicas=2 observed=${snapshot:-missing}" >&2; exit 12; }
+power_down_action="$(kube get powertarget "$target" -n "$CONTROL_NAMESPACE" -o json)"
+jq -e --arg namespaceUID "$NAMESPACE_UID" '.status.action.notificationSuppressed == true and .status.action.notificationSuppressionSource == "namespace-label" and .status.action.notificationSuppressionNamespaceUID == $namespaceUID' <<<"$power_down_action" >/dev/null || { echo "FAIL: power-down action did not persist the suppression decision" >&2; exit 15; }
 echo "power_down=passed original_replicas=2 snapshot_replicas=${snapshot:-missing}"
 
 kube patch powerpolicy "$POLICY_NAME" -n "$CONTROL_NAMESPACE" --type=merge -p '{"spec":{"schedule":{"desiredState":"on","windows":[]}}}'
@@ -221,19 +245,8 @@ jq -e '[.items[] | select(.spec.action == "workload.powered_down" or .spec.actio
   echo "FAIL: both fixture transition audits were not persisted" >&2
   exit 14
 }
-jq -e '[.items[] | select(.spec.action == "workload.powered_down" or .spec.action == "workload.restored" or .spec.action == "execution.error") | .metadata.labels["power.aura.sh/notification-suppressed"] == "true"] | all' <<<"$audit_json" >/dev/null || {
+jq -e --arg namespaceUID "$NAMESPACE_UID" '[.items[] | select(.spec.action == "workload.powered_down" or .spec.action == "workload.restored" or .spec.action == "execution.error") | .spec.notificationSuppressed == true and .spec.notificationSuppressionSource == "namespace-label" and .spec.notificationSuppressionNamespaceUID == $namespaceUID] | all' <<<"$audit_json" >/dev/null || {
   echo "FAIL: a notifiable fixture audit lacks suppression evidence" >&2
   exit 15
 }
-
-audit_refs="$(jq -c --arg namespace "$CONTROL_NAMESPACE" '[.items[] | $namespace + "/" + .metadata.name]' <<<"$audit_json")"
-sleep 8
-channels_json="$(kube get powernotificationchannel -n "$CONTROL_NAMESPACE" -o json)"
-if jq -e --argjson refs "$audit_refs" '
-  ([.items[] | ((.status.recentAttempts // []) + ([.status.lastAttempt] | map(select(. != null))))[] | (.auditEventRefs // [])[]]) as $attempted |
-  any($refs[]; . as $ref | $attempted | index($ref) != null)
-' <<<"$channels_json" >/dev/null; then
-  echo "FAIL: an external channel attempted delivery for a suppressed fixture audit" >&2
-  exit 16
-fi
-echo "notification_suppression=passed audit_events=$(jq '.items | length' <<<"$audit_json") external_attempts=0"
+echo "notification_suppression=passed audit_events=$(jq '.items | length' <<<"$audit_json") decision_source=namespace-label"

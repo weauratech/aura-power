@@ -71,9 +71,12 @@ func (a *AuditRecorder) Record(ctx context.Context, event ports.AuditEvent) erro
 				Kind:       string(event.Target.Kind),
 				UID:        event.Target.UID,
 			},
-			Result:   event.Result,
-			Reason:   event.Reason,
-			RuleName: event.RuleName,
+			Result:                              event.Result,
+			Reason:                              event.Reason,
+			RuleName:                            event.RuleName,
+			NotificationSuppressed:              event.SuppressNotification,
+			NotificationSuppressionSource:       event.NotificationSuppressionSource,
+			NotificationSuppressionNamespaceUID: event.NotificationSuppressionNamespaceUID,
 		},
 	}
 	if event.ID != "" {
@@ -99,13 +102,8 @@ func (a *AuditRecorder) Record(ctx context.Context, event ports.AuditEvent) erro
 		}
 	}
 
-	// A persisted suppression decision is monotonic for an idempotent audit ID.
-	// If status persistence is retried after the source label changes, the same
-	// audit must never become externally deliverable.
-	notificationSuppressed := event.SuppressNotification || auditEvent.Labels["power.aura.sh/notification-suppressed"] == "true"
-
 	// Dispatch notification only for real state transitions (not routine reconciliation).
-	if a.notifier != nil && !notificationSuppressed && isNotifiableAction(string(event.Action)) {
+	if a.notifier != nil && !auditEvent.Spec.NotificationSuppressed && isNotifiableAction(string(event.Action)) {
 		if err := a.notifier.Enqueue(notifications.Event{
 			AuditEventRef: fmt.Sprintf("%s/%s", auditEvent.Namespace, auditEvent.Name),
 			Action:        string(event.Action),
@@ -198,6 +196,9 @@ func toDomainAuditEvent(item *v1alpha1.PowerAuditEvent) ports.AuditEvent {
 			Kind: domain.WorkloadKind(item.Spec.Target.Kind), UID: item.Spec.Target.UID,
 		},
 		Result: item.Spec.Result, Reason: item.Spec.Reason, RuleName: item.Spec.RuleName,
+		SuppressNotification:                item.Spec.NotificationSuppressed,
+		NotificationSuppressionSource:       item.Spec.NotificationSuppressionSource,
+		NotificationSuppressionNamespaceUID: item.Spec.NotificationSuppressionNamespaceUID,
 	}
 }
 

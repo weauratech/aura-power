@@ -49,6 +49,16 @@ export interface Savings {
   estimatedCost: number;
 }
 
+export interface PowerActionStatus {
+  desiredState: PowerState;
+  phase: string;
+  auditEventID?: string;
+  auditPhase?: string;
+  notificationSuppressed?: boolean;
+  notificationSuppressionSource?: 'namespace-label' | 'resolution-error';
+  notificationSuppressionNamespaceUID?: string;
+}
+
 export interface PowerTarget {
   metadata: { name: string; namespace: string };
   spec: { targetRef: TargetRef };
@@ -64,6 +74,7 @@ export interface PowerTarget {
     snapshot?: Snapshot;
     ownership?: Ownership[];
     savings?: Savings;
+    action?: PowerActionStatus;
     lastTransition?: string;
     lastReconciliation?: string;
   };
@@ -108,5 +119,8 @@ export interface AuditEvent {
     result: string;
     reason: string;
     ruleName?: string;
+    notificationSuppressed?: boolean;
+    notificationSuppressionSource?: 'namespace-label' | 'resolution-error';
+    notificationSuppressionNamespaceUID?: string;
   };
 }

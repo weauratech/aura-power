@@ -40,6 +40,23 @@ type PowerAuditEventSpec struct {
 	// RuleName identifies the policy/override responsible.
 	// +optional
 	RuleName string `json:"ruleName,omitempty"`
+
+	// NotificationSuppressed records the immutable external-delivery decision
+	// made before the corresponding workload mutation. The audit remains visible
+	// through Kubernetes, the API, CSV export, and the panel.
+	// +optional
+	NotificationSuppressed bool `json:"notificationSuppressed"`
+
+	// NotificationSuppressionSource identifies the authority used for a true
+	// decision. Empty means normal delivery.
+	// +optional
+	// +kubebuilder:validation:Enum=namespace-label;resolution-error
+	NotificationSuppressionSource string `json:"notificationSuppressionSource,omitempty"`
+
+	// NotificationSuppressionNamespaceUID binds the decision to the live
+	// Namespace incarnation checked before mutation.
+	// +optional
+	NotificationSuppressionNamespaceUID string `json:"notificationSuppressionNamespaceUID,omitempty"`
 }
 
 // +kubebuilder:object:root=true

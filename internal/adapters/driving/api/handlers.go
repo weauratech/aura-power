@@ -600,13 +600,15 @@ func (s *Server) handleAuditExport(c *gin.Context) {
 	c.Header("Content-Type", "text/csv")
 	c.Header("Content-Disposition", "attachment; filename=aura-power-audit.csv")
 
-	c.Writer.WriteString("timestamp,action,target_namespace,target_name,target_kind,result,reason,rule_name\n")
+	c.Writer.WriteString("timestamp,action,target_namespace,target_name,target_kind,result,reason,rule_name,notification_suppressed,notification_suppression_source,notification_suppression_namespace_uid\n")
 	_, _ = visitAuditPages(ctx, s.client, []client.ListOption{client.InNamespace(s.controlNamespace())}, func(page []v1alpha1.PowerAuditEvent) error {
 		for _, e := range page {
-			line := fmt.Sprintf("%s,%s,%s,%s,%s,%s,%s,%s\n",
+			line := fmt.Sprintf("%s,%s,%s,%s,%s,%s,%s,%s,%t,%s,%s\n",
 				e.Spec.Timestamp, e.Spec.Action,
 				e.Spec.Target.Namespace, e.Spec.Target.Name, e.Spec.Target.Kind,
-				e.Spec.Result, csvEscape(e.Spec.Reason), e.Spec.RuleName)
+				e.Spec.Result, csvEscape(e.Spec.Reason), e.Spec.RuleName,
+				e.Spec.NotificationSuppressed, e.Spec.NotificationSuppressionSource,
+				e.Spec.NotificationSuppressionNamespaceUID)
 			if _, err := c.Writer.WriteString(line); err != nil {
 				return err
 			}

@@ -13,6 +13,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -54,7 +55,7 @@ func TestAcceptanceCTRL06StatusConflictCannotLoseSnapshotAndRepeatMutation(t *te
 	base := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&v1alpha1.PowerTarget{}).WithObjects(target, policy).Build()
 	wrapped := &statusFailingClient{Client: base}
 	executor := &countingExecutor{}
-	r := TargetReconciler{Client: wrapped, Config: domain.DefaultGuardrailConfig(), Executor: executor, Audit: noopAudit{}, Metrics: noopMetrics{}}
+	r := TargetReconciler{Client: wrapped, APIReader: acceptanceLiveReader{}, Config: domain.DefaultGuardrailConfig(), Executor: executor, Audit: noopAudit{}, Metrics: noopMetrics{}}
 	req := ctrl.Request{NamespacedName: client.ObjectKey{Namespace: "aura-system", Name: "fixtures--api"}}
 	for i := 0; i < 2; i++ {
 		if _, err := r.Reconcile(context.Background(), req); err != nil {
@@ -74,7 +75,7 @@ func TestAcceptanceSnapshotCaptureFailureIsPersisted(t *testing.T) {
 	target := &v1alpha1.PowerTarget{ObjectMeta: metav1.ObjectMeta{Name: "fixtures--api", Namespace: "aura-system"}, Spec: v1alpha1.PowerTargetSpec{TargetRef: v1alpha1.TargetReference{Namespace: "fixtures", Name: "api", Kind: "Deployment", UID: "uid-api"}}, Status: v1alpha1.PowerTargetStatus{ObservedState: v1alpha1.ObservedStateSpec{Replicas: 3, PowerState: "on"}}}
 	policy := &v1alpha1.PowerPolicy{ObjectMeta: metav1.ObjectMeta{Name: "off", Namespace: "aura-system"}, Spec: v1alpha1.PowerPolicySpec{Scope: v1alpha1.PolicyScope{Namespaces: []string{"fixtures"}}, Schedule: v1alpha1.PolicySchedule{DesiredState: "off"}}}
 	c := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&v1alpha1.PowerTarget{}).WithObjects(target, policy).Build()
-	r := TargetReconciler{Client: c, Config: domain.DefaultGuardrailConfig(), Executor: captureFailingExecutor{}, Audit: noopAudit{}, Metrics: noopMetrics{}}
+	r := TargetReconciler{Client: c, APIReader: acceptanceLiveReader{}, Config: domain.DefaultGuardrailConfig(), Executor: captureFailingExecutor{}, Audit: noopAudit{}, Metrics: noopMetrics{}}
 	req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(target)}
 
 	if _, err := r.Reconcile(context.Background(), req); err != nil {
@@ -118,7 +119,7 @@ func TestAcceptanceArgoContentionDoesNotRepeatPowerDown(t *testing.T) {
 	policy := &v1alpha1.PowerPolicy{ObjectMeta: metav1.ObjectMeta{Name: "off", Namespace: "aura-system"}, Spec: v1alpha1.PowerPolicySpec{Scope: v1alpha1.PolicyScope{Namespaces: []string{"fixtures"}}, Schedule: v1alpha1.PolicySchedule{DesiredState: "off"}}}
 	c := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&v1alpha1.PowerTarget{}).WithObjects(target, policy).Build()
 	executor := &countingExecutor{}
-	r := TargetReconciler{Client: c, Config: domain.DefaultGuardrailConfig(), Executor: executor, Audit: noopAudit{}, Metrics: noopMetrics{}}
+	r := TargetReconciler{Client: c, APIReader: acceptanceLiveReader{}, Config: domain.DefaultGuardrailConfig(), Executor: executor, Audit: noopAudit{}, Metrics: noopMetrics{}}
 	req := ctrl.Request{NamespacedName: client.ObjectKey{Namespace: "aura-system", Name: "fixtures--api"}}
 
 	// The fake workload observation deliberately remains at two replicas, as it
@@ -182,7 +183,7 @@ func TestAcceptanceActionIntentMustPersistBeforeMutation(t *testing.T) {
 	policy := &v1alpha1.PowerPolicy{ObjectMeta: metav1.ObjectMeta{Name: "off", Namespace: "aura-system"}, Spec: v1alpha1.PowerPolicySpec{Scope: v1alpha1.PolicyScope{Namespaces: []string{"fixtures"}}, Schedule: v1alpha1.PolicySchedule{DesiredState: "off"}}}
 	base := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&v1alpha1.PowerTarget{}).WithObjects(target, policy).Build()
 	executor := &countingExecutor{}
-	r := TargetReconciler{Client: &statusFailingClient{Client: base}, Config: domain.DefaultGuardrailConfig(), Executor: executor, Audit: noopAudit{}, Metrics: noopMetrics{}}
+	r := TargetReconciler{Client: &statusFailingClient{Client: base}, APIReader: acceptanceLiveReader{}, Config: domain.DefaultGuardrailConfig(), Executor: executor, Audit: noopAudit{}, Metrics: noopMetrics{}}
 
 	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKey{Namespace: "aura-system", Name: "fixtures--api"}}); err != nil {
 		t.Fatal(err)
@@ -205,7 +206,7 @@ func TestAcceptanceStaleSnapshotIsRetiredBeforeSafeRecapture(t *testing.T) {
 	policy := &v1alpha1.PowerPolicy{ObjectMeta: metav1.ObjectMeta{Name: "off", Namespace: "aura-system"}, Spec: v1alpha1.PowerPolicySpec{Scope: v1alpha1.PolicyScope{Namespaces: []string{"fixtures"}}, Schedule: v1alpha1.PolicySchedule{DesiredState: "off"}}}
 	c := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&v1alpha1.PowerTarget{}).WithObjects(target, policy).Build()
 	executor := &staleOnceExecutor{}
-	r := TargetReconciler{Client: c, Config: domain.DefaultGuardrailConfig(), Executor: executor, Audit: noopAudit{}, Metrics: noopMetrics{}}
+	r := TargetReconciler{Client: c, APIReader: acceptanceLiveReader{}, Config: domain.DefaultGuardrailConfig(), Executor: executor, Audit: noopAudit{}, Metrics: noopMetrics{}}
 	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(target)}
 
 	if _, err := r.Reconcile(context.Background(), request); err != nil {
@@ -251,7 +252,7 @@ func TestAcceptanceMutationSuccessRequiresDurableCompletionCheckpoint(t *testing
 			executor := &countingExecutor{}
 			metrics := &recordingMetrics{}
 			audit := &recordingAudit{}
-			r := TargetReconciler{Client: wrapped, Config: domain.DefaultGuardrailConfig(), Executor: executor, Audit: audit, Metrics: metrics}
+			r := TargetReconciler{Client: wrapped, APIReader: acceptanceLiveReader{}, Config: domain.DefaultGuardrailConfig(), Executor: executor, Audit: audit, Metrics: metrics}
 			if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(target)}); err != nil {
 				t.Fatal(err)
 			}
@@ -329,7 +330,7 @@ func TestAcceptanceRestoreKeepsSnapshotUntilRunningStateIsObserved(t *testing.T)
 	policy := &v1alpha1.PowerPolicy{ObjectMeta: metav1.ObjectMeta{Name: "restore", Namespace: "aura-system"}, Spec: v1alpha1.PowerPolicySpec{Scope: v1alpha1.PolicyScope{Namespaces: []string{"fixtures"}}, Schedule: v1alpha1.PolicySchedule{DesiredState: "on"}}}
 	c := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&v1alpha1.PowerTarget{}).WithObjects(target, policy).Build()
 	executor := &countingExecutor{}
-	r := TargetReconciler{Client: c, Config: domain.DefaultGuardrailConfig(), Executor: executor, Audit: noopAudit{}, Metrics: noopMetrics{}}
+	r := TargetReconciler{Client: c, APIReader: acceptanceLiveReader{}, Config: domain.DefaultGuardrailConfig(), Executor: executor, Audit: noopAudit{}, Metrics: noopMetrics{}}
 	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(target)}
 	if _, err := r.Reconcile(context.Background(), request); err != nil {
 		t.Fatal(err)
@@ -381,7 +382,7 @@ func TestAcceptanceAuditFailureRetriesWithoutRepeatingMutation(t *testing.T) {
 	executor := &countingExecutor{}
 	audit := &failOnceAudit{failuresRemaining: 1}
 	metrics := &recordingMetrics{}
-	r := TargetReconciler{Client: c, Config: domain.DefaultGuardrailConfig(), Executor: executor, Audit: audit, Metrics: metrics}
+	r := TargetReconciler{Client: c, APIReader: acceptanceLiveReader{}, Config: domain.DefaultGuardrailConfig(), Executor: executor, Audit: audit, Metrics: metrics}
 	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(target)}
 
 	if _, err := r.Reconcile(context.Background(), request); err != nil {
@@ -443,7 +444,7 @@ func TestAcceptanceAuditCheckpointFailureDoesNotDuplicateSideEffects(t *testing.
 	executor := &countingExecutor{}
 	audit := &idempotentRecordingAudit{events: make(map[string]ports.AuditEvent)}
 	metrics := &recordingMetrics{}
-	r := TargetReconciler{Client: wrapped, Config: domain.DefaultGuardrailConfig(), Executor: executor, Audit: audit, Metrics: metrics}
+	r := TargetReconciler{Client: wrapped, APIReader: acceptanceLiveReader{}, Config: domain.DefaultGuardrailConfig(), Executor: executor, Audit: audit, Metrics: metrics}
 	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(target)}
 
 	if _, err := r.Reconcile(context.Background(), request); err != nil {
@@ -490,7 +491,7 @@ func TestAcceptanceArgoRestoredLiveStateIsNotOverwrittenByStaleSnapshot(t *testi
 	policy := &v1alpha1.PowerPolicy{ObjectMeta: metav1.ObjectMeta{Name: "on", Namespace: "aura-system"}, Spec: v1alpha1.PowerPolicySpec{Scope: v1alpha1.PolicyScope{Namespaces: []string{"fixtures"}}, Schedule: v1alpha1.PolicySchedule{DesiredState: "on"}}}
 	c := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&v1alpha1.PowerTarget{}).WithObjects(target, policy).Build()
 	executor := &countingExecutor{}
-	r := TargetReconciler{Client: c, Config: domain.DefaultGuardrailConfig(), Executor: executor, Audit: noopAudit{}, Metrics: noopMetrics{}}
+	r := TargetReconciler{Client: c, APIReader: acceptanceLiveReader{}, Config: domain.DefaultGuardrailConfig(), Executor: executor, Audit: noopAudit{}, Metrics: noopMetrics{}}
 	req := ctrl.Request{NamespacedName: client.ObjectKey{Namespace: "aura-system", Name: "fixtures--api"}}
 
 	if _, err := r.Reconcile(context.Background(), req); err != nil {
@@ -527,7 +528,7 @@ func TestAcceptanceContendedLiveRestoreRetiresStaleSnapshot(t *testing.T) {
 	policy := &v1alpha1.PowerPolicy{ObjectMeta: metav1.ObjectMeta{Name: "on", Namespace: "aura-system"}, Spec: v1alpha1.PowerPolicySpec{Scope: v1alpha1.PolicyScope{Namespaces: []string{"fixtures"}}, Schedule: v1alpha1.PolicySchedule{DesiredState: "on"}}}
 	c := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&v1alpha1.PowerTarget{}).WithObjects(target, policy).Build()
 	executor := &countingExecutor{}
-	r := TargetReconciler{Client: c, Config: domain.DefaultGuardrailConfig(), Executor: executor, Audit: noopAudit{}, Metrics: noopMetrics{}}
+	r := TargetReconciler{Client: c, APIReader: acceptanceLiveReader{}, Config: domain.DefaultGuardrailConfig(), Executor: executor, Audit: noopAudit{}, Metrics: noopMetrics{}}
 	req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(target)}
 	if _, err := r.Reconcile(context.Background(), req); err != nil {
 		t.Fatal(err)
@@ -562,7 +563,7 @@ func TestAcceptancePolicyFlipPreservesSnapshotUntilPowerDownIsObserved(t *testin
 	}
 	policy := &v1alpha1.PowerPolicy{ObjectMeta: metav1.ObjectMeta{Name: "on", Namespace: "aura-system"}, Spec: v1alpha1.PowerPolicySpec{Scope: v1alpha1.PolicyScope{Namespaces: []string{"fixtures"}}, Schedule: v1alpha1.PolicySchedule{DesiredState: "on"}}}
 	c := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&v1alpha1.PowerTarget{}).WithObjects(target, policy).Build()
-	r := TargetReconciler{Client: c, Config: domain.DefaultGuardrailConfig(), Executor: &countingExecutor{}, Audit: noopAudit{}, Metrics: noopMetrics{}}
+	r := TargetReconciler{Client: c, APIReader: acceptanceLiveReader{}, Config: domain.DefaultGuardrailConfig(), Executor: &countingExecutor{}, Audit: noopAudit{}, Metrics: noopMetrics{}}
 	req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(target)}
 	if _, err := r.Reconcile(context.Background(), req); err != nil {
 		t.Fatal(err)
@@ -594,7 +595,7 @@ func TestAcceptanceInvalidNamespaceGroupDoesNotBlockUnrelatedRestore(t *testing.
 	invalid := &v1alpha1.PowerPolicy{ObjectMeta: metav1.ObjectMeta{Name: "broken-group", Namespace: "aura-system"}, Spec: v1alpha1.PowerPolicySpec{Scope: v1alpha1.PolicyScope{NamespaceGroups: []string{"deleted"}}, Schedule: v1alpha1.PolicySchedule{DesiredState: "off"}}}
 	c := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&v1alpha1.PowerTarget{}).WithObjects(target, valid, invalid).Build()
 	executor := &countingExecutor{}
-	r := TargetReconciler{Client: c, Config: domain.DefaultGuardrailConfig(), Executor: executor, Audit: noopAudit{}, Metrics: noopMetrics{}}
+	r := TargetReconciler{Client: c, APIReader: acceptanceLiveReader{}, Config: domain.DefaultGuardrailConfig(), Executor: executor, Audit: noopAudit{}, Metrics: noopMetrics{}}
 	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(target)}); err != nil {
 		t.Fatal(err)
 	}
@@ -616,7 +617,7 @@ func TestAcceptanceInProgressActionRetriesAfterCrash(t *testing.T) {
 	}}
 	c := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&v1alpha1.PowerTarget{}).WithObjects(target, policy).Build()
 	executor := &countingExecutor{}
-	r := TargetReconciler{Client: c, Config: domain.DefaultGuardrailConfig(), Executor: executor, Audit: noopAudit{}, Metrics: noopMetrics{}}
+	r := TargetReconciler{Client: c, APIReader: acceptanceLiveReader{}, Config: domain.DefaultGuardrailConfig(), Executor: executor, Audit: noopAudit{}, Metrics: noopMetrics{}}
 	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(target)}); err != nil {
 		t.Fatal(err)
 	}
@@ -634,7 +635,7 @@ func TestAcceptanceTargetWithoutUIDCannotMutateWorkload(t *testing.T) {
 	policy := &v1alpha1.PowerPolicy{ObjectMeta: metav1.ObjectMeta{Name: "off", Namespace: "aura-system"}, Spec: v1alpha1.PowerPolicySpec{Scope: v1alpha1.PolicyScope{Namespaces: []string{"fixtures"}}, Schedule: v1alpha1.PolicySchedule{DesiredState: "off"}}}
 	c := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&v1alpha1.PowerTarget{}).WithObjects(target, policy).Build()
 	executor := &countingExecutor{}
-	r := TargetReconciler{Client: c, Config: domain.DefaultGuardrailConfig(), Executor: executor, Audit: noopAudit{}, Metrics: noopMetrics{}}
+	r := TargetReconciler{Client: c, APIReader: acceptanceLiveReader{}, Config: domain.DefaultGuardrailConfig(), Executor: executor, Audit: noopAudit{}, Metrics: noopMetrics{}}
 	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(target)}); err != nil {
 		t.Fatal(err)
 	}
@@ -997,4 +998,34 @@ func (a *idempotentRecordingAudit) Record(_ context.Context, event ports.AuditEv
 }
 func (*idempotentRecordingAudit) List(context.Context, ports.AuditListOptions) ([]ports.AuditEvent, error) {
 	return nil, nil
+}
+
+// acceptanceLiveReader supplies the live workload/namespace boundary required
+// by the reconciler while these focused saga tests keep Kubernetes execution in
+// their purpose-built executor doubles.
+type acceptanceLiveReader struct{}
+
+func (acceptanceLiveReader) Get(_ context.Context, key client.ObjectKey, obj client.Object, _ ...client.GetOption) error {
+	switch typed := obj.(type) {
+	case *appsv1.Deployment:
+		typed.Name = key.Name
+		typed.Namespace = key.Namespace
+		typed.UID = types.UID("uid-" + key.Name)
+		return nil
+	case *appsv1.StatefulSet:
+		typed.Name = key.Name
+		typed.Namespace = key.Namespace
+		typed.UID = types.UID("uid-" + key.Name)
+		return nil
+	case *corev1.Namespace:
+		typed.Name = key.Name
+		typed.UID = "namespace-uid"
+		return nil
+	default:
+		return errors.New("acceptance live reader received an unsupported object")
+	}
+}
+
+func (acceptanceLiveReader) List(_ context.Context, _ client.ObjectList, _ ...client.ListOption) error {
+	return nil
 }

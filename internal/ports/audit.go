@@ -25,8 +25,8 @@ const (
 )
 
 const (
-	// NotificationPolicyLabel lets a workload or its namespace opt out of
-	// external delivery while retaining the complete durable audit trail.
+	// NotificationPolicyLabel lets a namespace opt out of external delivery
+	// while retaining the complete durable audit trail.
 	NotificationPolicyLabel    = "power.aura.sh/notification-policy"
 	NotificationPolicyDisabled = "disabled"
 )
@@ -45,7 +45,9 @@ type AuditEvent struct {
 	RuleName  string // Name of the policy/override responsible
 	// SuppressNotification keeps the durable audit record but prevents this
 	// event from being placed on any external notification channel.
-	SuppressNotification bool
+	SuppressNotification                bool
+	NotificationSuppressionSource       string
+	NotificationSuppressionNamespaceUID string
 }
 
 // AuditListOptions provides filtering for audit events.

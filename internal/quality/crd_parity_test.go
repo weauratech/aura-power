@@ -30,6 +30,42 @@ func TestNamespaceGroupsSchemaParity(t *testing.T) {
 	}
 }
 
+func TestNotificationSuppressionSchemaParity(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		path func(*extensionsv1.JSONSchemaProps) extensionsv1.JSONSchemaProps
+	}{
+		{name: "powerauditevents", path: func(root *extensionsv1.JSONSchemaProps) extensionsv1.JSONSchemaProps {
+			return root.Properties["spec"]
+		}},
+		{name: "powertargets", path: func(root *extensionsv1.JSONSchemaProps) extensionsv1.JSONSchemaProps {
+			return root.Properties["status"].Properties["action"]
+		}},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			chart := readCRD(t, filepath.Join("..", "..", "charts", "aura-power", "crds", tt.name+".yaml"))
+			config := readCRD(t, filepath.Join("..", "..", "config", "crd", "bases", "power.aura.sh_"+tt.name+".yaml"))
+			for source, crd := range map[string]extensionsv1.CustomResourceDefinition{"chart": chart, "config": config} {
+				fields := tt.path(crd.Spec.Versions[0].Schema.OpenAPIV3Schema).Properties
+				if fields["notificationSuppressed"].Type != "boolean" {
+					t.Fatalf("%s notificationSuppressed schema=%#v, want boolean", source, fields["notificationSuppressed"])
+				}
+				sourceField := fields["notificationSuppressionSource"]
+				if sourceField.Type != "string" || len(sourceField.Enum) != 2 || string(sourceField.Enum[0].Raw) != `"namespace-label"` || string(sourceField.Enum[1].Raw) != `"resolution-error"` {
+					t.Fatalf("%s notificationSuppressionSource schema=%#v", source, sourceField)
+				}
+				if fields["notificationSuppressionNamespaceUID"].Type != "string" {
+					t.Fatalf("%s notificationSuppressionNamespaceUID schema=%#v", source, fields["notificationSuppressionNamespaceUID"])
+				}
+			}
+		})
+	}
+}
+
 func readCRD(t *testing.T, path string) extensionsv1.CustomResourceDefinition {
 	t.Helper()
 	b, err := os.ReadFile(path)

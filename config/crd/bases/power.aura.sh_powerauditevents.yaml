@@ -37,3 +37,8 @@ spec:
                 result: { type: string }
                 reason: { type: string }
                 ruleName: { type: string }
+                notificationSuppressed: { type: boolean }
+                notificationSuppressionSource:
+                  type: string
+                  enum: [namespace-label, resolution-error]
+                notificationSuppressionNamespaceUID: { type: string }

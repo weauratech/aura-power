@@ -60,6 +60,15 @@ spec:
                     type: string
                   auditRuleName:
                     type: string
+                  notificationSuppressed:
+                    type: boolean
+                  notificationSuppressionSource:
+                    enum:
+                    - namespace-label
+                    - resolution-error
+                    type: string
+                  notificationSuppressionNamespaceUID:
+                    type: string
                   completedAt:
                     format: date-time
                     type: string

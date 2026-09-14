@@ -155,6 +155,22 @@ type PowerActionStatus struct {
 	AuditAction string `json:"auditAction,omitempty"`
 	// +optional
 	AuditRuleName string `json:"auditRuleName,omitempty"`
+
+	// NotificationSuppressed is captured from the live namespace before the
+	// workload mutation and remains fixed for every retry of this action.
+	// +optional
+	NotificationSuppressed bool `json:"notificationSuppressed"`
+
+	// NotificationSuppressionSource identifies the authority used for a true
+	// decision. The only supported authority is the live Namespace label.
+	// +optional
+	// +kubebuilder:validation:Enum=namespace-label;resolution-error
+	NotificationSuppressionSource string `json:"notificationSuppressionSource,omitempty"`
+
+	// NotificationSuppressionNamespaceUID binds the decision to the Namespace
+	// incarnation read directly from the Kubernetes API.
+	// +optional
+	NotificationSuppressionNamespaceUID string `json:"notificationSuppressionNamespaceUID,omitempty"`
 }
 
 // ObservedStateSpec captures the workload's current state.

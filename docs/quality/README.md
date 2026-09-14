@@ -90,8 +90,11 @@ uses a fixed context name, refuses preexisting names, and verifies UID plus
 campaign labels before cleanup. A detached watchdog starts before the policy is
 created and restores/removes the fixture if the parent ends or the hard deadline
 is reached. Cleanup failure changes the run result to failure. The fixture
-namespace and workload set `power.aura.sh/notification-policy=disabled`.
-Discovery must copy that label into the exact `PowerTarget` before the runner
-creates its policy. Transition audits remain durable and carry
-`power.aura.sh/notification-suppressed=true`; the runner also proves their audit
-references never appear in an external channel attempt.
+namespace sets `power.aura.sh/notification-policy=disabled`. The workload label
+is not an authority for suppressing operational notifications. Before mutation,
+the controller reads the workload and Namespace directly, verifies both live
+UIDs, and persists the decision in `PowerTarget.status.action`. Transition
+audits remain durable and expose the same immutable decision through
+`PowerAuditEvent.spec.notificationSuppressed`, the HTTP API, CSV export, and
+the panel. The runner requires the named controller readiness capability and
+the independently verified image digest before it creates a policy.

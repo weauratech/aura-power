@@ -153,6 +153,10 @@ func main() {
 		log.Error(err, "unable to set up ready check")
 		os.Exit(1)
 	}
+	if err := mgr.AddReadyzCheck("notification-suppression-v1", healthz.Ping); err != nil {
+		log.Error(err, "unable to register notification suppression capability")
+		os.Exit(1)
+	}
 	if webhookEnabled {
 		if err := mgr.AddReadyzCheck("webhook", mgr.GetWebhookServer().StartedChecker()); err != nil {
 			log.Error(err, "unable to set up webhook ready check")

@@ -380,62 +380,145 @@ func TestQualityAuditRecorderIsIdempotentForDeterministicID(t *testing.T) {
 
 type recordingNotificationEnqueuer struct {
 	events []notifications.Event
+	fail   error
 }
 
 func (r *recordingNotificationEnqueuer) Enqueue(event notifications.Event) error {
+	if r.fail != nil {
+		err := r.fail
+		r.fail = nil
+		return err
+	}
 	r.events = append(r.events, event)
 	return nil
 }
 
 func TestQualityAuditRecorderSuppressesExternalDeliveryButKeepsAudit(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		firstSuppressed  bool
+		secondSuppressed bool
+		wantInitialQueue int
+	}{
+		{name: "suppressed_then_ordinary", firstSuppressed: true, secondSuppressed: false, wantInitialQueue: 0},
+		{name: "ordinary_then_suppressed", firstSuppressed: false, secondSuppressed: true, wantInitialQueue: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			scheme := qualityScheme(t)
+			if err := v1alpha1.AddToScheme(scheme); err != nil {
+				t.Fatal(err)
+			}
+			c := fake.NewClientBuilder().WithScheme(scheme).Build()
+			enqueuer := &recordingNotificationEnqueuer{}
+			recorder := NewAuditRecorder(c, nil, "aura-system")
+			recorder.SetNotifier(enqueuer)
+
+			event := ports.AuditEvent{
+				ID: "immutable-disposition", Timestamp: time.Unix(1700000000, 0).UTC(),
+				Action: ports.AuditWorkloadPoweredDown, Actor: "system/controller",
+				Target: domain.WorkloadRef{APIVersion: "apps/v1", Namespace: "campaign", Name: "fixture", Kind: domain.WorkloadKindDeployment, UID: "uid-fixture"},
+				Result: "success", Reason: "campaign fixture", RuleName: "quality",
+				SuppressNotification:                tc.firstSuppressed,
+				NotificationSuppressionSource:       "namespace-label",
+				NotificationSuppressionNamespaceUID: "namespace-uid",
+			}
+			if err := recorder.Record(context.Background(), event); err != nil {
+				t.Fatal(err)
+			}
+			if len(enqueuer.events) != tc.wantInitialQueue {
+				t.Fatalf("initial queue count = %d, want %d", len(enqueuer.events), tc.wantInitialQueue)
+			}
+			var persisted v1alpha1.PowerAuditEvent
+			if err := c.Get(context.Background(), client.ObjectKey{Namespace: "aura-system", Name: event.ID}, &persisted); err != nil {
+				t.Fatal(err)
+			}
+			if persisted.Spec.NotificationSuppressed != tc.firstSuppressed || persisted.Spec.NotificationSuppressionSource != "namespace-label" || persisted.Spec.NotificationSuppressionNamespaceUID != "namespace-uid" {
+				t.Fatalf("durable suppression decision was not preserved: %+v", persisted.Spec)
+			}
+			if got := toDomainAuditEvent(&persisted); got.SuppressNotification != tc.firstSuppressed || got.NotificationSuppressionNamespaceUID != "namespace-uid" {
+				t.Fatalf("domain conversion lost the durable decision: %+v", got)
+			}
+
+			// The same audit identity can only replay identical semantics. The
+			// opposite disposition must conflict before another enqueue.
+			event.SuppressNotification = tc.secondSuppressed
+			if err := recorder.Record(context.Background(), event); err == nil {
+				t.Fatal("same audit identifier accepted the opposite notification disposition")
+			}
+			if len(enqueuer.events) != tc.wantInitialQueue {
+				t.Fatalf("conflicting retry changed queue count to %d", len(enqueuer.events))
+			}
+		})
+	}
+}
+
+func TestQualityAuditRecorderUsesSpecInsteadOfMetadataLabel(t *testing.T) {
+	scheme := qualityScheme(t)
+	if err := v1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	ordinary := &v1alpha1.PowerAuditEvent{
+		ObjectMeta: metav1.ObjectMeta{Name: "ordinary", Namespace: "aura-system", Labels: map[string]string{"power.aura.sh/notification-suppressed": "true"}},
+		Spec:       v1alpha1.PowerAuditEventSpec{Timestamp: metav1.NewTime(time.Unix(1700000000, 0).UTC()), Action: string(ports.AuditWorkloadPoweredDown), Actor: "system/controller", Target: v1alpha1.AuditResourceReference{APIVersion: "apps/v1", Namespace: "campaign", Name: "fixture", Kind: "Deployment", UID: "uid-fixture"}, Result: "success", Reason: "ordinary", NotificationSuppressed: false},
+	}
+	suppressed := ordinary.DeepCopy()
+	suppressed.Name = "suppressed"
+	suppressed.Labels = nil
+	suppressed.Spec.Reason = "suppressed"
+	suppressed.Spec.NotificationSuppressed = true
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(ordinary, suppressed).Build()
+	enqueuer := &recordingNotificationEnqueuer{}
+	recorder := NewAuditRecorder(c, nil, "aura-system")
+	recorder.SetNotifier(enqueuer)
+
+	for _, item := range []*v1alpha1.PowerAuditEvent{ordinary, suppressed} {
+		event := toDomainAuditEvent(item)
+		if err := recorder.Record(context.Background(), event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(enqueuer.events) != 1 || enqueuer.events[0].Reason != "ordinary" {
+		t.Fatalf("metadata label influenced delivery decision: %+v", enqueuer.events)
+	}
+}
+
+func TestQualityAuditRecorderRetriesQueueFailureWithoutChangingDisposition(t *testing.T) {
 	scheme := qualityScheme(t)
 	if err := v1alpha1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
 	c := fake.NewClientBuilder().WithScheme(scheme).Build()
-	enqueuer := &recordingNotificationEnqueuer{}
+	enqueuer := &recordingNotificationEnqueuer{fail: errors.New("queue full")}
 	recorder := NewAuditRecorder(c, nil, "aura-system")
 	recorder.SetNotifier(enqueuer)
-
 	event := ports.AuditEvent{
-		ID: "suppressed-campaign-action", Timestamp: time.Unix(1700000000, 0).UTC(),
+		ID: "retry-queue", Timestamp: time.Unix(1700000000, 0).UTC(),
 		Action: ports.AuditWorkloadPoweredDown, Actor: "system/controller",
 		Target: domain.WorkloadRef{APIVersion: "apps/v1", Namespace: "campaign", Name: "fixture", Kind: domain.WorkloadKindDeployment, UID: "uid-fixture"},
-		Result: "success", Reason: "campaign fixture", RuleName: "quality",
-		SuppressNotification: true,
+		Result: "success", Reason: "ordinary",
 	}
-	if err := recorder.Record(context.Background(), event); err != nil {
-		t.Fatal(err)
-	}
-	if len(enqueuer.events) != 0 {
-		t.Fatalf("suppressed audit enqueued %d external notification(s)", len(enqueuer.events))
+	if err := recorder.Record(context.Background(), event); err == nil || !strings.Contains(err.Error(), "queue full") {
+		t.Fatalf("initial queue failure was not surfaced: %v", err)
 	}
 	var persisted v1alpha1.PowerAuditEvent
 	if err := c.Get(context.Background(), client.ObjectKey{Namespace: "aura-system", Name: event.ID}, &persisted); err != nil {
 		t.Fatal(err)
 	}
-	if persisted.Labels["power.aura.sh/notification-suppressed"] != "true" {
-		t.Fatalf("suppressed audit lacks durable evidence label: %+v", persisted.Labels)
+	if persisted.Spec.NotificationSuppressed {
+		t.Fatalf("queue failure changed persisted disposition: %+v", persisted.Spec)
 	}
-	if persisted.Spec.Action != string(event.Action) || persisted.Spec.Target.UID != event.Target.UID {
-		t.Fatalf("suppression changed audit semantics: %+v", persisted.Spec)
-	}
-
-	// A retry after discovery changes must honor the already persisted decision.
-	event.SuppressNotification = false
 	if err := recorder.Record(context.Background(), event); err != nil {
-		t.Fatal(err)
+		t.Fatalf("identical retry did not enqueue: %v", err)
 	}
-	if len(enqueuer.events) != 0 {
-		t.Fatalf("suppressed audit retry enqueued %d external notification(s)", len(enqueuer.events))
+	if len(enqueuer.events) != 1 {
+		t.Fatalf("identical retry enqueued %d events, want 1", len(enqueuer.events))
 	}
-
-	event.ID = "ordinary-action"
-	if err := recorder.Record(context.Background(), event); err != nil {
-		t.Fatal(err)
+	event.SuppressNotification = true
+	if err := recorder.Record(context.Background(), event); err == nil {
+		t.Fatal("opposite retry after queue recovery did not conflict")
 	}
-	if len(enqueuer.events) != 1 || enqueuer.events[0].Target.UID != event.Target.UID {
-		t.Fatalf("ordinary audit was not enqueued exactly once: %+v", enqueuer.events)
+	if len(enqueuer.events) != 1 {
+		t.Fatalf("conflicting retry changed queue count to %d", len(enqueuer.events))
 	}
 }
 

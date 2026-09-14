@@ -31,6 +31,15 @@ spec:
                 type: string
               ruleName:
                 type: string
+              notificationSuppressed:
+                type: boolean
+              notificationSuppressionSource:
+                enum:
+                - namespace-label
+                - resolution-error
+                type: string
+              notificationSuppressionNamespaceUID:
+                type: string
               target:
                 properties:
                   apiVersion:
