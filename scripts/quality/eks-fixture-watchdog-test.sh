@@ -11,138 +11,203 @@ mkdir -p "$fake_bin"
 cat >"${fake_bin}/kubectl" <<'FAKE_KUBECTL'
 #!/usr/bin/env bash
 set -euo pipefail
-
 state_dir="${WATCHDOG_TEST_STATE:?}"
-log="${state_dir}/commands.log"
-printf '%s\n' "$*" >>"$log"
+printf '%s\n' "$*" >>"${state_dir}/commands.log"
 
 has_arg() {
   local expected="$1" arg
   shift
-  for arg in "$@"; do
-    [[ "$arg" == "$expected" ]] && return 0
-  done
+  for arg in "$@"; do [[ "$arg" == "$expected" ]] && return 0; done
   return 1
 }
 
+emit_object() {
+  local prefix="$1"
+  jq -n \
+    --arg run "$(cat "${state_dir}/${prefix}.run")" \
+    --arg nonce "$(cat "${state_dir}/${prefix}.nonce")" \
+    --arg uid "$(cat "${state_dir}/${prefix}.uid")" \
+    '{metadata:{labels:{"aura-power-quality/run":$run,"aura-power-quality/nonce":$nonce},uid:$uid}}'
+}
+
 case "${1:-} ${2:-}" in
-  "get powerpolicy")
-    exit 1
-    ;;
-  "get namespace")
-    [[ -f "${state_dir}/namespace.exists" ]] || exit 1
-    if has_arg "jsonpath={.metadata.uid}" "$@"; then
-      cat "${state_dir}/namespace.uid"
-    elif has_arg "json" "$@"; then
-      jq -n --arg run "$(cat "${state_dir}/namespace.run")" --arg uid "$(cat "${state_dir}/namespace.uid")" \
-        '{metadata:{labels:{"aura-power-quality/run":$run},uid:$uid}}'
-    fi
-    ;;
-  "get deployment")
+  "get namespace") prefix=namespace ;;
+  "get deployment") prefix=workload ;;
+  "get powerpolicy") prefix=policy ;;
+  "patch deployment")
     [[ -f "${state_dir}/workload.exists" ]] || exit 1
-    if has_arg "jsonpath={.metadata.uid}" "$@"; then
-      cat "${state_dir}/workload.uid"
-    elif has_arg "jsonpath={.spec.replicas}" "$@"; then
-      cat "${state_dir}/workload.replicas"
-    elif has_arg "json" "$@"; then
-      jq -n --arg run "$(cat "${state_dir}/workload.run")" --arg uid "$(cat "${state_dir}/workload.uid")" \
-        '{metadata:{labels:{"aura-power-quality/run":$run},uid:$uid}}'
-    fi
-    ;;
-  "scale deployment")
-    [[ -f "${state_dir}/workload.exists" ]] || exit 1
+    patch="${!#}"
+    [[ "$(jq -er '.[0].value' <<<"$patch")" == "$(cat "${state_dir}/workload.uid")" ]] || exit 1
     printf '2' >"${state_dir}/workload.replicas"
+    exit 0
     ;;
-  "delete namespace")
-    rm -f "${state_dir}/namespace.exists" "${state_dir}/workload.exists"
+  "delete --raw")
+    body="$(cat)"
+    uid="$(jq -er '.preconditions.uid' <<<"$body")"
+    path="$3"
+    case "$path" in
+      /api/v1/namespaces/*) prefix=namespace ;;
+      /apis/apps/v1/namespaces/*/deployments/*) prefix=workload ;;
+      /apis/power.aura.sh/v1alpha1/namespaces/*/powerpolicies/*) prefix=policy ;;
+      *) echo "unexpected raw delete path: $path" >&2; exit 97 ;;
+    esac
+    if [[ -f "${state_dir}/${prefix}.replace-on-delete" ]]; then
+      cat "${state_dir}/${prefix}.replacement-uid" >"${state_dir}/${prefix}.uid"
+      rm -f "${state_dir}/${prefix}.replace-on-delete"
+    fi
+    actual_uid="$(cat "${state_dir}/${prefix}.uid")"
+    printf 'raw-delete %s precondition=%s actual=%s\n' "$path" "$uid" "$actual_uid" >>"${state_dir}/commands.log"
+    [[ "$uid" == "$actual_uid" ]] || { echo 'Conflict: UID precondition failed' >&2; exit 1; }
+    if [[ -f "${state_dir}/raw-delete-delay" ]]; then sleep 0.5; fi
+    rm -f "${state_dir}/${prefix}.exists"
+    printf '{}\n'
+    exit 0
     ;;
-  *)
-    echo "unexpected fake kubectl invocation: $*" >&2
-    exit 97
-    ;;
-esac
+  *) echo "unexpected fake kubectl invocation: $*" >&2; exit 97 ;;
+ esac
+
+[[ -f "${state_dir}/${prefix}.exists" ]] || exit 1
+if has_arg "jsonpath={.spec.replicas}" "$@"; then
+  cat "${state_dir}/workload.replicas"
+elif has_arg "json" "$@"; then
+  emit_object "$prefix"
+fi
 FAKE_KUBECTL
 chmod +x "${fake_bin}/kubectl"
 
-run_case() {
-  local case_name="$1" state_workload_uid="$2" actual_workload_uid="$3" expected_status="$4"
-  local state_dir="${test_root}/${case_name}"
-  mkdir -p "$state_dir"
-  : >"${state_dir}/commands.log"
-  : >"${state_dir}/namespace.exists"
-  printf 'quality-run' >"${state_dir}/namespace.run"
-  printf 'namespace-uid' >"${state_dir}/namespace.uid"
-  if [[ -n "$actual_workload_uid" ]]; then
-    : >"${state_dir}/workload.exists"
-    printf 'quality-run' >"${state_dir}/workload.run"
-    printf '%s' "$actual_workload_uid" >"${state_dir}/workload.uid"
-    printf '0' >"${state_dir}/workload.replicas"
+prepare_case() {
+  local case_name="$1" namespace="$2" workload="$3" policy="$4"
+  CASE_DIR="${test_root}/${case_name}"
+  mkdir -p "$CASE_DIR"
+  : >"${CASE_DIR}/commands.log"
+  for prefix in namespace workload policy; do
+    printf 'quality-run' >"${CASE_DIR}/${prefix}.run"
+    printf '0123456789abcdef0123456789abcdef' >"${CASE_DIR}/${prefix}.nonce"
+    printf '%s-uid' "$prefix" >"${CASE_DIR}/${prefix}.uid"
+  done
+  [[ "$namespace" != true ]] || : >"${CASE_DIR}/namespace.exists"
+  if [[ "$workload" == true ]]; then
+    : >"${CASE_DIR}/workload.exists"
+    printf '0' >"${CASE_DIR}/workload.replicas"
   fi
-
-  local kubeconfig="${state_dir}/kubeconfig" recovery_state="${state_dir}/recovery.json"
-  : >"$kubeconfig"
-  chmod 600 "$kubeconfig"
-  jq -n \
-    --arg runID quality-run \
-    --arg fixtureNamespace quality-namespace \
-    --arg namespaceUID namespace-uid \
-    --arg workloadName restore-two \
-    --arg workloadUID "$state_workload_uid" \
-    --arg policyName quality-policy \
-    '{runID:$runID,fixtureNamespace:$fixtureNamespace,namespaceUID:$namespaceUID,workloadName:$workloadName,workloadUID:$workloadUID,policyName:$policyName}' \
-    >"$recovery_state"
-  chmod 600 "$recovery_state"
-
-  local status=0
-  PATH="${fake_bin}:$PATH" \
-    WATCHDOG_TEST_STATE="$state_dir" \
-    KUBECONFIG="$kubeconfig" \
-    AURA_POWER_RUNTIME_KUBECONFIG="$kubeconfig" \
-    EXPECTED_CLUSTER=eks-aura-prd \
-    AWS_REGION=us-east-2 \
-    RUN_ID=quality-run \
-    FIXTURE_NAMESPACE=quality-namespace \
-    NAMESPACE_UID=namespace-uid \
-    WORKLOAD_NAME=restore-two \
-    WORKLOAD_UID="$state_workload_uid" \
-    POLICY_NAME=quality-policy \
-    RECOVERY_STATE="$recovery_state" \
-    PARENT_PID=99999999 \
-    HARD_DEADLINE_EPOCH=0 \
-    "$watchdog" watch >/dev/null 2>"${state_dir}/stderr.log" || status=$?
-
-  [[ "$status" -eq "$expected_status" ]] || {
-    echo "${case_name}: expected status ${expected_status}, got ${status}" >&2
-    cat "${state_dir}/stderr.log" >&2
-    return 1
-  }
-  if [[ "$expected_status" -eq 0 ]]; then
-    [[ ! -f "${state_dir}/namespace.exists" ]] || { echo "${case_name}: namespace was not deleted" >&2; return 1; }
-    [[ ! -f "$kubeconfig" && ! -f "$recovery_state" ]] || { echo "${case_name}: private recovery artifacts were not removed" >&2; return 1; }
-    grep -Fq 'delete namespace quality-namespace' "${state_dir}/commands.log"
-    if [[ -n "$actual_workload_uid" ]]; then
-      grep -Fq 'scale deployment restore-two -n quality-namespace --replicas=2' "${state_dir}/commands.log"
-    else
-      if grep -Fq 'scale deployment' "${state_dir}/commands.log"; then
-        echo "${case_name}: namespace-only recovery unexpectedly scaled a workload" >&2
-        return 1
-      fi
-    fi
-  else
-    [[ -f "${state_dir}/namespace.exists" ]] || { echo "${case_name}: mismatched namespace was deleted" >&2; return 1; }
-    [[ -f "$kubeconfig" && -f "$recovery_state" ]] || { echo "${case_name}: failed recovery discarded private recovery artifacts" >&2; return 1; }
-    if grep -Fq 'delete namespace quality-namespace' "${state_dir}/commands.log"; then
-      echo "${case_name}: mismatched workload allowed namespace deletion" >&2
-      return 1
-    fi
-  fi
+  [[ "$policy" != true ]] || : >"${CASE_DIR}/policy.exists"
+  KUBECONFIG_PATH="${CASE_DIR}/kubeconfig"
+  RECOVERY_DIR_PATH="${CASE_DIR}/recovery"
+  : >"$KUBECONFIG_PATH"
+  chmod 600 "$KUBECONFIG_PATH"
+  mkdir "$RECOVERY_DIR_PATH"
+  chmod 700 "$RECOVERY_DIR_PATH"
 }
 
-# Deterministic equivalents of termination immediately after each identity
-# boundary in the parent journey.
-run_case interrupted-after-namespace "" "" 0
-run_case interrupted-after-workload-before-state "" workload-uid 0
-run_case interrupted-after-workload-state workload-uid workload-uid 0
-run_case workload-uid-mismatch workload-uid replacement-uid 1
+write_state() {
+  local namespace_uid="$1" workload_uid="$2" policy_uid="$3"
+  jq -n \
+    --arg runID quality-run \
+    --arg recoveryNonce 0123456789abcdef0123456789abcdef \
+    --arg fixtureNamespace quality-namespace \
+    --arg namespaceUID "$namespace_uid" \
+    --arg workloadName restore-two \
+    --arg workloadUID "$workload_uid" \
+    --arg policyName quality-policy \
+    --arg policyUID "$policy_uid" \
+    '{runID:$runID,recoveryNonce:$recoveryNonce,fixtureNamespace:$fixtureNamespace,namespaceUID:$namespaceUID,workloadName:$workloadName,workloadUID:$workloadUID,policyName:$policyName,policyUID:$policyUID}' \
+    >"${RECOVERY_DIR_PATH}/state.json"
+  chmod 600 "${RECOVERY_DIR_PATH}/state.json"
+}
 
-echo "eks_fixture_watchdog_contract=passed partial_namespace=true late_workload_uid=true exact_uid=true fail_closed=true"
+invoke_watchdog() {
+  local mode="$1" stderr_path="$2"
+  PATH="${fake_bin}:$PATH" \
+    WATCHDOG_TEST_STATE="$CASE_DIR" \
+    KUBECONFIG="$KUBECONFIG_PATH" \
+    AURA_POWER_RUNTIME_KUBECONFIG="$KUBECONFIG_PATH" \
+    EXPECTED_CLUSTER=eks-aura-prd AWS_REGION=us-east-2 \
+    RUN_ID=quality-run RECOVERY_NONCE=0123456789abcdef0123456789abcdef \
+    FIXTURE_NAMESPACE=quality-namespace WORKLOAD_NAME=restore-two POLICY_NAME=quality-policy \
+    RECOVERY_DIR="$RECOVERY_DIR_PATH" PARENT_PID=99999999 HARD_DEADLINE_EPOCH=0 \
+    "$watchdog" "$mode" >/dev/null 2>"$stderr_path"
+}
+
+assert_success_cleanup() {
+  local case_name="$1"
+  [[ ! -f "${CASE_DIR}/namespace.exists" && ! -f "${CASE_DIR}/workload.exists" && ! -f "${CASE_DIR}/policy.exists" ]] || {
+    echo "${case_name}: owned fixture resources remain" >&2; return 1;
+  }
+  [[ ! -f "$KUBECONFIG_PATH" && ! -f "${RECOVERY_DIR_PATH}/state.json" && -d "${RECOVERY_DIR_PATH}/cleanup-complete" ]] || {
+    echo "${case_name}: successful recovery artifacts are inconsistent" >&2; return 1;
+  }
+}
+
+prepare_case interrupted-before-first-mutation false false false
+write_state "" "" ""
+invoke_watchdog watch "${CASE_DIR}/stderr.log"
+assert_success_cleanup interrupted-before-first-mutation
+if grep -Fq 'raw-delete' "${CASE_DIR}/commands.log"; then echo 'pre-mutation recovery attempted a delete' >&2; exit 1; fi
+
+prepare_case interrupted-after-namespace true false false
+write_state "" "" ""
+invoke_watchdog watch "${CASE_DIR}/stderr.log"
+assert_success_cleanup interrupted-after-namespace
+grep -Fq 'raw-delete /api/v1/namespaces/quality-namespace precondition=namespace-uid' "${CASE_DIR}/commands.log"
+
+prepare_case interrupted-after-workload-before-state true true false
+write_state namespace-uid "" ""
+invoke_watchdog watch "${CASE_DIR}/stderr.log"
+assert_success_cleanup interrupted-after-workload-before-state
+grep -Fq 'raw-delete /apis/apps/v1/namespaces/quality-namespace/deployments/restore-two precondition=workload-uid' "${CASE_DIR}/commands.log"
+
+prepare_case interrupted-after-policy-state true true true
+write_state namespace-uid workload-uid policy-uid
+invoke_watchdog watch "${CASE_DIR}/stderr.log"
+assert_success_cleanup interrupted-after-policy-state
+for precondition in policy-uid workload-uid namespace-uid; do
+  grep -Fq "precondition=${precondition}" "${CASE_DIR}/commands.log"
+done
+
+prepare_case stale-mutation-lock-after-parent-death true true false
+write_state namespace-uid workload-uid ""
+mkdir "${RECOVERY_DIR_PATH}/lock"
+printf '99999999\n' >"${RECOVERY_DIR_PATH}/lock/owner"
+invoke_watchdog watch "${CASE_DIR}/stderr.log"
+assert_success_cleanup stale-mutation-lock-after-parent-death
+
+prepare_case namespace-replacement-race true false false
+write_state namespace-uid "" ""
+: >"${CASE_DIR}/namespace.replace-on-delete"
+printf 'replacement-uid' >"${CASE_DIR}/namespace.replacement-uid"
+replacement_status=0
+invoke_watchdog cleanup "${CASE_DIR}/stderr.log" || replacement_status=$?
+[[ "$replacement_status" -ne 0 && -f "${CASE_DIR}/namespace.exists" && -f "$KUBECONFIG_PATH" && -f "${RECOVERY_DIR_PATH}/state.json" ]] || {
+  echo 'replacement race did not fail closed with recovery artifacts retained' >&2; exit 1;
+}
+grep -Fq 'precondition=namespace-uid actual=replacement-uid' "${CASE_DIR}/commands.log"
+
+prepare_case invalid-state false false false
+printf '{invalid' >"${RECOVERY_DIR_PATH}/state.json"
+chmod 600 "${RECOVERY_DIR_PATH}/state.json"
+invalid_status=0
+invoke_watchdog cleanup "${CASE_DIR}/stderr.log" || invalid_status=$?
+[[ "$invalid_status" -ne 0 && -f "$KUBECONFIG_PATH" && -f "${RECOVERY_DIR_PATH}/state.json" ]] || {
+  echo 'invalid state did not fail closed' >&2; exit 1;
+}
+
+prepare_case concurrent-deadline-and-trap true true true
+write_state namespace-uid workload-uid policy-uid
+: >"${CASE_DIR}/raw-delete-delay"
+invoke_watchdog watch "${CASE_DIR}/watch.stderr" &
+watch_pid=$!
+invoke_watchdog cleanup "${CASE_DIR}/cleanup.stderr" &
+cleanup_pid=$!
+watch_status=0
+cleanup_status=0
+wait "$watch_pid" || watch_status=$?
+wait "$cleanup_pid" || cleanup_status=$?
+[[ "$watch_status" -eq 0 && "$cleanup_status" -eq 0 ]] || {
+  echo "concurrent recovery failed: watch=${watch_status} cleanup=${cleanup_status}" >&2; exit 1;
+}
+assert_success_cleanup concurrent-deadline-and-trap
+[[ "$(grep -c '^raw-delete ' "${CASE_DIR}/commands.log")" -eq 3 ]] || {
+  echo 'concurrent recovery issued duplicate deletes' >&2; exit 1;
+}
+
+echo "eks_fixture_watchdog_contract=passed pre_mutation=true nonce_capture=true preconditions=true replacement_race=true concurrent_cleanup=true stale_lock=true invalid_state=true"
