@@ -25,18 +25,68 @@ readonly REPO_ROOT ARGO_MANIFEST BUILD_CONTEXT
 [[ "$ARGO_CD_VERSION" == "v2.14.20" ]] || { echo "ARGO_CD_VERSION is integrity-pinned to v2.14.20" >&2; exit 2; }
 
 namespace_uid=""
+cleanup_resources_absent() {
+  local residual
+  residual="$(kubectl get namespace "$FIXTURE_NAMESPACE" "$ARGO_NAMESPACE" --ignore-not-found -o name 2>/dev/null)" || return 1
+  [[ -z "$residual" ]] || return 1
+  residual="$(kubectl get powerpolicy -n aura-system -l "aura-power-quality/run=${RUN_ID}" -o name 2>/dev/null)" || return 1
+  [[ -z "$residual" ]] || return 1
+  residual="$(kubectl get powertarget -n aura-system -l "power.aura.sh/target-namespace=${FIXTURE_NAMESPACE}" -o name 2>/dev/null)" || return 1
+  [[ -z "$residual" ]] || return 1
+  residual="$(kubectl get crd -o name 2>/dev/null)" || return 1
+  ! grep -q 'argoproj.io' <<<"$residual" || return 1
+  residual="$(kubectl get clusterrole,clusterrolebinding -o name 2>/dev/null)" || return 1
+  ! grep -q '/argocd-' <<<"$residual" || return 1
+  residual="$(kubectl get validatingwebhookconfiguration,mutatingwebhookconfiguration -o name 2>/dev/null)" || return 1
+  ! grep -q '/argocd-' <<<"$residual"
+}
+
+report_cleanup_residuals() {
+  echo "Argo CD cleanup residuals:" >&2
+  kubectl get namespace "$FIXTURE_NAMESPACE" "$ARGO_NAMESPACE" -o wide 2>/dev/null >&2 || true
+  kubectl get namespace "$FIXTURE_NAMESPACE" "$ARGO_NAMESPACE" -o json 2>/dev/null |
+    jq -r '.items[] | [.metadata.name, (.status.phase // ""), ([.status.conditions[]? | select(.status == "True") | .type + ":" + .reason] | join(","))] | @tsv' >&2 || true
+  kubectl get applications.argoproj.io,applicationsets.argoproj.io -A -l "aura-power-quality/run=${RUN_ID}" -o name 2>/dev/null >&2 || true
+  kubectl get powerpolicy -n aura-system -l "aura-power-quality/run=${RUN_ID}" -o name 2>/dev/null >&2 || true
+  kubectl get powertarget -n aura-system -l "power.aura.sh/target-namespace=${FIXTURE_NAMESPACE}" -o name 2>/dev/null >&2 || true
+  kubectl get crd -o name 2>/dev/null | grep 'argoproj.io' >&2 || true
+  kubectl get clusterrole,clusterrolebinding -o name 2>/dev/null | grep '/argocd-' >&2 || true
+  kubectl get validatingwebhookconfiguration,mutatingwebhookconfiguration -o name 2>/dev/null | grep '/argocd-' >&2 || true
+}
+
 cleanup() {
-  local original_status=$? cleanup_status=0 actual_uid actual_run
+  local original_status=$? cleanup_status=0 actual_uid actual_run deadline
   trap - EXIT INT TERM HUP
   set +e
   kubectl delete powerpolicy -n aura-system -l "aura-power-quality/run=${RUN_ID}" --ignore-not-found --wait=true --timeout=90s >/dev/null 2>&1 || true
-  for resource in applications.argoproj.io applicationsets.argoproj.io; do
+
+  # Stop all Argo reconcilers before deleting Applications or their destination
+  # namespace. Otherwise a controller can recreate managed objects while the
+  # namespace controller is trying to establish an empty namespace.
+  if kubectl get namespace "$ARGO_NAMESPACE" >/dev/null 2>&1; then
+    kubectl scale deployment --all -n "$ARGO_NAMESPACE" --replicas=0 >/dev/null 2>&1 || true
+    kubectl scale statefulset --all -n "$ARGO_NAMESPACE" --replicas=0 >/dev/null 2>&1 || true
+    kubectl delete pod --all -n "$ARGO_NAMESPACE" --wait=true --timeout=90s >/dev/null 2>&1 || true
+  fi
+  # Remove the owner before its generated Applications even though the
+  # ApplicationSet controller is stopped. This remains safe if shutdown was
+  # delayed and prevents a generated Application from being recreated.
+  for resource in applicationsets.argoproj.io applications.argoproj.io; do
     kubectl get "$resource" -n "$ARGO_NAMESPACE" -l "aura-power-quality/run=${RUN_ID}" -o name 2>/dev/null | while read -r item; do
       [[ -z "$item" ]] && continue
       kubectl patch "$item" -n "$ARGO_NAMESPACE" --type=merge -p '{"metadata":{"finalizers":[]}}' >/dev/null 2>&1 || true
       kubectl delete "$item" -n "$ARGO_NAMESPACE" --wait=false >/dev/null 2>&1 || true
     done
+    deadline=$((SECONDS + 90))
+    while kubectl get "$resource" -n "$ARGO_NAMESPACE" -l "aura-power-quality/run=${RUN_ID}" -o name 2>/dev/null | grep -q .; do
+      (( SECONDS < deadline )) || { cleanup_status=1; break; }
+      sleep 2
+    done
   done
+  if [[ -s "$ARGO_MANIFEST" ]]; then
+    kubectl delete -f "$ARGO_MANIFEST" --ignore-not-found --wait=false >/dev/null 2>&1 || true
+  fi
+  kubectl delete namespace "$ARGO_NAMESPACE" --ignore-not-found --wait=true --timeout=180s >/dev/null 2>&1 || true
   if [[ -n "$namespace_uid" ]] && kubectl get namespace "$FIXTURE_NAMESPACE" >/dev/null 2>&1; then
     actual_uid="$(kubectl get namespace "$FIXTURE_NAMESPACE" -o jsonpath='{.metadata.uid}')"
     actual_run="$(kubectl get namespace "$FIXTURE_NAMESPACE" -o json | jq -r '.metadata.labels["aura-power-quality/run"] // empty')"
@@ -47,21 +97,15 @@ cleanup() {
       cleanup_status=1
     fi
   fi
-  if [[ -s "$ARGO_MANIFEST" ]]; then
-    kubectl delete -f "$ARGO_MANIFEST" --ignore-not-found --wait=false >/dev/null 2>&1 || true
-  fi
-  kubectl delete namespace "$ARGO_NAMESPACE" --ignore-not-found --wait=true --timeout=180s >/dev/null 2>&1 || true
   kubectl delete powertarget -n aura-system -l "power.aura.sh/target-namespace=${FIXTURE_NAMESPACE}" --ignore-not-found --wait=true --timeout=90s >/dev/null 2>&1 || true
   rm -rf "$BUILD_CONTEXT" "$ARGO_MANIFEST"
-  if kubectl get namespace "$FIXTURE_NAMESPACE" >/dev/null 2>&1 ||
-    kubectl get namespace "$ARGO_NAMESPACE" >/dev/null 2>&1 ||
-    kubectl get powerpolicy -n aura-system -l "aura-power-quality/run=${RUN_ID}" -o name 2>/dev/null | grep -q . ||
-    kubectl get powertarget -n aura-system -l "power.aura.sh/target-namespace=${FIXTURE_NAMESPACE}" -o name 2>/dev/null | grep -q . ||
-    kubectl get crd applications.argoproj.io >/dev/null 2>&1 ||
-    kubectl get clusterrole -l app.kubernetes.io/part-of=argocd -o name 2>/dev/null | grep -q .; then
-    cleanup_status=1
-  fi
+  deadline=$((SECONDS + 60))
+  until cleanup_resources_absent; do
+    (( SECONDS < deadline )) || { cleanup_status=1; break; }
+    sleep 2
+  done
   if [[ "$cleanup_status" -ne 0 ]]; then
+    report_cleanup_residuals
     echo "FATAL: Argo CD fixture cleanup was not verified" >&2
     exit 90
   fi
