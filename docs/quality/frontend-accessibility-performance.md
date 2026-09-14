@@ -27,8 +27,9 @@ skip navigation, SPA page titles, current-page state and focus transfer. A
 rendered Chromium rerun on dashboard, targets, schedules, overrides, audit and
 users in both themes reported zero Axe violations for the selected WCAG A/AA
 tags. A later serial run against the embedded production build, a real server
-and a dedicated Kind cluster passed all 26 accessibility tests. The complete
-desktop Chromium run passed 45 tests and skipped only the mobile-only spec. It
+and a dedicated Kind cluster passed 25 accessibility scenarios plus the
+authenticated setup. The complete desktop Chromium run passed 44 tests and
+skipped only the mobile-only spec. It
 also proved that `/metrics` remains Prometheus text while a reload or deep link to
 `/cluster-metrics` returns the panel. Sanitized screenshots from the local-data
 audit are kept outside the repository in the campaign evidence directory.
@@ -133,7 +134,7 @@ slow interaction. Analysis showed shared React/MUI, query and chart code grouped
 with the application entry.
 
 Vite now emits a manifest and stable UI, query and chart boundaries. On the
-same source and machine, the final entry is 43,445 bytes (13,119 bytes gzip), a
+same source and machine, the final entry is 43,450 bytes (13,122 bytes gzip), a
 91.4% raw reduction; the imported design-token stylesheet is 15,527 bytes
 (2,748 bytes gzip) and the largest JavaScript chunk is 338,856 bytes. Every
 build runs

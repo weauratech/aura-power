@@ -9,6 +9,7 @@ import { Schedule } from '../../src/pages/Schedule';
 import { Notifications as NotificationsPage } from '../../src/pages/Notifications';
 import { Overrides } from '../../src/pages/Overrides';
 import { Blocked } from '../../src/pages/Blocked';
+import { RuleDetail } from '../../src/pages/RuleDetail';
 import { Layout } from '../../src/components/Layout';
 import { origin, server } from '../server';
 import { renderUI, target } from '../helpers';
@@ -146,6 +147,18 @@ describe('operational pages', () => {
     renderUI(<AuditLog />);
     expect(await screen.findByRole('alert')).toHaveTextContent(/audit store unavailable/i);
     expect(screen.queryByText('No audit events')).not.toBeInTheDocument();
+  });
+
+  it('reports a policy API failure instead of a false not-found state', async () => {
+    server.use(http.get(`${origin}/policies`, () => HttpResponse.json(
+      { error: 'policy API unavailable' },
+      { status: 503 },
+    )));
+    renderUI(<RuleDetail />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/policy API unavailable/i);
+    expect(screen.getByRole('heading', { level: 1, name: 'Rule: unknown' })).toBeVisible();
+    expect(screen.queryByText('Policy not found.')).not.toBeInTheDocument();
   });
 
   it('shows when an external audit notification was intentionally suppressed', async () => {

@@ -177,6 +177,7 @@ test('API failure states preserve each route heading and document structure', as
     ['/schedule', 'Schedules'],
     ['/rules', 'Schedules'],
     ['/policies', 'Schedules'],
+    ['/rules/missing', 'Rule: missing'],
     ['/overrides', 'Overrides'],
     ['/savings', 'Savings'],
     ['/blocked', 'Blocked Targets'],
