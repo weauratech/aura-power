@@ -172,7 +172,9 @@ jobs:
       - name: Prove v2.1.7 full release upgrade
         run: ./scripts/quality/kind-release-upgrade-journey.sh
       - name: Prove managed auth Secret externalization
-        run: ./scripts/quality/kind-secret-externalization-journey.sh
+        run: |
+          export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config}"
+          ./scripts/quality/kind-secret-externalization-journey.sh
       - name: Install candidate and run native journey
         run: |
           export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config}"

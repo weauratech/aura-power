@@ -249,4 +249,11 @@ if helm template aura-power charts/aura-power --set webhook.enabled=true --set w
   exit 1
 fi
 
+for workflow in .github/workflows/ci.yaml .github/workflows/release.yaml; do
+  perl -0ne 'exit(!/name: Prove managed auth Secret externalization\n\s+run: \|\n\s+export KUBECONFIG="\$\{KUBECONFIG:-\$HOME\/\.kube\/config\}"\n\s+\.\/scripts\/quality\/kind-secret-externalization-journey\.sh/s)' "$workflow" || {
+    echo "FAIL: $workflow must give the Secret externalization journey an explicit Kind kubeconfig" >&2
+    exit 1
+  }
+done
+
 echo "Helm/release contract checks passed"
