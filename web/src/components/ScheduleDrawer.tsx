@@ -289,7 +289,7 @@ export function ScheduleDrawer({ open, onClose, onSuccess, prefill, editPolicy }
                   <InfoOutlinedIcon sx={{ fontSize: 14, color: 'text.disabled' }} />
                 </Tooltip>
               </Stack>
-              <Stack direction="row" spacing={1} sx={{ mb: 2 }}>
+              <Stack role="group" aria-label="Schedule scope type" direction="row" spacing={1} sx={{ mb: 2 }}>
                 <Chip label="Namespaces" size="small" variant={scopeMode === 'namespaces' ? 'filled' : 'outlined'} color={scopeMode === 'namespaces' ? 'primary' : 'default'} onClick={() => setScopeMode('namespaces')} sx={{ cursor: 'pointer' }} />
                 <Chip label="Workloads" size="small" variant={scopeMode === 'workloads' ? 'filled' : 'outlined'} color={scopeMode === 'workloads' ? 'primary' : 'default'} onClick={() => setScopeMode('workloads')} sx={{ cursor: 'pointer' }} />
               </Stack>
@@ -337,7 +337,7 @@ export function ScheduleDrawer({ open, onClose, onSuccess, prefill, editPolicy }
                 <TextField label="Timezone" value={timezone} onChange={e => setTimezone(e.target.value)} size="small" fullWidth />
                 <Box>
                   <Typography variant="caption" color="text.secondary" sx={{ mb: 1, display: 'block' }}>Active Days</Typography>
-                  <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+                  <Stack role="group" aria-label="Active days" direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
                     {DAYS.map((label, i) => (
                       <Chip key={i} label={label} size="small" variant={days.includes(i) ? 'filled' : 'outlined'} color={days.includes(i) ? 'primary' : 'default'} onClick={() => toggleDay(i)} sx={{ cursor: 'pointer' }} />
                     ))}

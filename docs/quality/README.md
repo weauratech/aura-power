@@ -2,6 +2,9 @@
 
 Controller cardinality, heap profiling, memory budgets and leader failover are documented in [controller-memory-validation.md](controller-memory-validation.md).
 
+Route-wide accessibility and frontend bundle evidence is documented in
+[frontend-accessibility-performance.md](frontend-accessibility-performance.md).
+
 This directory records the permanent quality campaign introduced against commit
 `4727bc56f144`. The product contract is: select exactly the intended workloads,
 change them at the intended time, restore their prior state, and explain the

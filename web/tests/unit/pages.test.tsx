@@ -18,6 +18,9 @@ describe('operational pages', () => {
     renderUI(<Layout user={{ username: 'alice', role: 'admin' }} onLogout={() => undefined} />);
     expect(screen.getByRole('button', { name: 'Sign out' })).toBeVisible();
     expect(screen.getByRole('button', { name: 'Switch to dark theme' })).toBeVisible();
+    expect(screen.getByRole('link', { name: 'Skip to main content' })).toHaveAttribute('href', '#main-content');
+    expect(screen.getByRole('link', { name: 'Dashboard' })).toHaveAttribute('aria-current', 'page');
+    expect(document.title).toBe('Dashboard · Aura Power');
   });
 
   it('exposes expandable block reasons with state and ownership', async () => {

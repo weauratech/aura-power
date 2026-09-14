@@ -10,7 +10,6 @@ import TableCell from '@mui/material/TableCell';
 import TableContainer from '@mui/material/TableContainer';
 import TableHead from '@mui/material/TableHead';
 import TableRow from '@mui/material/TableRow';
-import Skeleton from '@mui/material/Skeleton';
 import Alert from '@mui/material/Alert';
 import MuiLink from '@mui/material/Link';
 import Stack from '@mui/material/Stack';
@@ -27,6 +26,7 @@ import { ScheduleDrawer } from '../components/ScheduleDrawer';
 import { useNotify } from '../components/Notifications';
 import { EmptyState } from '../components/EmptyState';
 import type { PowerTarget, TargetRef } from '../types';
+import { LoadingState } from '../components/LoadingState';
 
 function mapState(t: PowerTarget): WorkloadState {
   if (t.status.blocked) return 'failed';
@@ -118,7 +118,7 @@ export function Targets() {
     <Box>
       <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 3 }}>
         <Box>
-          <Typography variant="h4">Targets</Typography>
+          <Typography component="h1" tabIndex={-1} variant="h4">Targets</Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
             {filtered.length} workloads {search || stateFilter !== 'all' ? '(filtered)' : ''}
           </Typography>
@@ -131,6 +131,7 @@ export function Targets() {
       {/* Filters */}
       <Stack direction="row" spacing={2} alignItems="center" sx={{ mb: 3 }}>
         <TextField
+          label="Search targets"
           size="small"
           placeholder="Search by name or namespace..."
           value={search}
@@ -141,6 +142,7 @@ export function Targets() {
           }}
         />
         <ToggleButtonGroup
+          aria-label="Filter targets by state"
           size="small"
           value={stateFilter}
           exclusive
@@ -161,7 +163,7 @@ export function Targets() {
       </Stack>
 
       {isLoading ? (
-        <Skeleton variant="rounded" height={400} />
+        <LoadingState label="Loading workload targets" height={400} />
       ) : (
         Object.entries(grouped).map(([ns, targets]) => (
           <Box key={ns} sx={{ mb: ns ? 4 : 0 }}>
@@ -183,7 +185,7 @@ export function Targets() {
               </Stack>
             )}
             <TableContainer>
-              <Table size="small">
+              <Table size="small" aria-label="Workload targets">
                 <TableHead>
                   <TableRow>
                     {!ns && <TableCell>Namespace</TableCell>}

@@ -5,7 +5,6 @@ import Card from '@mui/material/Card';
 import CardContent from '@mui/material/CardContent';
 import Grid from '@mui/material/Grid';
 import Stack from '@mui/material/Stack';
-import Skeleton from '@mui/material/Skeleton';
 import Alert from '@mui/material/Alert';
 import ToggleButton from '@mui/material/ToggleButton';
 import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
@@ -14,6 +13,7 @@ import { useTheme } from '@mui/material/styles';
 import { XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, ResponsiveContainer, Area, AreaChart } from 'recharts';
 import { useClusterMetrics, useCostSummary } from '../hooks/useMetrics';
 import { useProviderStatus } from '../hooks/useProviderStatus';
+import { LoadingState } from '../components/LoadingState';
 
 type TimeRange = '1h' | '6h' | '24h' | '7d';
 
@@ -43,12 +43,12 @@ export function Metrics() {
   const { data: costData } = useCostSummary();
   const theme = useTheme();
 
-  if (providerLoading) return <Skeleton variant="rounded" height={400} />;
+  if (providerLoading) return <LoadingState label="Loading metrics provider" height={400} />;
 
   if (!metricsAvailable) {
     return (
       <Box>
-        <Typography variant="h4" sx={{ mb: 4 }}>Metrics</Typography>
+        <Typography component="h1" tabIndex={-1} variant="h4" sx={{ mb: 4 }}>Metrics</Typography>
         <Alert severity="info">
           Metrics provider not available. Ensure <code>server.prometheus.url</code> is configured in your Helm values and Prometheus is reachable from the server pod.
         </Alert>
@@ -83,8 +83,8 @@ export function Metrics() {
   return (
     <Box>
       <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 4 }}>
-        <Typography variant="h4">Metrics</Typography>
-        <ToggleButtonGroup size="small" value={range} exclusive onChange={(_, v) => v && setRange(v)}>
+        <Typography component="h1" tabIndex={-1} variant="h4">Metrics</Typography>
+        <ToggleButtonGroup aria-label="Metrics time range" size="small" value={range} exclusive onChange={(_, v) => v && setRange(v)}>
           <ToggleButton value="1h">1h</ToggleButton>
           <ToggleButton value="6h">6h</ToggleButton>
           <ToggleButton value="24h">24h</ToggleButton>
@@ -95,7 +95,7 @@ export function Metrics() {
       {metricsError && <Alert severity="error" sx={{ mb: 3 }}>{(metricsError as Error).message}</Alert>}
 
       {metricsLoading ? (
-        <Skeleton variant="rounded" height={400} />
+        <LoadingState label="Loading cluster metrics" height={400} />
       ) : (
         <>
           {/* Summary cards */}
@@ -104,8 +104,8 @@ export function Metrics() {
               <Card sx={{ height: '100%' }}>
                 <CardContent>
                   <Typography variant="overline" color="text.secondary" sx={{ display: 'block', mb: 1 }}>CPU Usage</Typography>
-                  <Typography variant="h4" sx={{ fontFamily: "'Geist Mono', monospace" }}>{cpuPct.toFixed(1)}%</Typography>
-                  <LinearProgress variant="determinate" value={Math.min(cpuPct, 100)} color={cpuPct > 80 ? 'error' : cpuPct > 60 ? 'warning' : 'primary'} sx={{ mt: 1.5, height: 4, borderRadius: 2 }} />
+                  <Typography component="p" variant="h4" sx={{ fontFamily: "'Geist Mono', monospace" }}>{cpuPct.toFixed(1)}%</Typography>
+                  <LinearProgress aria-label="CPU utilization" variant="determinate" value={Math.min(cpuPct, 100)} color={cpuPct > 80 ? 'error' : cpuPct > 60 ? 'warning' : 'primary'} sx={{ mt: 1.5, height: 4, borderRadius: 2 }} />
                   <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
                     {formatCores(latestCPU)} / {formatCores(latestCPUCap)}
                   </Typography>
@@ -116,8 +116,8 @@ export function Metrics() {
               <Card sx={{ height: '100%' }}>
                 <CardContent>
                   <Typography variant="overline" color="text.secondary" sx={{ display: 'block', mb: 1 }}>Memory Usage</Typography>
-                  <Typography variant="h4" sx={{ fontFamily: "'Geist Mono', monospace" }}>{memPct.toFixed(1)}%</Typography>
-                  <LinearProgress variant="determinate" value={Math.min(memPct, 100)} color={memPct > 80 ? 'error' : memPct > 60 ? 'warning' : 'primary'} sx={{ mt: 1.5, height: 4, borderRadius: 2 }} />
+                  <Typography component="p" variant="h4" sx={{ fontFamily: "'Geist Mono', monospace" }}>{memPct.toFixed(1)}%</Typography>
+                  <LinearProgress aria-label="Memory utilization" variant="determinate" value={Math.min(memPct, 100)} color={memPct > 80 ? 'error' : memPct > 60 ? 'warning' : 'primary'} sx={{ mt: 1.5, height: 4, borderRadius: 2 }} />
                   <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
                     {formatBytes(latestMem)} / {formatBytes(latestMemCap)}
                   </Typography>
@@ -128,7 +128,7 @@ export function Metrics() {
               <Card sx={{ height: '100%' }}>
                 <CardContent>
                   <Typography variant="overline" color="text.secondary" sx={{ display: 'block', mb: 1 }}>Nodes</Typography>
-                  <Typography variant="h4" sx={{ fontFamily: "'Geist Mono', monospace" }}>{nodeCount}</Typography>
+                  <Typography component="p" variant="h4" sx={{ fontFamily: "'Geist Mono', monospace" }}>{nodeCount}</Typography>
                 </CardContent>
               </Card>
             </Grid>
@@ -136,7 +136,7 @@ export function Metrics() {
               <Card sx={{ height: '100%' }}>
                 <CardContent>
                   <Typography variant="overline" color="text.secondary" sx={{ display: 'block', mb: 1 }}>Cost / Hour</Typography>
-                  <Typography variant="h4" sx={{ fontFamily: "'Geist Mono', monospace", color: 'success.main' }}>
+                  <Typography component="p" variant="h4" sx={{ fontFamily: "'Geist Mono', monospace", color: 'success.main' }}>
                     ${costData?.totalClusterCostPerHour?.toFixed(2) ?? '—'}
                   </Typography>
                   {costData?.projectedMonthlySavings && (
@@ -152,7 +152,7 @@ export function Metrics() {
           {/* CPU Chart */}
           <Card sx={{ mb: 3 }}>
             <CardContent>
-              <Typography variant="h6" sx={{ mb: 2 }}>CPU (cores)</Typography>
+              <Typography component="h2" variant="h6" sx={{ mb: 2 }}>CPU (cores)</Typography>
               <ResponsiveContainer width="100%" height={220}>
                 <AreaChart data={cpuChartData} margin={{ left: 0, right: 16 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke={theme.palette.divider} />
@@ -170,7 +170,7 @@ export function Metrics() {
           {/* Memory Chart */}
           <Card>
             <CardContent>
-              <Typography variant="h6" sx={{ mb: 2 }}>Memory (GiB)</Typography>
+              <Typography component="h2" variant="h6" sx={{ mb: 2 }}>Memory (GiB)</Typography>
               <ResponsiveContainer width="100%" height={220}>
                 <AreaChart data={memChartData} margin={{ left: 0, right: 16 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke={theme.palette.divider} />

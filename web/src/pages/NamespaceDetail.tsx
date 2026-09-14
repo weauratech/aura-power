@@ -10,7 +10,6 @@ import TableCell from '@mui/material/TableCell';
 import TableContainer from '@mui/material/TableContainer';
 import TableHead from '@mui/material/TableHead';
 import TableRow from '@mui/material/TableRow';
-import Skeleton from '@mui/material/Skeleton';
 import Alert from '@mui/material/Alert';
 import MuiLink from '@mui/material/Link';
 import ScheduleIcon from '@mui/icons-material/ScheduleOutlined';
@@ -19,6 +18,7 @@ import type { WorkloadState } from '../design-system/react/PowerRing';
 import { useTargets } from '../hooks/useApi';
 import { ScheduleDrawer } from '../components/ScheduleDrawer';
 import type { PowerTarget, TargetRef } from '../types';
+import { LoadingState } from '../components/LoadingState';
 
 function targetURL(ref: TargetRef): string {
   const params = new URLSearchParams({ kind: ref.kind });
@@ -57,7 +57,7 @@ export function NamespaceDetail() {
       <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 4 }}>
         <Box>
           <Typography variant="overline" color="text.secondary">Namespace</Typography>
-          <Typography variant="h4">{namespace}</Typography>
+          <Typography component="h1" tabIndex={-1} variant="h4">{namespace}</Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
             {targets.length} workloads
           </Typography>
@@ -68,10 +68,10 @@ export function NamespaceDetail() {
       </Stack>
 
       {isLoading ? (
-        <Skeleton variant="rounded" height={300} />
+        <LoadingState label={`Loading workloads in ${namespace}`} height={300} />
       ) : (
         <TableContainer>
-          <Table size="small">
+          <Table size="small" aria-label={`Workloads in namespace ${namespace}`}>
             <TableHead>
               <TableRow>
                 <TableCell>Name</TableCell>

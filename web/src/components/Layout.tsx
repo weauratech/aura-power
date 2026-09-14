@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, Outlet, useLocation } from 'react-router-dom';
 import Box from '@mui/material/Box';
 import Drawer from '@mui/material/Drawer';
@@ -19,6 +19,7 @@ import { useTheme } from '@mui/material/styles';
 import DashboardIcon from '@mui/icons-material/DashboardOutlined';
 import DevicesIcon from '@mui/icons-material/DevicesOutlined';
 import ScheduleIcon from '@mui/icons-material/ScheduleOutlined';
+import OverrideIcon from '@mui/icons-material/BoltOutlined';
 import BarChartIcon from '@mui/icons-material/BarChartOutlined';
 import BlockIcon from '@mui/icons-material/BlockOutlined';
 import SavingsIcon from '@mui/icons-material/SavingsOutlined';
@@ -53,12 +54,23 @@ const NAV_ITEMS: NavItem[] = [
   { path: '/', label: 'Dashboard', icon: <DashboardIcon /> },
   { path: '/targets', label: 'Targets', icon: <DevicesIcon /> },
   { path: '/schedule', label: 'Schedules', icon: <ScheduleIcon /> },
+  { path: '/overrides', label: 'Overrides', icon: <OverrideIcon /> },
   { path: '/savings', label: 'Savings', icon: <SavingsIcon /> },
   { path: '/blocked', label: 'Blocked', icon: <BlockIcon /> },
   { path: '/audit', label: 'Audit Log', icon: <HistoryIcon /> },
   { path: '/notifications', label: 'Notifications', icon: <NotificationsIcon /> },
   { path: '/metrics', label: 'Metrics', icon: <BarChartIcon /> },
 ];
+
+function titleSegment(segment: string): string {
+  let value = segment;
+  try {
+    value = decodeURIComponent(segment);
+  } catch {
+    // Keep malformed path input displayable instead of breaking route navigation.
+  }
+  return value.replace(/(^|[-_])\w/g, match => match.replace(/[-_]/, ' ').toUpperCase());
+}
 
 function isActive(currentPath: string, itemPath: string): boolean {
   if (itemPath === '/') return currentPath === '/';
@@ -67,11 +79,40 @@ function isActive(currentPath: string, itemPath: string): boolean {
 
 export function Layout({ user, onLogout, onPasswordChanged }: LayoutProps) {
   const location = useLocation();
+  const previousPath = useRef(location.pathname);
   const { mode, toggleMode } = useThemeMode();
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
   const [mobileOpen, setMobileOpen] = useState(false);
   const [passwordOpen, setPasswordOpen] = useState(false);
+
+  useEffect(() => {
+    const routeTitle = location.pathname === '/' ? 'Dashboard' :
+      location.pathname.split('/').filter(Boolean).map(titleSegment).join(' · ');
+    document.title = `${routeTitle} · Aura Power`;
+
+    if (previousPath.current !== location.pathname) {
+      const focusHeading = () => {
+        const heading = document.querySelector<HTMLElement>('#main-content h1');
+        if (heading) heading.focus();
+        return Boolean(heading);
+      };
+      if (!focusHeading()) {
+        const observer = new MutationObserver(() => {
+          if (focusHeading()) observer.disconnect();
+        });
+        const main = document.getElementById('main-content');
+        if (main) observer.observe(main, { childList: true, subtree: true });
+        const timeout = window.setTimeout(() => observer.disconnect(), 3000);
+        previousPath.current = location.pathname;
+        return () => {
+          observer.disconnect();
+          window.clearTimeout(timeout);
+        };
+      }
+    }
+    previousPath.current = location.pathname;
+  }, [location.pathname]);
 
   const showPending = user && (user.role === 'approver' || user.role === 'admin');
   const showUsers = user && user.role === 'admin';
@@ -87,7 +128,7 @@ export function Layout({ user, onLogout, onPasswordChanged }: LayoutProps) {
         />
       </Stack>
 
-      <List sx={{ flex: 1, px: 1.5 }}>
+      <List component="div" sx={{ flex: 1, px: 1.5 }}>
         {NAV_ITEMS.map((item) => {
           const active = isActive(location.pathname, item.path);
           return (
@@ -96,6 +137,7 @@ export function Layout({ user, onLogout, onPasswordChanged }: LayoutProps) {
               component={Link}
               to={item.path}
               selected={active}
+              aria-current={active ? 'page' : undefined}
               onClick={() => isMobile && setMobileOpen(false)}
               sx={{ mb: 0.5, py: 1 }}
             >
@@ -114,6 +156,7 @@ export function Layout({ user, onLogout, onPasswordChanged }: LayoutProps) {
               component={Link}
               to="/pending"
               selected={isActive(location.pathname, '/pending')}
+              aria-current={isActive(location.pathname, '/pending') ? 'page' : undefined}
               onClick={() => isMobile && setMobileOpen(false)}
               sx={{ py: 1 }}
             >
@@ -128,6 +171,7 @@ export function Layout({ user, onLogout, onPasswordChanged }: LayoutProps) {
             component={Link}
             to="/users"
             selected={isActive(location.pathname, '/users')}
+            aria-current={isActive(location.pathname, '/users') ? 'page' : undefined}
             onClick={() => isMobile && setMobileOpen(false)}
             sx={{ py: 1 }}
           >
@@ -138,6 +182,14 @@ export function Layout({ user, onLogout, onPasswordChanged }: LayoutProps) {
       </List>
 
       <Box sx={{ px: 2, py: 2, borderTop: 1, borderColor: 'divider' }}>
+        <Typography
+          component={Link}
+          to="/site-map"
+          variant="caption"
+          sx={{ display: 'block', color: 'text.secondary', mb: 1, textDecoration: 'underline' }}
+        >
+          All pages
+        </Typography>
         {user && (
           <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1 }}>
             <Box>
@@ -175,6 +227,17 @@ export function Layout({ user, onLogout, onPasswordChanged }: LayoutProps) {
         onClose={() => setPasswordOpen(false)}
         onChanged={onPasswordChanged ?? (() => undefined)}
       />
+      <Box
+        component="a"
+        href="#main-content"
+        sx={{
+          position: 'fixed', top: 8, left: 8, zIndex: 'tooltip', px: 2, py: 1,
+          bgcolor: 'background.paper', color: 'text.primary', borderRadius: 1,
+          transform: 'translateY(-200%)', '&:focus': { transform: 'translateY(0)' },
+        }}
+      >
+        Skip to main content
+      </Box>
       {/* Mobile AppBar */}
       {isMobile && (
         <AppBar position="fixed" sx={{ zIndex: theme.zIndex.drawer + 1 }}>
@@ -214,6 +277,8 @@ export function Layout({ user, onLogout, onPasswordChanged }: LayoutProps) {
       {/* Main content */}
       <Box
         component="main"
+        id="main-content"
+        tabIndex={-1}
         sx={{
           flexGrow: 1,
           minWidth: 0,

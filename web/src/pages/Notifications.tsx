@@ -189,7 +189,7 @@ export function Notifications() {
     <Box>
       <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 4 }}>
         <Box>
-          <Typography variant="h4">Notifications</Typography>
+          <Typography component="h1" tabIndex={-1} variant="h4">Notifications</Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
             Webhook channels for power event alerts.
           </Typography>
@@ -212,7 +212,7 @@ export function Notifications() {
         />
       ) : (
         <TableContainer>
-          <Table size="small">
+          <Table size="small" aria-label="Notification channels">
             <TableHead>
               <TableRow>
                 <TableCell>Name</TableCell>
@@ -322,7 +322,7 @@ export function Notifications() {
               <TextField label="Webhook URL" value={url} onChange={e => setUrl(e.target.value)} size="small" fullWidth required={!editingChannel?.spec.urlFrom} placeholder={editingChannel?.spec.urlFrom ? `Stored in Secret ${editingChannel.spec.urlFrom.name}/${editingChannel.spec.urlFrom.key}` : 'https://...'} helperText={editingChannel?.spec.urlFrom && !url ? 'The existing Secret reference will be preserved.' : undefined} />
               <Box>
                 <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>Events (empty = all)</Typography>
-                <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+                <Stack role="group" aria-label="Notification events" direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
                   {EVENT_OPTIONS.map(ev => (
                     <Chip
                       key={ev}

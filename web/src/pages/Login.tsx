@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Box from '@mui/material/Box';
 import Card from '@mui/material/Card';
 import CardContent from '@mui/material/CardContent';
@@ -18,6 +18,10 @@ export function Login({ onLogin }: LoginProps) {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    document.title = 'Sign in · Aura Power';
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -48,7 +52,7 @@ export function Login({ onLogin }: LoginProps) {
         <CardContent sx={{ p: 6 }}>
           <Stack alignItems="center" spacing={2} sx={{ mb: 5 }}>
             <PowerRing value={0.5} state="running" size={40} />
-            <Typography variant="h3">Aura Power</Typography>
+            <Typography component="h1" variant="h3">Aura Power</Typography>
             <Typography variant="body2" color="text.secondary">Sign in to continue</Typography>
           </Stack>
 

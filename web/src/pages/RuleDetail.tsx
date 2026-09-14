@@ -14,7 +14,7 @@ export function RuleDetail() {
   if (!policy) {
     return (
       <Box>
-        <Typography variant="h2" sx={{ mb: 4 }}>Rule: {name}</Typography>
+        <Typography component="h1" tabIndex={-1} variant="h2" sx={{ mb: 4 }}>Rule: {name}</Typography>
         <Typography variant="body2" color="text.secondary">Policy not found.</Typography>
       </Box>
     );
@@ -22,7 +22,7 @@ export function RuleDetail() {
 
   return (
     <Box>
-      <Typography variant="h2" sx={{ mb: 4 }}>{policy.metadata.name}</Typography>
+      <Typography component="h1" tabIndex={-1} variant="h2" sx={{ mb: 4 }}>{policy.metadata.name}</Typography>
       <Card>
         <CardContent>
           <Typography variant="body2" component="pre" sx={{ fontFamily: 'mono', whiteSpace: 'pre-wrap' }}>

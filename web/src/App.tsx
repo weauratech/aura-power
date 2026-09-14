@@ -23,14 +23,15 @@ const Users = lazy(() => import('./pages/Users').then(module => ({ default: modu
 const Overrides = lazy(() => import('./pages/Overrides').then(module => ({ default: module.Overrides })));
 const AuditLog = lazy(() => import('./pages/AuditLog').then(module => ({ default: module.AuditLog })));
 const Notifications = lazy(() => import('./pages/Notifications').then(module => ({ default: module.Notifications })));
+const SiteMap = lazy(() => import('./pages/SiteMap').then(module => ({ default: module.SiteMap })));
 
 export function App() {
   const { isAuthenticated, isLoading, authEnabled, user, logout } = useAuth();
 
   if (isLoading) {
     return (
-      <Box sx={{ minHeight: '100vh', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 2 }}>
-        <CircularProgress size={24} />
+      <Box role="status" aria-live="polite" sx={{ minHeight: '100vh', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 2 }}>
+        <CircularProgress aria-hidden="true" size={24} />
         <Typography color="text.secondary">Loading...</Typography>
       </Box>
     );
@@ -58,7 +59,7 @@ export function App() {
   return (
 	<CurrentUserContext.Provider value={user}>
 	<BrowserRouter>
-	  <Suspense fallback={<Box sx={{ p: 4 }}><CircularProgress size={24} aria-label="Loading page" /></Box>}>
+	  <Suspense fallback={<Box role="status" aria-label="Loading page" aria-live="polite" sx={{ p: 4 }}><CircularProgress aria-hidden="true" size={24} /></Box>}>
       <Routes>
         <Route element={<Layout user={user} onLogout={handleLogout} onPasswordChanged={handlePasswordChanged} />}>
           <Route path="/" element={<Dashboard />} />
@@ -77,6 +78,7 @@ export function App() {
           <Route path="/blocked" element={<Blocked />} />
           <Route path="/pending" element={<PendingApprovals />} />
           <Route path="/users" element={<Users />} />
+          <Route path="/site-map" element={<SiteMap />} />
         </Route>
       </Routes>
 	  </Suspense>

@@ -20,7 +20,7 @@ export function EmptyState({ title, description, actionLabel, onAction, icon = '
           <PowerRing value={0} state="asleep" size={56} stem={false} />
         )}
         <Box>
-          <Typography variant="h5" sx={{ mb: 1 }}>{title}</Typography>
+          <Typography component="h2" variant="h5" sx={{ mb: 1 }}>{title}</Typography>
           <Typography variant="body2" color="text.secondary" sx={{ maxWidth: 400, mx: 'auto' }}>
             {description}
           </Typography>

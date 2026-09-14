@@ -12,6 +12,18 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: false,
+    manifest: true,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return undefined;
+          if (id.includes('/recharts/') || id.includes('/d3-') || id.includes('/victory-vendor/')) return 'charts-vendor';
+          if (id.includes('/@mui/') || id.includes('/@emotion/') || id.includes('/react-transition-group/')) return 'ui-vendor';
+          if (id.includes('/@tanstack/')) return 'query-vendor';
+          return 'vendor';
+        },
+      },
+    },
   },
   server: {
     port: 3000,

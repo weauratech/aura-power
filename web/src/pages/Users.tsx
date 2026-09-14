@@ -8,7 +8,6 @@ import TableContainer from '@mui/material/TableContainer';
 import TableHead from '@mui/material/TableHead';
 import TableRow from '@mui/material/TableRow';
 import Chip from '@mui/material/Chip';
-import Skeleton from '@mui/material/Skeleton';
 import Alert from '@mui/material/Alert';
 import Button from '@mui/material/Button';
 import Stack from '@mui/material/Stack';
@@ -23,6 +22,7 @@ import Tooltip from '@mui/material/Tooltip';
 import DeleteIcon from '@mui/icons-material/DeleteOutlined';
 import AddIcon from '@mui/icons-material/PersonAddOutlined';
 import { apiPost, apiDelete } from '../hooks/useApi';
+import { LoadingState } from '../components/LoadingState';
 
 interface User {
   id: string;
@@ -88,17 +88,17 @@ export function Users() {
   return (
     <Box>
       <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 4 }}>
-        <Typography variant="h4">Users</Typography>
+        <Typography component="h1" tabIndex={-1} variant="h4">Users</Typography>
         <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>
           New User
         </Button>
       </Stack>
 
       {loading ? (
-        <Skeleton variant="rounded" height={200} />
+        <LoadingState label="Loading users" height={200} />
       ) : (
         <TableContainer>
-          <Table size="small">
+          <Table size="small" aria-label="Users">
             <TableHead>
               <TableRow>
                 <TableCell>Username</TableCell>

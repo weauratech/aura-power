@@ -5,7 +5,6 @@ import CardContent from '@mui/material/CardContent';
 import Grid from '@mui/material/Grid';
 import Stack from '@mui/material/Stack';
 import Button from '@mui/material/Button';
-import Skeleton from '@mui/material/Skeleton';
 import Alert from '@mui/material/Alert';
 import Table from '@mui/material/Table';
 import TableBody from '@mui/material/TableBody';
@@ -15,13 +14,14 @@ import TableHead from '@mui/material/TableHead';
 import TableRow from '@mui/material/TableRow';
 import LinearProgress from '@mui/material/LinearProgress';
 import { useSavings, useTargets } from '../hooks/useApi';
+import { LoadingState } from '../components/LoadingState';
 
 export function Savings() {
   const { data, isLoading, error } = useSavings();
   const { data: targetsData } = useTargets();
 
   if (error) return <Alert severity="error">{(error as Error).message}</Alert>;
-  if (isLoading) return <Skeleton variant="rounded" height={200} />;
+  if (isLoading) return <LoadingState label="Loading savings" height={200} />;
 
   // Build per-target savings breakdown
   const targetSavings = targetsData?.targets
@@ -34,7 +34,7 @@ export function Savings() {
   return (
     <Box>
       <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 4 }}>
-        <Typography variant="h4">Savings</Typography>
+        <Typography component="h1" tabIndex={-1} variant="h4">Savings</Typography>
         <Button variant="outlined" size="small" href="/api/v1/savings/export" download>
           Export CSV
         </Button>
@@ -47,7 +47,7 @@ export function Savings() {
               <Typography variant="overline" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
                 CPU Hours Saved
               </Typography>
-              <Typography variant="h3" sx={{ fontFamily: "'Geist Mono', monospace" }}>
+              <Typography component="p" variant="h3" sx={{ fontFamily: "'Geist Mono', monospace" }}>
                 {data?.totalCPUHours?.toFixed(1) ?? '0'}
               </Typography>
               <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
@@ -62,7 +62,7 @@ export function Savings() {
               <Typography variant="overline" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
                 Memory GiB-Hours
               </Typography>
-              <Typography variant="h3" sx={{ fontFamily: "'Geist Mono', monospace" }}>
+              <Typography component="p" variant="h3" sx={{ fontFamily: "'Geist Mono', monospace" }}>
                 {data?.totalMemoryGiB?.toFixed(1) ?? '0'}
               </Typography>
               <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
@@ -77,7 +77,7 @@ export function Savings() {
               <Typography variant="overline" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
                 Estimated Cost Saved
               </Typography>
-              <Typography variant="h3" sx={{ fontFamily: "'Geist Mono', monospace", color: 'success.main' }}>
+              <Typography component="p" variant="h3" sx={{ fontFamily: "'Geist Mono', monospace", color: 'success.main' }}>
                 ${data?.totalEstimatedCost?.toFixed(2) ?? '0.00'}
               </Typography>
               <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
@@ -91,9 +91,9 @@ export function Savings() {
       {/* Per-target breakdown */}
       {targetSavings.length > 0 && (
         <Box>
-          <Typography variant="h5" sx={{ mb: 3 }}>Breakdown by Target</Typography>
+          <Typography component="h2" variant="h5" sx={{ mb: 3 }}>Breakdown by Target</Typography>
           <TableContainer>
-            <Table size="small">
+            <Table size="small" aria-label="Savings by target">
               <TableHead>
                 <TableRow>
                   <TableCell>Target</TableCell>
@@ -117,7 +117,7 @@ export function Savings() {
                       <TableCell><Typography variant="code">{s.memoryGiBHoursSaved.toFixed(1)}</Typography></TableCell>
                       <TableCell><Typography variant="code">${s.estimatedCost.toFixed(2)}</Typography></TableCell>
                       <TableCell>
-                        <LinearProgress variant="determinate" value={pct} sx={{ height: 6, borderRadius: 3 }} />
+                        <LinearProgress aria-label={`${t.spec.targetRef.name} share of savings`} variant="determinate" value={pct} sx={{ height: 6, borderRadius: 3 }} />
                       </TableCell>
                     </TableRow>
                   );
