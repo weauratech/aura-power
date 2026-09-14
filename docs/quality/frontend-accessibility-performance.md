@@ -134,7 +134,7 @@ slow interaction. Analysis showed shared React/MUI, query and chart code grouped
 with the application entry.
 
 Vite now emits a manifest and stable UI, query and chart boundaries. On the
-same source and machine, the final entry is 43,450 bytes (13,122 bytes gzip), a
+same source and machine, the final entry is 43,450 bytes (13,120 bytes gzip), a
 91.4% raw reduction; the imported design-token stylesheet is 15,527 bytes
 (2,748 bytes gzip) and the largest JavaScript chunk is 338,856 bytes. Every
 build runs
