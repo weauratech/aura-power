@@ -35,6 +35,23 @@ type PowerNotificationChannelSpec struct {
 	// Enabled controls whether this channel is active.
 	// +kubebuilder:default=true
 	Enabled bool `json:"enabled"`
+
+	// DeliveryPolicy controls recovery after an ambiguous provider outcome.
+	// AtMostOnce suppresses replay after a request may have reached the provider.
+	// AtLeastOnce retries with the same idempotency key and requires receiver-side
+	// deduplication to avoid duplicate effects.
+	// +optional
+	// +kubebuilder:default=at-most-once
+	// +kubebuilder:validation:Enum=at-most-once;at-least-once
+	DeliveryPolicy string `json:"deliveryPolicy,omitempty"`
+
+	// MaxDeliveryAttempts bounds durable at-least-once retries. It includes the
+	// initial provider request. At-most-once channels always send at most once.
+	// +optional
+	// +kubebuilder:default=5
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=20
+	MaxDeliveryAttempts int32 `json:"maxDeliveryAttempts,omitempty"`
 }
 
 // SecretKeyRef references a key in a Kubernetes Secret.
@@ -83,8 +100,8 @@ type NotificationAttemptStatus struct {
 	// +optional
 	AuditEventRefs []string `json:"auditEventRefs,omitempty"`
 
-	// Phase is InProgress, Succeeded, or Failed.
-	// +kubebuilder:validation:Enum=InProgress;Succeeded;Failed
+	// Phase is InProgress, Succeeded, Failed, or Ambiguous.
+	// +kubebuilder:validation:Enum=InProgress;Succeeded;Failed;Ambiguous
 	Phase string `json:"phase"`
 
 	StartedAt metav1.Time `json:"startedAt"`

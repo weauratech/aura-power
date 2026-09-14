@@ -12,6 +12,71 @@ import (
 // Ensure unused imports are referenced.
 var _ = metav1.Now
 
+func (in *PowerNotificationDelivery) DeepCopyInto(out *PowerNotificationDelivery) {
+	*out = *in
+	out.TypeMeta = in.TypeMeta
+	in.ObjectMeta.DeepCopyInto(&out.ObjectMeta)
+	in.Status.DeepCopyInto(&out.Status)
+}
+
+func (in *PowerNotificationDelivery) DeepCopy() *PowerNotificationDelivery {
+	if in == nil {
+		return nil
+	}
+	out := new(PowerNotificationDelivery)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *PowerNotificationDelivery) DeepCopyObject() runtime.Object {
+	if c := in.DeepCopy(); c != nil {
+		return c
+	}
+	return nil
+}
+
+func (in *PowerNotificationDeliveryList) DeepCopyInto(out *PowerNotificationDeliveryList) {
+	*out = *in
+	out.TypeMeta = in.TypeMeta
+	in.ListMeta.DeepCopyInto(&out.ListMeta)
+	if in.Items != nil {
+		in, out := &in.Items, &out.Items
+		*out = make([]PowerNotificationDelivery, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
+}
+
+func (in *PowerNotificationDeliveryList) DeepCopy() *PowerNotificationDeliveryList {
+	if in == nil {
+		return nil
+	}
+	out := new(PowerNotificationDeliveryList)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *PowerNotificationDeliveryList) DeepCopyObject() runtime.Object {
+	if c := in.DeepCopy(); c != nil {
+		return c
+	}
+	return nil
+}
+
+func (in *PowerNotificationDeliveryStatus) DeepCopyInto(out *PowerNotificationDeliveryStatus) {
+	*out = *in
+	if in.StartedAt != nil {
+		out.StartedAt = in.StartedAt.DeepCopy()
+	}
+	if in.CompletedAt != nil {
+		out.CompletedAt = in.CompletedAt.DeepCopy()
+	}
+	if in.NextAttemptAt != nil {
+		out.NextAttemptAt = in.NextAttemptAt.DeepCopy()
+	}
+}
+
 // DeepCopyInto copies all properties into another PowerPolicy.
 func (in *PowerPolicy) DeepCopyInto(out *PowerPolicy) {
 	*out = *in

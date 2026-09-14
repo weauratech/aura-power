@@ -16,6 +16,7 @@ helm template aura-power "$chart" --namespace aura-system \
 grep -q 'kind: ValidatingWebhookConfiguration' "$scratch/self-signed.yaml"
 grep -q 'kind: Secret' "$scratch/self-signed.yaml"
 grep -q 'name: WEBHOOK_ENABLED' "$scratch/self-signed.yaml"
+grep -A1 -F 'resources: ["powerauditevents/finalizers"]' "$scratch/self-signed.yaml" | grep -Fq 'verbs: ["update"]'
 grep -q 'path: /validate-power-aura-sh-v1alpha1-powerpolicy' "$scratch/self-signed.yaml"
 grep -q 'path: /validate-power-aura-sh-v1alpha1-poweroverride' "$scratch/self-signed.yaml"
 if [[ "$(grep -c 'caBundle: ' "$scratch/self-signed.yaml")" -ne 2 ]]; then

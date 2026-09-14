@@ -46,7 +46,7 @@ func (s *GoogleChatSender) SendWithResult(ctx context.Context, url string, event
 			},
 		},
 	}
-	return httpPostDetailed(ctx, url, payload)
+	return httpPostDetailedWithKey(ctx, url, payload, event.IdempotencyKey)
 }
 
 // SlackSender sends messages to Slack via incoming webhook.
@@ -83,7 +83,7 @@ func (s *SlackSender) SendWithResult(ctx context.Context, url string, event Even
 			},
 		},
 	}
-	return httpPostDetailed(ctx, url, payload)
+	return httpPostDetailedWithKey(ctx, url, payload, event.IdempotencyKey)
 }
 
 // GenericSender sends a raw JSON payload to any webhook endpoint.
@@ -119,7 +119,7 @@ func (s *GenericSender) SendWithResult(ctx context.Context, url string, event Ev
 			"ruleName": event.RuleName,
 		},
 	}
-	return httpPostDetailed(ctx, url, payload)
+	return httpPostDetailedWithKey(ctx, url, payload, event.IdempotencyKey)
 }
 
 // DeliveryResponse is safe provider metadata. Response bodies and destination
@@ -136,6 +136,10 @@ func httpPost(ctx context.Context, url string, payload interface{}) error {
 }
 
 func httpPostDetailed(ctx context.Context, url string, payload interface{}) (DeliveryResponse, error) {
+	return httpPostDetailedWithKey(ctx, url, payload, "")
+}
+
+func httpPostDetailedWithKey(ctx context.Context, url string, payload interface{}, idempotencyKey string) (DeliveryResponse, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return DeliveryResponse{}, fmt.Errorf("marshal payload: %w", err)
@@ -145,7 +149,13 @@ func httpPostDetailed(ctx context.Context, url string, payload interface{}) (Del
 	var lastErr error
 	lastStatus := 0
 
-	for attempt := 0; attempt < 3; attempt++ {
+	maxAttempts := 3
+	if idempotencyKey != "" {
+		// Durable outbox attempts are checkpointed individually. Retrying here
+		// would create an unobservable crash boundary inside one record attempt.
+		maxAttempts = 1
+	}
+	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if attempt > 0 {
 			backoff := time.NewTimer(time.Duration(attempt*attempt) * time.Second)
 			select {
@@ -169,6 +179,9 @@ func httpPostDetailed(ctx context.Context, url string, payload interface{}) (Del
 			return DeliveryResponse{Attempts: attempt + 1}, fmt.Errorf("create request: %w", err)
 		}
 		req.Header.Set("Content-Type", "application/json")
+		if idempotencyKey != "" {
+			req.Header.Set("Idempotency-Key", idempotencyKey)
+		}
 
 		resp, err := client.Do(req)
 		if err != nil {
@@ -185,7 +198,7 @@ func httpPostDetailed(ctx context.Context, url string, payload interface{}) (Del
 		lastErr = fmt.Errorf("webhook returned %d", resp.StatusCode)
 	}
 
-	return DeliveryResponse{StatusCode: lastStatus, Attempts: 3}, lastErr
+	return DeliveryResponse{StatusCode: lastStatus, Attempts: maxAttempts}, lastErr
 }
 
 func formatActionLabel(action string) string {

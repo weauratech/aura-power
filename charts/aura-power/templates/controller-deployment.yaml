@@ -68,6 +68,8 @@ spec:
               value: {{ .Values.controller.config.argoTrackingLabelKeys | join "," | quote }}
             - name: AUDIT_RETENTION_DAYS
               value: {{ .Values.controller.config.auditRetentionDays | default 7 | quote }}
+            - name: NOTIFICATION_DELIVERY_RETENTION_DAYS
+              value: {{ .Values.controller.config.notificationDeliveryRetentionDays | default 30 | quote }}
             - name: WEBHOOK_ENABLED
               value: {{ .Values.webhook.enabled | quote }}
             {{- if .Values.webhook.enabled }}
@@ -99,7 +101,7 @@ spec:
             periodSeconds: 20
           readinessProbe:
             httpGet:
-              path: /readyz/notification-suppression-v1
+              path: /readyz
               port: health
             initialDelaySeconds: 5
             periodSeconds: 10

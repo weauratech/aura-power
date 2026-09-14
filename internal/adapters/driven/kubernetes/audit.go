@@ -2,6 +2,7 @@ package kubernetes
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"time"
@@ -29,6 +30,10 @@ type AuditRecorder struct {
 
 type notificationEnqueuer interface {
 	Enqueue(notifications.Event) error
+}
+
+type contextualNotificationEnqueuer interface {
+	EnqueueContext(context.Context, notifications.Event) error
 }
 
 func NewAuditRecorder(c client.Client, recorder record.EventRecorder, namespace string) *AuditRecorder {
@@ -89,6 +94,8 @@ func (a *AuditRecorder) Record(ctx context.Context, event ports.AuditEvent) erro
 	}
 	if event.SuppressNotification {
 		auditEvent.Labels["power.aura.sh/notification-suppressed"] = "true"
+	} else if isNotifiableAction(string(event.Action)) {
+		auditEvent.Labels[notifications.AuditOutboxLabel] = notifications.AuditOutboxEnabled
 	}
 	intendedSpec := auditEvent.Spec
 
@@ -117,7 +124,7 @@ func (a *AuditRecorder) Record(ctx context.Context, event ports.AuditEvent) erro
 
 	// Dispatch notification only for real state transitions (not routine reconciliation).
 	if a.notifier != nil && !auditEvent.Spec.NotificationSuppressed && isNotifiableAction(string(event.Action)) {
-		if err := a.notifier.Enqueue(notifications.Event{
+		notification := notifications.Event{
 			AuditEventRef: fmt.Sprintf("%s/%s", auditEvent.Namespace, auditEvent.Name),
 			Action:        string(event.Action),
 			Target:        notifications.TargetRef{Namespace: event.Target.Namespace, Name: event.Target.Name, Kind: string(event.Target.Kind), UID: event.Target.UID},
@@ -125,8 +132,15 @@ func (a *AuditRecorder) Record(ctx context.Context, event ports.AuditEvent) erro
 			Reason:        event.Reason,
 			RuleName:      event.RuleName,
 			Timestamp:     event.Timestamp,
-		}); err != nil {
-			return fmt.Errorf("audit event persisted but notification enqueue must be retried: %w", err)
+		}
+		var enqueueErr error
+		if contextual, ok := a.notifier.(contextualNotificationEnqueuer); ok {
+			enqueueErr = contextual.EnqueueContext(ctx, notification)
+		} else {
+			enqueueErr = a.notifier.Enqueue(notification)
+		}
+		if enqueueErr != nil {
+			return fmt.Errorf("audit event persisted but notification enqueue must be retried: %w", enqueueErr)
 		}
 	}
 
@@ -242,9 +256,19 @@ func (a *AuditRecorder) EmitKubernetesEvent(obj client.Object, eventType, reason
 	a.recorder.Event(obj, eventType, reason, message)
 }
 
-// CleanupExpired deletes PowerAuditEvents older than the retention period.
+// CleanupExpired retains terminal outbox identity for at least 30 days and
+// never removes an audit record while one of its deliveries is non-terminal.
 func (a *AuditRecorder) CleanupExpired(ctx context.Context, retentionDays int) (int, error) {
+	deliveryRetentionDays := retentionDays
+	if deliveryRetentionDays < 30 {
+		deliveryRetentionDays = 30
+	}
+	return a.CleanupExpiredWithDeliveryRetention(ctx, retentionDays, deliveryRetentionDays)
+}
+
+func (a *AuditRecorder) CleanupExpiredWithDeliveryRetention(ctx context.Context, retentionDays, deliveryRetentionDays int) (int, error) {
 	cutoff := time.Now().Add(-time.Duration(retentionDays) * 24 * time.Hour)
+	deliveryCutoff := time.Now().Add(-time.Duration(deliveryRetentionDays) * 24 * time.Hour)
 
 	const pageSize int64 = 200
 	const maxDeletesPerRun = 500
@@ -261,6 +285,13 @@ func (a *AuditRecorder) CleanupExpired(ctx context.Context, retentionDays int) (
 		for i := range list.Items {
 			item := &list.Items[i]
 			if item.CreationTimestamp.Time.Before(cutoff) {
+				retain, err := a.retainAuditForDelivery(ctx, item, deliveryCutoff)
+				if err != nil {
+					return deleted, err
+				}
+				if retain {
+					continue
+				}
 				if err := a.client.Delete(ctx, item); err == nil {
 					deleted++
 					if deleted >= maxDeletesPerRun {
@@ -276,4 +307,30 @@ func (a *AuditRecorder) CleanupExpired(ctx context.Context, retentionDays int) (
 	}
 
 	return deleted, nil
+}
+
+func (a *AuditRecorder) retainAuditForDelivery(ctx context.Context, audit *v1alpha1.PowerAuditEvent, deliveryCutoff time.Time) (bool, error) {
+	if audit.Labels[notifications.AuditOutboxLabel] != notifications.AuditOutboxEnabled {
+		return false, nil
+	}
+	digest := sha256.Sum256([]byte(string(audit.UID)))
+	var deliveries v1alpha1.PowerNotificationDeliveryList
+	if err := a.reader.List(ctx, &deliveries, client.InNamespace(a.namespace), client.MatchingLabels{
+		"power.aura.sh/audit-event": fmt.Sprintf("uid-%x", digest[:16]),
+	}); err != nil {
+		return false, fmt.Errorf("list notification deliveries before audit cleanup: %w", err)
+	}
+	for i := range deliveries.Items {
+		delivery := &deliveries.Items[i]
+		terminal := delivery.Status.Phase == v1alpha1.NotificationDeliverySucceeded ||
+			delivery.Status.Phase == v1alpha1.NotificationDeliveryFailed ||
+			delivery.Status.Phase == v1alpha1.NotificationDeliveryAmbiguous
+		if !terminal || !delivery.Status.ChannelStatusRecorded {
+			return true, nil
+		}
+		if delivery.Status.CompletedAt == nil || delivery.Status.CompletedAt.Time.After(deliveryCutoff) {
+			return true, nil
+		}
+	}
+	return false, nil
 }

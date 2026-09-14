@@ -28,6 +28,7 @@ Complete reference for all environment variables and Helm values.
 | `CONTROL_NAMESPACE` | Namespace containing Aura Power CRDs and audit events | `aura-system` | No |
 | `SYSTEM_NAMESPACES` | Complete comma-separated guardrail blocklist | built-in defaults | No |
 | `AUDIT_RETENTION_DAYS` | Days to keep audit events before cleanup | `7` | No |
+| `NOTIFICATION_DELIVERY_RETENTION_DAYS` | Minimum days to retain terminal delivery identity and its owning audit | `30` | No |
 | `AUDIT_CLEANUP_INTERVAL` | Interval between cleanup runs (Go duration) | `6h` | No |
 | `RECONCILIATION_INTERVAL` | Stable target reconciliation interval (Go duration) | `30s` | No |
 | `DISCOVERY_INTERVAL` | Full workload discovery interval (Go duration) | `60s` | No |

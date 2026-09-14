@@ -3,6 +3,7 @@ package quality
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	extensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -66,6 +67,25 @@ func TestNotificationSuppressionSchemaParity(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestNotificationOutboxSchemaParity(t *testing.T) {
+	t.Parallel()
+	chart := readCRD(t, filepath.Join("..", "..", "charts", "aura-power", "crds", "powernotificationdeliveries.yaml"))
+	config := readCRD(t, filepath.Join("..", "..", "config", "crd", "bases", "power.aura.sh_powernotificationdeliveries.yaml"))
+	if !reflect.DeepEqual(chart.Spec, config.Spec) {
+		t.Fatal("chart and config durable outbox CRDs differ")
+	}
+	root := chart.Spec.Versions[0].Schema.OpenAPIV3Schema
+	spec := root.Properties["spec"]
+	status := root.Properties["status"]
+	if spec.Properties["idempotencyKey"].Type != "string" || spec.Properties["deliveryPolicy"].Type != "string" ||
+		status.Properties["activeAttemptID"].Type != "string" || status.Properties["channelStatusRecorded"].Type != "boolean" {
+		t.Fatal("durable outbox schema lacks identity or recovery fields")
+	}
+	if len(spec.XValidations) != 1 || spec.XValidations[0].Rule != "self == oldSelf" {
+		t.Fatal("delivery spec is not immutable")
 	}
 }
 

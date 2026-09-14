@@ -187,7 +187,7 @@ grep -q 'name: REFRESH_TOKEN_TTL' "$default_render"
 grep -q 'name: CONTROL_NAMESPACE' "$default_render"
 grep -q 'name: LEADER_ELECTION_ENABLED' "$default_render"
 grep -q 'name: SYSTEM_NAMESPACES' "$default_render"
-grep -q 'path: /readyz/notification-suppression-v1' "$default_render"
+grep -q 'path: /readyz' "$default_render"
 grep -Fq '.status.recentAttempts[]?.auditEventRefs[]? // empty' scripts/quality/eks-core-journey.sh
 grep -Fq 'same_process_identity "$CHANNEL_WATCH_PID" "$CHANNEL_WATCH_IDENTITY"' scripts/quality/eks-core-journey.sh
 grep -Fq 'any(.items[]; .spec.action == "workload.powered_down") and any(.items[]; .spec.action == "workload.restored")' scripts/quality/eks-core-journey.sh

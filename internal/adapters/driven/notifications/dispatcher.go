@@ -30,7 +30,10 @@ type Event struct {
 	// AttemptID, EventIDs, and AuditEventRefs are populated by the dispatcher
 	// immediately before delivery so receivers can correlate the request with
 	// the channel status without receiving credentials or response bodies.
-	AttemptID      string
+	AttemptID string
+	// IdempotencyKey is stable for the lifetime of a durable outbox record and
+	// is sent in the Idempotency-Key HTTP header on every replay.
+	IdempotencyKey string
 	EventIDs       []string
 	AuditEventRefs []string
 	Action         string
@@ -56,6 +59,7 @@ type Dispatcher struct {
 	controlNamespace string
 	senders          map[string]Sender
 	queue            chan Event
+	outboxWake       chan struct{}
 	mu               sync.Mutex
 	throttle         map[string]time.Time // key: "channel/target" → expiry
 }
@@ -88,6 +92,7 @@ func NewDispatcherForNamespace(c client.Client, secretReader client.Reader, cont
 		controlNamespace: controlNamespace,
 		senders:          make(map[string]Sender),
 		queue:            make(chan Event, 500),
+		outboxWake:       make(chan struct{}, 1),
 		throttle:         make(map[string]time.Time),
 	}
 	// Register built-in senders
@@ -99,9 +104,9 @@ func NewDispatcherForNamespace(c client.Client, secretReader client.Reader, cont
 
 func (d *Dispatcher) listChannels(ctx context.Context, channels *v1alpha1.PowerNotificationChannelList) error {
 	if d.controlNamespace == "" {
-		return d.client.List(ctx, channels)
+		return d.secretReader.List(ctx, channels)
 	}
-	return d.client.List(ctx, channels, client.InNamespace(d.controlNamespace))
+	return d.secretReader.List(ctx, channels, client.InNamespace(d.controlNamespace))
 }
 
 // RegisterSender adds a sender for a provider type.
@@ -115,6 +120,15 @@ var ErrQueueFull = errors.New("notification queue is full")
 // event: the caller owns the durable audit record and must retry when capacity
 // is unavailable.
 func (d *Dispatcher) Enqueue(event Event) error {
+	return d.EnqueueContext(context.Background(), event)
+}
+
+// EnqueueContext persists production events with the caller's cancellation and
+// deadline. Enqueue remains for compatibility with existing embedders.
+func (d *Dispatcher) EnqueueContext(ctx context.Context, event Event) error {
+	if event.AuditEventRef != "" {
+		return d.enqueueDurable(ctx, event)
+	}
 	select {
 	case d.queue <- event:
 		return nil
@@ -147,6 +161,9 @@ func (d *Dispatcher) Run(ctx context.Context) {
 	}
 	recoveryTicker := time.NewTicker(30 * time.Second)
 	defer recoveryTicker.Stop()
+	if err := d.reconcileOutbox(ctx); err != nil {
+		log.Error(err, "failed to reconcile durable notification outbox at startup")
+	}
 
 	for {
 		// Wait for first event or context cancel
@@ -160,6 +177,13 @@ func (d *Dispatcher) Run(ctx context.Context) {
 			// so a minute-old attempt cannot still be executing normally.
 			if err := d.recoverIncompleteAttempts(ctx, time.Now().Add(-time.Minute)); err != nil {
 				log.Error(err, "failed to recover stale notification attempts")
+			}
+			if err := d.reconcileOutbox(ctx); err != nil {
+				log.Error(err, "failed to reconcile durable notification outbox")
+			}
+		case <-d.outboxWake:
+			if err := d.reconcileOutbox(ctx); err != nil {
+				log.Error(err, "failed to reconcile durable notification outbox")
 			}
 		case first := <-d.queue:
 			// Collect events for 5 seconds into a batch

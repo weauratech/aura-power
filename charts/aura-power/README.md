@@ -63,6 +63,7 @@ helm install aura-power oci://ghcr.io/weauratech/charts/aura-power \
 | `controller.config.reconciliationInterval` | Target reconcile interval | `30s` |
 | `controller.config.discoveryInterval` | Workload discovery interval | `60s` |
 | `controller.config.auditRetentionDays` | Days to retain audit events | `7` |
+| `controller.config.notificationDeliveryRetentionDays` | Minimum retention for terminal delivery identity and its owning audit | `30` |
 | `controller.config.goMemLimit` | Go runtime soft memory limit, kept below the pod limit | `192MiB` |
 | `controller.config.pprofBindAddress` | Optional loopback-only pprof listener for authorized diagnostics | `""` |
 | `controller.config.systemNamespaceBlocklist` | Namespaces blocked by guardrails | `[kube-system, kube-public, kube-node-lease]` |
@@ -236,6 +237,11 @@ leader election is enabled.
 | `webhook.certManager.issuerRef.name` | Existing Issuer or ClusterIssuer | `""` |
 | `networkPolicy.additionalControllerEgressPorts` | Additional notification webhook ports allowed from the controller | `[]` |
 
+Notification channels support `spec.deliveryPolicy` (`at-most-once`, the
+default, or `at-least-once`) and `spec.maxDeliveryAttempts` (default `5`). See
+[`docs/notification-delivery.md`](../../docs/notification-delivery.md) for crash
+recovery, receiver idempotency, and upgrade semantics.
+
 Runtime admission rejects invalid IANA timezones and expired overrides at the
 Kubernetes API boundary. The default chart-managed self-signed certificate can be installed with:
 
@@ -303,6 +309,6 @@ CRDs and PVCs are preserved by default. To remove everything:
 kubectl delete crd powertargets.power.aura.sh powerpolicies.power.aura.sh \
   poweroverrides.power.aura.sh powerschedules.power.aura.sh \
   powerauditevents.power.aura.sh powernamespacegroups.power.aura.sh \
-  powernotificationchannels.power.aura.sh
+  powernotificationchannels.power.aura.sh powernotificationdeliveries.power.aura.sh
 kubectl delete pvc -n aura-system -l app.kubernetes.io/name=aura-power
 ```
