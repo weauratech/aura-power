@@ -50,7 +50,7 @@ export function App() {
 	<BrowserRouter>
 	  <Suspense fallback={<Box sx={{ p: 4 }}><CircularProgress size={24} aria-label="Loading page" /></Box>}>
       <Routes>
-        <Route element={<Layout user={user} onLogout={handleLogout} />}>
+        <Route element={<Layout user={user} onLogout={handleLogout} onPasswordChanged={handleLogout} />}>
           <Route path="/" element={<Dashboard />} />
           <Route path="/targets" element={<Targets />} />
           <Route path="/targets/:namespace" element={<NamespaceDetail />} />

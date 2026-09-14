@@ -39,6 +39,15 @@ arguments:
 umask 077
 rotation_body="$(mktemp)"
 rotation_config="$(mktemp)"
+cleanup_rotation_files() {
+  for file in "$rotation_body" "$rotation_config"; do
+    if [ -f "$file" ]; then
+      dd if=/dev/zero of="$file" bs=4096 count=1 conv=notrunc status=none 2>/dev/null || true
+      rm -f "$file"
+    fi
+  done
+}
+trap cleanup_rotation_files EXIT HUP INT TERM
 # Write currentPassword/newPassword JSON to $rotation_body from the approved
 # secret manager, then write this curl configuration to $rotation_config:
 cat >"$rotation_config" <<EOF
@@ -67,14 +76,21 @@ writes credentials into it:
 ```bash
 umask 077
 effective_values="$(mktemp)"
+cleanup_effective_values() {
+  if [ -f "$effective_values" ]; then
+    dd if=/dev/zero of="$effective_values" bs=4096 count=1 conv=notrunc status=none 2>/dev/null || true
+    rm -f "$effective_values"
+  fi
+}
+trap 'cleanup_effective_values; cleanup_rotation_files' EXIT HUP INT TERM
 helm get values aura-power -n aura-system --all >"$effective_values"
 yq -i '
   .server.auth.keepManagedSecret = true
 ' "$effective_values"
 ```
 
-First review and run a preparatory upgrade with `--reset-values -f
-effective-values.yaml --history-max 1`. It must keep the managed Secret and
+First review and run a preparatory upgrade with
+`--reset-values -f "$effective_values" --history-max 1`. It must keep the managed Secret and
 record `helm.sh/resource-policy: keep` in both the live object and Helm release
 manifest. This explicit release revision is the deletion guard; do not rely on
 patching only the live Secret.
@@ -92,8 +108,8 @@ yq -i '
 
 Review `helm upgrade --dry-run=server --hide-secret` and confirm the rendered
 StatefulSet references the existing Secret while no auth Secret is rendered.
-Run the reviewed externalizing upgrade with `--reset-values -f
-effective-values.yaml --history-max 1`, verify the Secret UID, and repeat the
+Run the reviewed externalizing upgrade with
+`--reset-values -f "$effective_values" --history-max 1`, verify the Secret UID, and repeat the
 same sanitized upgrade once. Helm prunes history before creating a revision,
 so this final no-op upgrade removes the preparatory revision that still
 contained the Secret. Confirm every remaining revision has sanitized values and

@@ -46,14 +46,14 @@ export async function apiPost<T>(path: string, body: unknown): Promise<T> {
   return res.json();
 }
 
-export async function apiPut<T>(path: string, body: unknown): Promise<T> {
+export async function apiPut<T>(path: string, body: unknown, options: { redirectOnUnauthorized?: boolean } = {}): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: 'PUT',
     credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-  if (res.status === 401) {
+  if (res.status === 401 && options.redirectOnUnauthorized !== false) {
     if (window.location.pathname !== '/login') {
       window.location.href = '/login';
     }

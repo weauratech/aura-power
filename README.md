@@ -179,6 +179,10 @@ Pre-built binaries are available on the [Releases](https://github.com/weauratech
 # Login to the server
 aura-power login --server https://power.int.example.com --username admin
 
+# Rotate your own password through hidden prompts. All existing sessions are
+# invalidated and the CLI requires a new login after success.
+aura-power change-password
+
 # Check status
 aura-power status
 

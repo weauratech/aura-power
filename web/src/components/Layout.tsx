@@ -30,8 +30,10 @@ import MenuIcon from '@mui/icons-material/MenuOutlined';
 import LightModeIcon from '@mui/icons-material/LightModeOutlined';
 import DarkModeIcon from '@mui/icons-material/DarkModeOutlined';
 import LogoutIcon from '@mui/icons-material/LogoutOutlined';
+import PasswordIcon from '@mui/icons-material/PasswordOutlined';
 import { useThemeMode } from '../ThemeContext';
 import { ErrorBoundary } from './ErrorBoundary';
+import { ChangePasswordDialog } from './ChangePasswordDialog';
 
 const DRAWER_WIDTH = 240;
 
@@ -44,6 +46,7 @@ interface NavItem {
 interface LayoutProps {
   user?: { username: string; role: string } | null;
   onLogout?: () => void;
+  onPasswordChanged?: () => Promise<void> | void;
 }
 
 const NAV_ITEMS: NavItem[] = [
@@ -62,12 +65,13 @@ function isActive(currentPath: string, itemPath: string): boolean {
   return currentPath.startsWith(itemPath);
 }
 
-export function Layout({ user, onLogout }: LayoutProps) {
+export function Layout({ user, onLogout, onPasswordChanged }: LayoutProps) {
   const location = useLocation();
   const { mode, toggleMode } = useThemeMode();
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [passwordOpen, setPasswordOpen] = useState(false);
 
   const showPending = user && (user.role === 'approver' || user.role === 'admin');
   const showUsers = user && user.role === 'admin';
@@ -140,11 +144,18 @@ export function Layout({ user, onLogout }: LayoutProps) {
               <Typography variant="body2" sx={{ fontWeight: 500 }}>{user.username}</Typography>
               <Chip label={user.role} size="small" sx={{ mt: 0.5, height: 20, fontSize: 11 }} />
             </Box>
-            <Tooltip title="Sign out">
-              <IconButton size="small" onClick={onLogout} aria-label="Sign out">
-                <LogoutIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
+            <Stack direction="row">
+              <Tooltip title="Change password">
+                <IconButton size="small" onClick={() => setPasswordOpen(true)} aria-label="Change password">
+                  <PasswordIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+              <Tooltip title="Sign out">
+                <IconButton size="small" onClick={onLogout} aria-label="Sign out">
+                  <LogoutIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            </Stack>
           </Stack>
         )}
         <Typography variant="caption" color="text.disabled">
@@ -159,6 +170,11 @@ export function Layout({ user, onLogout }: LayoutProps) {
 
   return (
     <Box sx={{ display: 'flex', minHeight: '100vh' }}>
+      <ChangePasswordDialog
+        open={passwordOpen}
+        onClose={() => setPasswordOpen(false)}
+        onChanged={onPasswordChanged ?? (() => undefined)}
+      />
       {/* Mobile AppBar */}
       {isMobile && (
         <AppBar position="fixed" sx={{ zIndex: theme.zIndex.drawer + 1 }}>
