@@ -7,6 +7,7 @@ set -Eeuo pipefail
 run_id="$(date -u +%H%M%S)"
 base_url="http://127.0.0.1:19092"
 member_name="approval-member-${run_id}"
+member_password="Quality approval ${run_id}!"
 policy_name="approval-no-namespace-${run_id}"
 admin_cookie="/tmp/aura-admin-cookie-${run_id}"
 member_cookie="/tmp/aura-member-cookie-${run_id}"
@@ -39,9 +40,9 @@ curl -fsS "$base_url/api/v1/health" >/dev/null
 
 admin_password="$(kubectl get secret aura-power-server-secret -n aura-system -o jsonpath='{.data.admin-password}' | base64 -d)"
 curl -fsS -c "$admin_cookie" -H 'Content-Type: application/json' -d "$(jq -nc --arg password "$admin_password" '{username:"admin",password:$password}')" "$base_url/api/v1/auth/login" >/dev/null
-created_user="$(curl -fsS -b "$admin_cookie" -H 'Content-Type: application/json' -d "$(jq -nc --arg username "$member_name" '{username:$username,password:"Quality123!",role:"member"}')" "$base_url/api/v1/users")"
+created_user="$(curl -fsS -b "$admin_cookie" -H 'Content-Type: application/json' -d "$(jq -nc --arg username "$member_name" --arg password "$member_password" '{username:$username,password:$password,role:"member"}')" "$base_url/api/v1/users")"
 user_id="$(jq -er .id <<<"$created_user")"
-curl -fsS -c "$member_cookie" -H 'Content-Type: application/json' -d "$(jq -nc --arg username "$member_name" '{username:$username,password:"Quality123!"}')" "$base_url/api/v1/auth/login" >/dev/null
+curl -fsS -c "$member_cookie" -H 'Content-Type: application/json' -d "$(jq -nc --arg username "$member_name" --arg password "$member_password" '{username:$username,password:$password}')" "$base_url/api/v1/auth/login" >/dev/null
 
 pending_payload="$(jq -nc --arg name "$policy_name" '{action:"create",resourceKind:"PowerPolicy",resourceName:$name,payload:{apiVersion:"power.aura.sh/v1alpha1",kind:"PowerPolicy",metadata:{name:$name},spec:{scope:{namespaces:["approval-fixture"]},schedule:{desiredState:"on",windows:[]},priority:1000}}}')"
 created="$(curl -fsS -b "$member_cookie" -H 'Content-Type: application/json' -d "$pending_payload" "$base_url/api/v1/pending")"
