@@ -27,6 +27,7 @@ import { useNotify } from '../components/Notifications';
 import { EmptyState } from '../components/EmptyState';
 import type { PowerTarget, TargetRef } from '../types';
 import { LoadingState } from '../components/LoadingState';
+import { PageState } from '../components/PageState';
 
 function mapState(t: PowerTarget): WorkloadState {
   if (t.status.blocked) return 'failed';
@@ -112,7 +113,7 @@ export function Targets() {
     setDrawerOpen(true);
   };
 
-  if (error) return <Alert severity="error">{(error as Error).message}</Alert>;
+  if (error) return <PageState title="Targets"><Alert severity="error">{(error as Error).message}</Alert></PageState>;
 
   return (
     <Box>
@@ -129,14 +130,14 @@ export function Targets() {
       </Stack>
 
       {/* Filters */}
-      <Stack direction="row" spacing={2} alignItems="center" sx={{ mb: 3 }}>
+      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems={{ xs: 'stretch', sm: 'center' }} sx={{ mb: 3 }}>
         <TextField
           label="Search targets"
           size="small"
           placeholder="Search by name or namespace..."
           value={search}
           onChange={e => setSearch(e.target.value)}
-          sx={{ width: 300 }}
+          sx={{ width: { xs: '100%', sm: 300 } }}
           InputProps={{
             startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment>,
           }}
@@ -147,6 +148,10 @@ export function Targets() {
           value={stateFilter}
           exclusive
           onChange={(_, v) => v && setStateFilter(v)}
+          sx={{
+            width: { xs: '100%', sm: 'auto' },
+            '& .MuiToggleButton-root': { flex: { xs: 1, sm: 'initial' }, minWidth: 44, minHeight: 44 },
+          }}
         >
           <ToggleButton value="all">All</ToggleButton>
           <ToggleButton value="running">Running</ToggleButton>
@@ -158,7 +163,7 @@ export function Targets() {
           size="small"
           variant={groupByNs ? 'filled' : 'outlined'}
           onClick={() => setGroupByNs(!groupByNs)}
-          sx={{ cursor: 'pointer' }}
+          sx={{ cursor: 'pointer', minHeight: 44, alignSelf: { xs: 'stretch', sm: 'center' } }}
         />
       </Stack>
 

@@ -14,6 +14,7 @@ import SearchIcon from '@mui/icons-material/SearchOutlined';
 import { useAuditEvents } from '../hooks/useApi';
 import { EmptyState } from '../components/EmptyState';
 import { LoadingState } from '../components/LoadingState';
+import { PageState } from '../components/PageState';
 
 function formatTime(ts: string): string {
   const d = new Date(ts);
@@ -53,7 +54,7 @@ export function AuditLog() {
   const { data, isLoading, error } = useAuditEvents();
   const [search, setSearch] = useState('');
 
-  if (error) return <Alert severity="error">{(error as Error).message}</Alert>;
+  if (error) return <PageState title="Audit Log"><Alert severity="error">{(error as Error).message}</Alert></PageState>;
 
   const events = data?.events?.filter(e => {
     if (!search) return true;

@@ -14,6 +14,7 @@ import { XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, ResponsiveContainer, 
 import { useClusterMetrics, useCostSummary } from '../hooks/useMetrics';
 import { useProviderStatus } from '../hooks/useProviderStatus';
 import { LoadingState } from '../components/LoadingState';
+import { PageState } from '../components/PageState';
 
 type TimeRange = '1h' | '6h' | '24h' | '7d';
 
@@ -43,7 +44,7 @@ export function Metrics() {
   const { data: costData } = useCostSummary();
   const theme = useTheme();
 
-  if (providerLoading) return <LoadingState label="Loading metrics provider" height={400} />;
+  if (providerLoading) return <PageState title="Metrics"><LoadingState label="Loading metrics provider" height={400} /></PageState>;
 
   if (!metricsAvailable) {
     return (

@@ -1,5 +1,5 @@
 import AxeBuilder from '@axe-core/playwright';
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Locator, type Page } from '@playwright/test';
 import { requireFixtureNamespace } from './support';
 
 const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'];
@@ -15,7 +15,7 @@ const staticRoutes = [
   ['/blocked', 'Blocked Targets'],
   ['/audit', 'Audit Log'],
   ['/notifications', 'Notifications'],
-  ['/metrics', 'Metrics'],
+  ['/cluster-metrics', 'Metrics'],
   ['/pending', 'Pending Approvals'],
   ['/users', 'Users'],
   ['/site-map', 'All pages'],
@@ -27,9 +27,20 @@ async function scan(page: Page, context: string) {
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), `${context}: horizontal page overflow`).toBe(true);
 }
 
+async function waitForOpaque(locator: Locator) {
+  await expect.poll(() => locator.evaluate(element => {
+    let opacity = 1;
+    for (let current: Element | null = element; current; current = current.parentElement) {
+      opacity *= Number.parseFloat(getComputedStyle(current).opacity || '1');
+    }
+    return opacity;
+  })).toBe(1);
+}
+
 async function visitWithTheme(page: Page, route: string, heading: string, theme: 'light' | 'dark') {
   await page.addInitScript((selectedTheme) => localStorage.setItem('aura-power-theme', selectedTheme), theme);
   await page.goto(route);
+  await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
   await expect(page.getByRole('heading', { level: 1, name: heading, exact: true })).toBeVisible();
   await expect(page).toHaveTitle(/ · Aura Power$/);
   await expect(page.locator('h1')).toHaveCount(1);
@@ -42,6 +53,16 @@ for (const [route, heading] of staticRoutes) {
     for (const theme of ['light', 'dark'] as const) await visitWithTheme(page, route, heading, theme);
   });
 }
+
+test('cluster metrics deep link remains distinct from the Prometheus endpoint', async ({ page }) => {
+  const prometheus = await page.request.get('/metrics');
+  expect(prometheus.ok()).toBe(true);
+  expect(prometheus.headers()['content-type']).toContain('text/plain');
+  expect(await prometheus.text()).not.toContain('<!doctype html>');
+
+  await page.goto('/cluster-metrics');
+  await expect(page.getByRole('heading', { level: 1, name: 'Metrics' })).toBeVisible();
+});
 
 test('namespace, target and rule detail routes pass the automated WCAG contract', async ({ page }) => {
   const namespace = requireFixtureNamespace();
@@ -64,6 +85,7 @@ for (const [route, triggerName, dialogName] of dialogJourneys) {
     await trigger.click();
     const dialog = page.getByRole('dialog', { name: dialogName, exact: true });
     await expect(dialog).toBeVisible();
+    await waitForOpaque(dialog);
     await scan(page, `${route} ${dialogName} dialog`);
     await page.keyboard.press('Escape');
     await expect(dialog).toBeHidden();
@@ -89,18 +111,25 @@ test('400% zoom equivalent reflows without document-level horizontal scrolling',
   await page.goto('/targets');
   await expect(page.getByRole('heading', { level: 1, name: 'Targets' })).toBeVisible();
   await scan(page, 'targets at a 320 CSS-pixel reflow viewport');
+  for (const control of await page.getByRole('group', { name: 'Filter targets by state' }).getByRole('button').all()) {
+    const box = await control.boundingBox();
+    expect(box?.width).toBeGreaterThanOrEqual(24);
+    expect(box?.height).toBeGreaterThanOrEqual(24);
+  }
+  const grouping = page.getByRole('button', { name: /Grouped by NS|Flat/ });
+  const groupingBox = await grouping.boundingBox();
+  expect(groupingBox?.width).toBeGreaterThanOrEqual(24);
+  expect(groupingBox?.height).toBeGreaterThanOrEqual(24);
 });
 
 test('reduced-motion preference removes non-essential transition duration', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto('/');
-  const durations = await page.evaluate(() => {
-    const sample = document.querySelector('main');
-    if (!sample) return null;
-    const style = getComputedStyle(sample);
-    return { animation: style.animationDuration, transition: style.transitionDuration };
-  });
-  expect(durations).not.toBeNull();
+  await expect(page.locator('main')).toBeVisible();
+  const themeButton = page.getByRole('button', { name: /Switch to (light|dark) theme/ });
+  await expect(themeButton).toBeVisible();
+  const transitionDuration = await themeButton.evaluate(element => getComputedStyle(element).transitionDuration);
+  expect(transitionDuration.split(',').every(value => Number.parseFloat(value) <= 0.00001)).toBe(true);
   const cssToken = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--ap-duration-base').trim());
   expect(cssToken).toBe('0ms');
 });
@@ -123,6 +152,46 @@ test('audit loading, empty and API failure states pass the automated WCAG contra
     body: JSON.stringify({ error: 'induced accessibility outage' }),
   }));
   await page.reload();
-  await expect(page.getByRole('alert')).toContainText('induced accessibility outage');
+  await expect(page.getByRole('alert')).toContainText('Induced accessibility outage');
+  await expect(page.getByRole('heading', { level: 1, name: 'Audit Log' })).toBeVisible();
   await scan(page, 'audit API failure');
+});
+
+test('API failure states preserve each route heading and document structure', async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.route('**/api/v1/**', route => {
+    if (new URL(route.request().url()).pathname === '/api/v1/auth/me') return route.fallback();
+    return route.fulfill({
+      status: 503,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: 'induced route failure' }),
+    });
+  });
+
+  const namespace = requireFixtureNamespace();
+  const failureRoutes = [
+    ['/', 'Cluster Overview'],
+    ['/targets', 'Targets'],
+    [`/targets/${encodeURIComponent(namespace)}`, namespace],
+    [`/targets/${encodeURIComponent(namespace)}/missing?kind=Deployment`, 'missing'],
+    ['/schedule', 'Schedules'],
+    ['/rules', 'Schedules'],
+    ['/policies', 'Schedules'],
+    ['/overrides', 'Overrides'],
+    ['/savings', 'Savings'],
+    ['/blocked', 'Blocked Targets'],
+    ['/audit', 'Audit Log'],
+    ['/notifications', 'Notifications'],
+    ['/cluster-metrics', 'Metrics'],
+    ['/pending', 'Pending Approvals'],
+    ['/users', 'Users'],
+  ] as const;
+
+  for (const [route, heading] of failureRoutes) {
+    await page.goto(route);
+    await expect(page.getByRole('heading', { level: 1, name: heading, exact: true })).toBeVisible();
+    await expect(page.locator('h1')).toHaveCount(1);
+    await expect(page.getByRole('alert')).toBeVisible({ timeout: 15_000 });
+    await scan(page, `${route} API failure`);
+  }
 });

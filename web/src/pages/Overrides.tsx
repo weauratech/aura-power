@@ -27,6 +27,7 @@ import { useOverrides, apiPost, apiDelete, type OverrideResponse } from '../hook
 import { useQueryClient } from '@tanstack/react-query';
 import type { TargetRef } from '../types';
 import { LoadingState } from '../components/LoadingState';
+import { PageState } from '../components/PageState';
 
 function parseTargetRefs(input: string): TargetRef[] {
   if (!input.trim()) return [];
@@ -115,7 +116,7 @@ export function Overrides() {
     setCreateError('');
   };
 
-  if (error) return <Alert severity="error">{(error as Error).message}</Alert>;
+  if (error) return <PageState title="Overrides"><Alert severity="error">{(error as Error).message}</Alert></PageState>;
 
   const active = data?.items?.filter(o => o.status?.phase !== 'Expired') ?? [];
   const expired = data?.items?.filter(o => o.status?.phase === 'Expired') ?? [];

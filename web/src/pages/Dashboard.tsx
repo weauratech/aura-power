@@ -19,6 +19,7 @@ import { PowerRing } from '../design-system/react';
 import { useQuery } from '@tanstack/react-query';
 import { useTargets } from '../hooks/useApi';
 import { useProviderStatus } from '../hooks/useProviderStatus';
+import { PageState } from '../components/PageState';
 
 interface DashboardData {
   summary: {
@@ -100,17 +101,19 @@ export function Dashboard() {
       .slice(0, 8);
   }, [targetsData]);
 
-  if (error) return <Alert severity="error">{(error as Error).message}</Alert>;
+  if (error) return <PageState title="Cluster Overview"><Alert severity="error">{(error as Error).message}</Alert></PageState>;
 
   if (isLoading || !data) {
     return (
-      <Grid role="status" aria-label="Loading dashboard" aria-live="polite" container spacing={3}>
-        {Array.from({ length: 8 }).map((_, i) => (
-          <Grid item xs={12} sm={6} md={3} key={i}>
-            <Skeleton aria-hidden="true" variant="rounded" height={100} />
-          </Grid>
-        ))}
-      </Grid>
+      <PageState title="Cluster Overview">
+        <Grid role="status" aria-label="Loading dashboard" aria-live="polite" container spacing={3}>
+          {Array.from({ length: 8 }).map((_, i) => (
+            <Grid item xs={12} sm={6} md={3} key={i}>
+              <Skeleton aria-hidden="true" variant="rounded" height={100} />
+            </Grid>
+          ))}
+        </Grid>
+      </PageState>
     );
   }
 

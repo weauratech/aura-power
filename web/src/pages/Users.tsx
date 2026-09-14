@@ -23,6 +23,7 @@ import DeleteIcon from '@mui/icons-material/DeleteOutlined';
 import AddIcon from '@mui/icons-material/PersonAddOutlined';
 import { apiPost, apiDelete } from '../hooks/useApi';
 import { LoadingState } from '../components/LoadingState';
+import { PageState } from '../components/PageState';
 
 interface User {
   id: string;
@@ -83,7 +84,7 @@ export function Users() {
     }
   };
 
-  if (error) return <Alert severity="error">{error}</Alert>;
+  if (error) return <PageState title="Users"><Alert severity="error">{error}</Alert></PageState>;
 
   return (
     <Box>

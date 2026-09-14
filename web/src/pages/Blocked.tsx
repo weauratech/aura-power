@@ -17,6 +17,7 @@ import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
 import { useTargets } from '../hooks/useApi';
 import type { PowerTarget } from '../types';
 import { LoadingState } from '../components/LoadingState';
+import { PageState } from '../components/PageState';
 
 function BlockedRow({ target }: { target: PowerTarget }) {
   const [open, setOpen] = useState(false);
@@ -69,7 +70,7 @@ function BlockedRow({ target }: { target: PowerTarget }) {
 export function Blocked() {
   const { data, isLoading, error } = useTargets();
 
-  if (error) return <Alert severity="error">{(error as Error).message}</Alert>;
+  if (error) return <PageState title="Blocked Targets"><Alert severity="error">{(error as Error).message}</Alert></PageState>;
 
   const blocked = data?.targets?.filter((t) => t.status.blocked) ?? [];
 

@@ -26,6 +26,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiPost, apiPut, apiDelete } from '../hooks/useApi';
 import { useNotify } from '../components/Notifications';
 import { EmptyState } from '../components/EmptyState';
+import { PageState } from '../components/PageState';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 
 export interface NotificationChannel {
@@ -183,7 +184,7 @@ export function Notifications() {
     setEvents(prev => prev.includes(ev) ? prev.filter(e => e !== ev) : [...prev, ev]);
   };
 
-  if (error) return <Alert severity="error">{(error as Error).message}</Alert>;
+  if (error) return <PageState title="Notifications"><Alert severity="error">{(error as Error).message}</Alert></PageState>;
 
   return (
     <Box>

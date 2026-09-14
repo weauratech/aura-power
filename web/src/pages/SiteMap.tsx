@@ -15,7 +15,7 @@ const destinations = [
   ['/blocked', 'Blocked targets', 'Workloads protected by a guardrail.'],
   ['/audit', 'Audit log', 'Power decisions and state transitions.'],
   ['/notifications', 'Notifications', 'Webhook destinations for power events.'],
-  ['/metrics', 'Metrics', 'Cluster utilization and cost signals.'],
+  ['/cluster-metrics', 'Metrics', 'Cluster utilization and cost signals.'],
 ] as const;
 
 export function SiteMap() {

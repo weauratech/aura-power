@@ -15,13 +15,14 @@ import TableRow from '@mui/material/TableRow';
 import LinearProgress from '@mui/material/LinearProgress';
 import { useSavings, useTargets } from '../hooks/useApi';
 import { LoadingState } from '../components/LoadingState';
+import { PageState } from '../components/PageState';
 
 export function Savings() {
   const { data, isLoading, error } = useSavings();
   const { data: targetsData } = useTargets();
 
-  if (error) return <Alert severity="error">{(error as Error).message}</Alert>;
-  if (isLoading) return <LoadingState label="Loading savings" height={200} />;
+  if (error) return <PageState title="Savings"><Alert severity="error">{(error as Error).message}</Alert></PageState>;
+  if (isLoading) return <PageState title="Savings"><LoadingState label="Loading savings" height={200} /></PageState>;
 
   // Build per-target savings breakdown
   const targetSavings = targetsData?.targets

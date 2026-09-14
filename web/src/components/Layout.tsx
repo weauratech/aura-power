@@ -59,7 +59,7 @@ const NAV_ITEMS: NavItem[] = [
   { path: '/blocked', label: 'Blocked', icon: <BlockIcon /> },
   { path: '/audit', label: 'Audit Log', icon: <HistoryIcon /> },
   { path: '/notifications', label: 'Notifications', icon: <NotificationsIcon /> },
-  { path: '/metrics', label: 'Metrics', icon: <BarChartIcon /> },
+  { path: '/cluster-metrics', label: 'Metrics', icon: <BarChartIcon /> },
 ];
 
 function titleSegment(segment: string): string {

@@ -69,7 +69,7 @@ export function App() {
           <Route path="/rules" element={<Policies />} />
           <Route path="/rules/:name" element={<RuleDetail />} />
           <Route path="/schedule" element={<Schedule />} />
-          <Route path="/metrics" element={<Metrics />} />
+          <Route path="/cluster-metrics" element={<Metrics />} />
           <Route path="/policies" element={<Policies />} />
           <Route path="/overrides" element={<Overrides />} />
           <Route path="/audit" element={<AuditLog />} />

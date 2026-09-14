@@ -5,6 +5,7 @@ test('invalid credentials stay accessible and unauthenticated in both themes', a
   for (const theme of ['light', 'dark']) {
     await page.addInitScript(selected => localStorage.setItem('aura-power-theme', selected), theme);
     await page.goto('/');
+    await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
     await page.getByLabel('Username').fill(`invalid-${theme}-${Date.now()}`);
     await page.getByLabel('Password').fill('invalid-fixture-password');
     await page.getByRole('button', { name: 'Sign in' }).click();

@@ -5,14 +5,18 @@
 The target is WCAG 2.2 Level AA for every authored panel route. The permanent
 browser inventory covers login; dashboard; targets, namespace and workload
 details; schedule aliases (`/schedule`, `/rules`, `/policies`); rule detail;
-overrides; savings; blocked targets; audit; notifications; metrics; pending
+overrides; savings; blocked targets; audit; notifications; cluster metrics at
+`/cluster-metrics`; pending
 approvals; users; the all-pages locator; and the schedule, notification,
 override and user dialogs.
 
 `tests/e2e/playwright/tests/accessibility.spec.ts` runs Axe in light and dark
 themes, verifies one `h1`, page titles, skip navigation and document reflow,
 and exercises keyboard focus, a 320 CSS-pixel reflow viewport and reduced
-motion. With `AURA_E2E_BROWSERS=all`, the authenticated and login inventories
+motion. An induced 503 journey also verifies that every data-backed route,
+including collection and detail views, retains one visible `h1` and a valid
+document structure while reporting failure. With `AURA_E2E_BROWSERS=all`, the
+authenticated and login inventories
 run on Chromium, Firefox and WebKit at desktop and mobile viewports against the
 real server and dedicated Kind fixtures.
 
@@ -22,8 +26,12 @@ It also found missing route headings, persistent search labels, table names,
 skip navigation, SPA page titles, current-page state and focus transfer. A
 rendered Chromium rerun on dashboard, targets, schedules, overrides, audit and
 users in both themes reported zero Axe violations for the selected WCAG A/AA
-tags. Sanitized screenshots from that local-data audit are kept outside the
-repository in the campaign evidence directory.
+tags. A later serial run against the embedded production build, a real server
+and a dedicated Kind cluster passed all 26 accessibility tests. The complete
+desktop Chromium run passed 45 tests and skipped only the mobile-only spec. It
+also proved that `/metrics` remains Prometheus text while a reload or deep link to
+`/cluster-metrics` returns the panel. Sanitized screenshots from the local-data
+audit are kept outside the repository in the campaign evidence directory.
 
 Automation does not establish conformance. The release gate proves only Axe's
 rules and the explicit browser assertions. Keyboard/focus, zoom-equivalent
@@ -75,7 +83,7 @@ contains that content or interaction.
 | 1.4.1 Use of Color | Not tested | Status retains text/marks; visually sample charts. |
 | 1.4.2 Audio Control | N/A | No audio. |
 | 1.4.3 Contrast (Minimum) | Not tested | Axe in both themes after token/palette corrections; sample tenant content. |
-| 1.4.4 Resize Text | Not tested | 320 CSS px represents 400% zoom at 1280 px; final manual zoom remains. |
+| 1.4.4 Resize Text | Not tested | 320 CSS px represents 400% zoom at 1280 px and rejects overflow; final native-browser zoom remains. |
 | 1.4.5 Images of Text | Pass | Logos have alternatives; no informational rasterized text. |
 | 1.4.10 Reflow | Pass | Narrow scans reject document overflow; named table containers may scroll internally. |
 | 1.4.11 Non-text Contrast | Not tested | Axe checks controls/focus; charts need visual sampling. |
@@ -100,7 +108,7 @@ contains that content or interaction.
 | 2.5.3 Label in Name | Pass | Axe and role/name locators cover controls. |
 | 2.5.4 Motion Actuation | N/A | No motion input. |
 | 2.5.7 Dragging Movements | N/A | No drag-only interaction. |
-| 2.5.8 Target Size | Not tested | Primary/mobile controls use shared sizing; dense rows need visual sampling. |
+| 2.5.8 Target Size | Not tested | The 320 px Targets filter asserts at least 24 by 24 CSS px; remaining dense controls need visual sampling. |
 | 3.1.1 Language of Page | Pass | Root document declares English. |
 | 3.1.2 Language of Parts | N/A | Authored UI is consistently English. |
 | 3.2.1 On Focus | Pass | Focus does not navigate or mutate. |
@@ -125,8 +133,10 @@ slow interaction. Analysis showed shared React/MUI, query and chart code grouped
 with the application entry.
 
 Vite now emits a manifest and stable UI, query and chart boundaries. On the
-same source and machine, the entry is 36.10 kB (11.03 kB gzip), a 93% raw
-reduction; the largest chunk is 338.86 kB. Every build runs
+same source and machine, the final entry is 43,445 bytes (13,119 bytes gzip), a
+91.4% raw reduction; the imported design-token stylesheet is 15,527 bytes
+(2,748 bytes gzip) and the largest JavaScript chunk is 338,856 bytes. Every
+build runs
 `scripts/check-bundle-budget.mjs` and fails above 100 KiB raw/35 KiB gzip for
 the application entry or 400 KiB raw for any JavaScript chunk.
 

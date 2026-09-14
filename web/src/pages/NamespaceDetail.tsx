@@ -19,6 +19,7 @@ import { useTargets } from '../hooks/useApi';
 import { ScheduleDrawer } from '../components/ScheduleDrawer';
 import type { PowerTarget, TargetRef } from '../types';
 import { LoadingState } from '../components/LoadingState';
+import { PageState } from '../components/PageState';
 
 function targetURL(ref: TargetRef): string {
   const params = new URLSearchParams({ kind: ref.kind });
@@ -50,7 +51,7 @@ export function NamespaceDetail() {
 
   const targets = data?.targets?.filter(t => t.spec.targetRef.namespace === namespace) ?? [];
 
-  if (error) return <Alert severity="error">{(error as Error).message}</Alert>;
+  if (error) return <PageState title={namespace ?? 'Namespace'}><Alert severity="error">{(error as Error).message}</Alert></PageState>;
 
   return (
     <Box>

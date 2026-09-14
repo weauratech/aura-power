@@ -14,6 +14,7 @@ import Typography from '@mui/material/Typography';
 import { useQueryClient } from '@tanstack/react-query';
 import { apiPost, usePendingApprovals } from '../hooks/useApi';
 import { LoadingState } from '../components/LoadingState';
+import { PageState } from '../components/PageState';
 
 export function PendingApprovals() {
   const { data, isLoading, error } = usePendingApprovals();
@@ -34,7 +35,7 @@ export function PendingApprovals() {
     }
   };
 
-  if (error) return <Alert severity="error">{(error as Error).message}</Alert>;
+  if (error) return <PageState title="Pending Approvals"><Alert severity="error">{(error as Error).message}</Alert></PageState>;
 
   return (
     <Box>

@@ -24,6 +24,7 @@ import { useNotify } from '../components/Notifications';
 import { EmptyState } from '../components/EmptyState';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { LoadingState } from '../components/LoadingState';
+import { PageState } from '../components/PageState';
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -79,7 +80,7 @@ export function Schedule() {
     setDeleteTarget(null);
   };
 
-  if (policiesError) return <Alert severity="error">{(policiesError as Error).message}</Alert>;
+  if (policiesError) return <PageState title="Schedules"><Alert severity="error">{(policiesError as Error).message}</Alert></PageState>;
 
   // Merge policies + active overrides into one list
   const activeOverrides = overridesData?.items?.filter(o => o.status?.phase !== 'Expired') ?? [];

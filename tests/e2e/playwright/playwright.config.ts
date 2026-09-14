@@ -11,16 +11,17 @@ if (mutationEnabled && !process.env.AURA_E2E_KUBECONFIG) {
   throw new Error('AURA_E2E_KUBECONFIG is required for mutating journeys so workload effects can be verified independently.');
 }
 const expandedBrowsers = process.env.AURA_E2E_BROWSERS === 'all';
+const emptyStorageState = { cookies: [], origins: [] };
 const unauthenticatedProjects = expandedBrowsers
   ? [
-      { name: 'unauthenticated-chromium', use: { ...devices['Desktop Chrome'] } },
-      { name: 'unauthenticated-firefox', use: { ...devices['Desktop Firefox'] } },
-      { name: 'unauthenticated-webkit', use: { ...devices['Desktop Safari'] } },
-      { name: 'unauthenticated-mobile-chromium', use: { ...devices['Pixel 7'] } },
-      { name: 'unauthenticated-mobile-firefox', use: { ...devices['Desktop Firefox'], viewport: { width: 393, height: 873 }, hasTouch: true } },
-      { name: 'unauthenticated-mobile-webkit', use: { ...devices['iPhone 15'] } },
+      { name: 'unauthenticated-chromium', use: { ...devices['Desktop Chrome'], storageState: emptyStorageState } },
+      { name: 'unauthenticated-firefox', use: { ...devices['Desktop Firefox'], storageState: emptyStorageState } },
+      { name: 'unauthenticated-webkit', use: { ...devices['Desktop Safari'], storageState: emptyStorageState } },
+      { name: 'unauthenticated-mobile-chromium', use: { ...devices['Pixel 7'], storageState: emptyStorageState } },
+      { name: 'unauthenticated-mobile-firefox', use: { ...devices['Desktop Firefox'], viewport: { width: 393, height: 873 }, hasTouch: true, storageState: emptyStorageState } },
+      { name: 'unauthenticated-mobile-webkit', use: { ...devices['iPhone 15'], storageState: emptyStorageState } },
     ]
-  : [{ name: 'unauthenticated', use: { ...devices['Desktop Chrome'] } }];
+  : [{ name: 'unauthenticated', use: { ...devices['Desktop Chrome'], storageState: emptyStorageState } }];
 const authenticatedProjects = expandedBrowsers
   ? [
       { name: 'chromium', use: { ...devices['Desktop Chrome'] } },

@@ -20,6 +20,7 @@ import type { WorkloadState } from '../design-system/react/PowerRing';
 import { useTargets, useExplainTarget } from '../hooks/useApi';
 import { ScheduleDrawer } from '../components/ScheduleDrawer';
 import { LoadingState } from '../components/LoadingState';
+import { PageState } from '../components/PageState';
 
 function mapState(status: { observedState: { powerState: string }; blocked: boolean; divergent: boolean }): WorkloadState {
   if (status.blocked) return 'failed';
@@ -32,8 +33,8 @@ export function TargetDetail() {
   const [searchParams] = useSearchParams();
   const kind = searchParams.get('kind') || undefined;
   const uid = searchParams.get('uid') || undefined;
-  const { data: targetsData } = useTargets(namespace);
-  const { isLoading } = useExplainTarget(namespace, name, kind, uid);
+  const { data: targetsData, error: targetsError } = useTargets(namespace);
+  const { isLoading, error: explainError } = useExplainTarget(namespace, name, kind, uid);
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   const target = targetsData?.targets?.find(
@@ -41,10 +42,15 @@ export function TargetDetail() {
       (!kind || t.spec.targetRef.kind === kind) && (!uid || t.spec.targetRef.uid === uid)
   );
 
-  if (isLoading) return <LoadingState label="Loading workload details" height={400} />;
+  if (isLoading) return <PageState title={name || 'Workload details'}><LoadingState label="Loading workload details" height={400} /></PageState>;
+
+  const requestError = targetsError || explainError;
+  if (requestError) {
+    return <PageState title={name || 'Workload details'}><Alert severity="error">{(requestError as Error).message}</Alert></PageState>;
+  }
 
   if (!target) {
-    return <Alert severity="warning">Target not found: {namespace}/{name}</Alert>;
+    return <PageState title={name || 'Workload details'}><Alert severity="warning">Target not found: {namespace}/{name}</Alert></PageState>;
   }
 
   const state = mapState(target.status);
