@@ -212,10 +212,24 @@ if helm template aura-power charts/aura-power --set server.replicas=2 >/dev/null
   echo "server.replicas=2 must be rejected while SQLite is pod-local" >&2
   exit 1
 fi
+maintenance_render="$(helm template aura-power charts/aura-power --set server.replicas=0 --set controller.replicas=0)"
+grep -q '^  replicas: 0$' <<<"$maintenance_render"
+[[ "$(grep -c '^  replicas: 0$' <<<"$maintenance_render")" -eq 2 ]]
+grep -Fq 'server is paused with server.replicas=0' charts/aura-power/templates/NOTES.txt
+grep -Fq 'controller is paused with controller.replicas=0' charts/aura-power/templates/NOTES.txt
+if helm template aura-power charts/aura-power --set server.replicas=-1 >/dev/null 2>&1; then
+  echo "negative server replicas must be rejected" >&2
+  exit 1
+fi
+if helm template aura-power charts/aura-power --set controller.replicas=-1 >/dev/null 2>&1; then
+  echo "negative controller replicas must be rejected" >&2
+  exit 1
+fi
 if helm template aura-power charts/aura-power --set controller.replicas=2 --set controller.leaderElection.enabled=false >/dev/null 2>&1; then
   echo "multiple controllers without leader election must be rejected" >&2
   exit 1
 fi
+helm template aura-power charts/aura-power --set controller.replicas=2 --set controller.leaderElection.enabled=true >/dev/null
 
 observability_render="$(helm template aura-power charts/aura-power --namespace aura-system --set networkPolicy.enabled=true --set serviceMonitor.enabled=true --set serviceMonitor.namespace=monitoring)"
 grep -q 'port: 9003' <<<"$observability_render"

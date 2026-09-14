@@ -1,6 +1,6 @@
 Aura Power has been installed.
 
-{{- if .Values.server.enabled }}
+{{- if and .Values.server.enabled (gt (int .Values.server.replicas) 0) }}
 
 == Server (API + Panel) ==
 
@@ -26,9 +26,15 @@ Aura Power has been installed.
   Ingress created for: {{ .Values.server.ingress.host }}
 {{- end }}
 
+{{- else if .Values.server.enabled }}
+
+== Server (API + Panel) ==
+
+  The server is paused with server.replicas=0 for a maintenance window.
+
 {{- end }}
 
-{{- if .Values.controller.enabled }}
+{{- if and .Values.controller.enabled (gt (int .Values.controller.replicas) 0) }}
 
 == Controller (Reconciler) ==
 
@@ -37,6 +43,13 @@ Aura Power has been installed.
 
   View controller logs:
     kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/component=controller -f
+
+{{- else if .Values.controller.enabled }}
+
+== Controller (Reconciler) ==
+
+  The controller is paused with controller.replicas=0. Workload reconciliation
+  is stopped and admission requests fail closed until it is restored.
 
 {{- end }}
 

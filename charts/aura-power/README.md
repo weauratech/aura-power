@@ -18,7 +18,7 @@ helm install aura-power oci://ghcr.io/weauratech/charts/aura-power \
 | `server.enabled` | Deploy the server component | `true` |
 | `server.image.repository` | Server image | `ghcr.io/weauratech/aura-power-server` |
 | `server.image.tag` | Image tag (defaults to appVersion) | `""` |
-| `server.replicas` | Server pods; fixed at one while auth uses local SQLite | `1` |
+| `server.replicas` | Server pods (`0` during controlled maintenance, otherwise `1` while SQLite is pod-local) | `1` |
 | `server.port` | HTTP port | `8080` |
 | `server.resources.requests.cpu` | CPU request | `100m` |
 | `server.resources.requests.memory` | Memory request | `128Mi` |
@@ -53,7 +53,7 @@ helm install aura-power oci://ghcr.io/weauratech/charts/aura-power \
 | `controller.enabled` | Deploy the controller component | `true` |
 | `controller.image.repository` | Controller image | `ghcr.io/weauratech/aura-power-controller` |
 | `controller.image.tag` | Image tag (defaults to appVersion) | `""` |
-| `controller.replicas` | Controller replicas (leader election) | `1` |
+| `controller.replicas` | Controller replicas (`0` pauses reconciliation; values above `1` require leader election) | `1` |
 | `controller.resources.requests.cpu` | CPU request | `100m` |
 | `controller.resources.requests.memory` | Memory request | `128Mi` |
 | `controller.resources.limits.cpu` | CPU limit | `500m` |
@@ -66,6 +66,34 @@ helm install aura-power oci://ghcr.io/weauratech/charts/aura-power \
 | `controller.config.goMemLimit` | Go runtime soft memory limit, kept below the pod limit | `192MiB` |
 | `controller.config.pprofBindAddress` | Optional loopback-only pprof listener for authorized diagnostics | `""` |
 | `controller.config.systemNamespaceBlocklist` | Namespaces blocked by guardrails | `[kube-system, kube-public, kube-node-lease]` |
+
+### Maintenance windows
+
+The chart accepts `server.replicas=0` and `controller.replicas=0` so an upgrade
+can quiesce SQLite and stop reconciliation without making out-of-band scaling
+changes that the next Helm upgrade would undo. Stop the controller first, then
+the server. Restore the server and wait for it to become Ready before restoring
+the controller:
+
+```bash
+helm upgrade aura-power <chart> --namespace aura-system --reuse-values \
+  --set controller.replicas=0 --set server.replicas=1 --wait
+
+helm upgrade aura-power <chart> --namespace aura-system --reuse-values \
+  --set controller.replicas=0 --set server.replicas=0 --wait
+
+helm upgrade aura-power <chart> --namespace aura-system --reuse-values \
+  --set server.replicas=1 --set controller.replicas=0 --wait
+
+helm upgrade aura-power <chart> --namespace aura-system --reuse-values \
+  --set server.replicas=1 --set controller.replicas=1 --wait
+```
+
+While the controller is paused, the fail-closed admission webhook has no
+endpoint, so policy and override mutations are expected to be rejected. Do not
+leave either component at zero after the maintenance window. The server remains
+limited to one replica. Controllers above one are accepted only when leader
+election is enabled.
 
 ### Admission validation
 
