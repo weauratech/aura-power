@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0] - 2026-09-14
+
+### Added
+- Durable `PowerNotificationDelivery` outbox records with stable idempotency
+  keys, explicit at-most-once or at-least-once delivery, leader-safe claims,
+  persistent throttling, retention and restart recovery.
+- Route-wide accessibility journeys across supported browsers, viewports and
+  themes, with automated Axe checks and an honest WCAG 2.2 AA evidence register.
+- Deterministic frontend bundle budgets and route-level code splitting.
+
+### Changed
+- Notification delivery is reconciled independently from workload actions and
+  projects terminal results into the existing channel status for compatibility.
+- The panel metrics route is `/cluster-metrics`; `/metrics` remains the
+  Prometheus endpoint for scraping and supports direct reloads without conflict.
+- Loading, failure and not-found states preserve page headings, accessible
+  structure and accurate error semantics across collection and detail routes.
+
+### Upgrade notes
+- Apply the `v2.3.0` CRDs before upgrading the controller. Helm does not update
+  resources from a chart's `crds/` directory during `helm upgrade`.
+- Existing notification channels default to at-most-once semantics. Choose
+  at-least-once only when the receiver honors the stable idempotency key.
+
 ## [2.2.2] - 2026-09-14
 
 ### Added
