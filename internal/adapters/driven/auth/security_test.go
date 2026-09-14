@@ -38,6 +38,16 @@ func TestPasswordPolicyAndInPlaceRotation(t *testing.T) {
 	if err := s.UpdatePassword(user.ID, oldPassword, "too-short"); !errors.Is(err, ErrWeakPassword) {
 		t.Fatalf("weak new password: %v", err)
 	}
+	if err := s.UpdatePassword(user.ID, oldPassword, oldPassword); !errors.Is(err, ErrWeakPassword) {
+		t.Fatalf("unchanged new password: %v", err)
+	}
+	unchanged, err := s.GetUserByID(user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unchanged.PasswordHash != user.PasswordHash || unchanged.AuthVersion != user.AuthVersion {
+		t.Fatal("rejected unchanged password modified credentials or auth version")
+	}
 	if err := s.UpdatePassword(user.ID, oldPassword, newPassword); err != nil {
 		t.Fatal(err)
 	}

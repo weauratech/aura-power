@@ -45,6 +45,18 @@ func TestPasswordRotationRequiresCurrentPasswordAndRevokesBothTokens(t *testing.
 	if weak.Code != http.StatusBadRequest {
 		t.Fatalf("weak new password returned %d", weak.Code)
 	}
+	unchanged := requestContract(t, f.server.Handler(), http.MethodPut, "/api/v1/auth/password", oldPair.AccessToken, map[string]string{
+		"currentPassword": oldPassword, "newPassword": oldPassword,
+	})
+	if unchanged.Code != http.StatusBadRequest {
+		t.Fatalf("unchanged new password returned %d", unchanged.Code)
+	}
+	if response := requestContract(t, f.server.Handler(), http.MethodGet, "/api/v1/auth/me", oldPair.AccessToken, nil); response.Code != http.StatusOK {
+		t.Fatalf("rejected rotation revoked access token: %d", response.Code)
+	}
+	if _, status := loginContract(t, f, user.Username, oldPassword); status != http.StatusOK {
+		t.Fatalf("rejected rotation changed current password: %d", status)
+	}
 	rotated := requestContract(t, f.server.Handler(), http.MethodPut, "/api/v1/auth/password", oldPair.AccessToken, map[string]string{
 		"currentPassword": oldPassword, "newPassword": newPassword,
 	})

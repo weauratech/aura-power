@@ -249,6 +249,9 @@ func (s *SQLiteStore) UpdatePassword(id, currentPassword, newPassword string) er
 	if !CheckPassword(currentPassword, user.PasswordHash) {
 		return ErrInvalidCurrentPassword
 	}
+	if newPassword == currentPassword {
+		return fmt.Errorf("%w: new password must differ from current password", ErrWeakPassword)
+	}
 	newHash, err := HashPassword(newPassword)
 	if err != nil {
 		return err
