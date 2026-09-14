@@ -28,7 +28,7 @@ func TestServerAuthFlow(t *testing.T) {
 	defer cleanup()
 
 	// 1. Login
-	loginBody := `{"username":"admin","password":"testpass"}`
+	loginBody := `{"username":"admin","password":"TestPassphrase-2026!"}`
 	resp := doRequest(t, srv, "POST", "/api/v1/auth/login", loginBody, "")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200 on login, got %d", resp.StatusCode)
@@ -125,10 +125,10 @@ func TestServerRoleAccess(t *testing.T) {
 	defer cleanup()
 
 	// Login as admin
-	adminToken := login(t, srv, "admin", "testpass")
+	adminToken := login(t, srv, "admin", "TestPassphrase-2026!")
 
 	// Create a member user
-	createUserBody := `{"username":"viewer","password":"viewerpass","role":"member"}`
+	createUserBody := `{"username":"viewer","password":"ViewerPassphrase-2026!","role":"member"}`
 	resp := doRequest(t, srv, "POST", "/api/v1/users", createUserBody, adminToken)
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("expected 201 on create user, got %d", resp.StatusCode)
@@ -136,7 +136,7 @@ func TestServerRoleAccess(t *testing.T) {
 	resp.Body.Close()
 
 	// Login as member
-	memberToken := login(t, srv, "viewer", "viewerpass")
+	memberToken := login(t, srv, "viewer", "ViewerPassphrase-2026!")
 
 	// Member can read targets
 	resp = doRequest(t, srv, "GET", "/api/v1/status", "", memberToken)
@@ -189,7 +189,7 @@ func setupTestServer(t *testing.T) (*httptest.Server, *auth.JWTService, func()) 
 	}
 
 	// Create admin user
-	_, err = store.CreateUser("admin", "testpass", auth.RoleAdmin)
+	_, err = store.CreateUser("admin", "TestPassphrase-2026!", auth.RoleAdmin)
 	if err != nil {
 		t.Fatalf("failed to create admin: %v", err)
 	}

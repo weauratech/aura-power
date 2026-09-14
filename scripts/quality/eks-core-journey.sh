@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+source "${script_dir}/process-guard.sh"
+
 # Mutating acceptance journey for one uniquely labelled fixture on eks-aura-prd.
 # It validates the live EKS endpoint, refuses collisions, and starts a detached
-# recovery process before creating the policy that can change replicas.
+# recovery process before creating any Kubernetes object.
 
 : "${KUBECONFIG:?set KUBECONFIG to the campaign-specific file}"
 : "${AURA_POWER_EKS_MUTATION_ACK:?set AURA_POWER_EKS_MUTATION_ACK=eks-aura-prd}"
 : "${AURA_POWER_AWS_PROFILE:?set AURA_POWER_AWS_PROFILE to the Aura Hub operations profile}"
-: "${AURA_POWER_EXPECTED_CONTROLLER_DIGEST:?set AURA_POWER_EXPECTED_CONTROLLER_DIGEST to the verified v2.2.1 sha256 digest}"
+: "${AURA_POWER_EXPECTED_CONTROLLER_DIGEST:?set AURA_POWER_EXPECTED_CONTROLLER_DIGEST to the verified v2.2.2 sha256 digest}"
 : "${AURA_POWER_EXPECTED_CONTROLLER_RUNTIME_DIGEST:?set AURA_POWER_EXPECTED_CONTROLLER_RUNTIME_DIGEST to the resolved controller platform digest}"
 
 EXPECTED_CLUSTER="eks-aura-prd"
@@ -25,48 +29,190 @@ WATCHDOG="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/eks-fixture-watchdog.sh"
 CHANNEL_QUIESCENCE_SECONDS="${CHANNEL_QUIESCENCE_SECONDS:-10}"
 CHANNEL_WATCH_LOG=""
 CHANNEL_WATCH_ERROR_LOG=""
+WATCHDOG_LOG=""
+RUNTIME_KUBECONFIG=""
+RECOVERY_DIR=""
+RECOVERY_NONCE="${RECOVERY_NONCE:-$(openssl rand -hex 16)}"
+NAMESPACE_UID=""
+WORKLOAD_UID=""
+POLICY_UID=""
+MUTATION_IN_PROGRESS=""
+WATCHDOG_IDENTITY=""
+CHANNEL_WATCH_IDENTITY=""
+PROCESS_GUARD_ACTIVE_FILE=""
+PARENT_IDENTITY="$(process_identity "$$")"
+AWS_COMMAND_TIMEOUT_SECONDS="${AWS_COMMAND_TIMEOUT_SECONDS:-60}"
+KUBE_COMMAND_TIMEOUT_SECONDS="${KUBE_COMMAND_TIMEOUT_SECONDS:-330}"
+KUBE_WATCH_TIMEOUT_SECONDS="${KUBE_WATCH_TIMEOUT_SECONDS:-1500}"
 
 [[ "$AURA_POWER_EKS_MUTATION_ACK" == "$EXPECTED_CLUSTER" ]] || { echo "refusing mutation: acknowledgement must equal ${EXPECTED_CLUSTER}" >&2; exit 2; }
 [[ "$AURA_POWER_EXPECTED_CONTROLLER_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "refusing mutation: invalid expected controller digest" >&2; exit 2; }
 [[ "$AURA_POWER_EXPECTED_CONTROLLER_RUNTIME_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "refusing mutation: invalid expected controller runtime digest" >&2; exit 2; }
 [[ "$CHANNEL_QUIESCENCE_SECONDS" =~ ^[0-9]+$ && "$CHANNEL_QUIESCENCE_SECONDS" -le 30 ]] || { echo "refusing mutation: CHANNEL_QUIESCENCE_SECONDS must be an integer <= 30" >&2; exit 2; }
 [[ "$TIMEOUT_SECONDS" =~ ^[0-9]+$ && "$TIMEOUT_SECONDS" -le 300 ]] || { echo "refusing mutation: TIMEOUT_SECONDS must be an integer <= 300" >&2; exit 2; }
-[[ "$(kubectl config current-context)" == "$EXPECTED_CONTEXT" ]] || { echo "refusing mutation: unexpected kube context" >&2; exit 2; }
+[[ "$RECOVERY_NONCE" =~ ^[a-f0-9]{32}$ ]] || { echo "refusing mutation: recovery nonce must be 32 lowercase hex characters" >&2; exit 2; }
+[[ "$RUN_ID" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ && ${#RUN_ID} -le 40 ]] || { echo "refusing mutation: RUN_ID must be a lowercase DNS label with at most 40 characters" >&2; exit 2; }
+for timeout_value in "$AWS_COMMAND_TIMEOUT_SECONDS" "$KUBE_COMMAND_TIMEOUT_SECONDS" "$KUBE_WATCH_TIMEOUT_SECONDS"; do
+  [[ "$timeout_value" =~ ^[1-9][0-9]*$ && "$timeout_value" -le 1800 ]] || { echo "refusing mutation: external command timeouts must be between 1 and 1800 seconds" >&2; exit 2; }
+done
 
-credential_file="$(mktemp)"
-chmod 600 "$credential_file"
-remove_credential_file() {
-  if [[ -n "${credential_file:-}" && -f "$credential_file" ]]; then
-    : >"$credential_file"
-    unlink "$credential_file"
+aws_cmd() {
+  run_with_process_timeout "$AWS_COMMAND_TIMEOUT_SECONDS" aws "$@"
+}
+
+kube() {
+  run_with_process_timeout "$KUBE_COMMAND_TIMEOUT_SECONDS" kubectl --request-timeout=30s "$@"
+}
+
+kube_watch() {
+  PROCESS_GUARD_ACTIVE_FILE="" run_with_process_timeout "$KUBE_WATCH_TIMEOUT_SECONDS" kubectl --request-timeout=30s "$@"
+}
+
+[[ "$(kube config current-context)" == "$EXPECTED_CONTEXT" ]] || { echo "refusing mutation: unexpected kube context" >&2; exit 2; }
+
+remove_runtime_kubeconfig() {
+  if [[ -n "${RUNTIME_KUBECONFIG:-}" && -f "$RUNTIME_KUBECONFIG" ]]; then
+    unlink "$RUNTIME_KUBECONFIG"
   fi
 }
-trap remove_credential_file EXIT
-aws configure export-credentials --profile "$AURA_POWER_AWS_PROFILE" --format process >"$credential_file"
-AWS_ACCESS_KEY_ID="$(jq -er .AccessKeyId "$credential_file")"
-AWS_SECRET_ACCESS_KEY="$(jq -er .SecretAccessKey "$credential_file")"
-export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
-session_token="$(jq -r '.SessionToken // empty' "$credential_file")"
-[[ -n "$session_token" ]] && export AWS_SESSION_TOKEN="$session_token"
-remove_credential_file
-trap - EXIT
 
-cluster_json="$(aws eks describe-cluster --name "$EXPECTED_CLUSTER" --region "$AWS_REGION" --output json)"
+remove_recovery_directory() {
+  local entry pending_state private_file launch_dir
+  if [[ -n "${RECOVERY_DIR:-}" && -d "$RECOVERY_DIR" ]]; then
+    for entry in cleanup-complete cleanup-requested cleanup-started mutation-in-progress supervisor-ready; do
+      rmdir "${RECOVERY_DIR}/${entry}" 2>/dev/null || true
+    done
+    for pending_state in "${RECOVERY_DIR}"/state.pending.*; do
+      [[ ! -f "$pending_state" ]] || unlink "$pending_state"
+    done
+    for pending_state in "${RECOVERY_DIR}"/active-command.pending.*; do
+      [[ ! -f "$pending_state" ]] || unlink "$pending_state"
+    done
+    for launch_dir in "${RECOVERY_DIR}"/active-command.launch.*; do
+      [[ ! -d "$launch_dir" ]] || rmdir "$launch_dir" 2>/dev/null || true
+    done
+    for private_file in active-command watchdog.log channel-watch.log channel-watch-error.log namespace-create.json workload-create.json policy-create.json; do
+      [[ ! -f "${RECOVERY_DIR}/${private_file}" ]] || unlink "${RECOVERY_DIR}/${private_file}"
+    done
+    [[ ! -f "${RECOVERY_DIR}/state.json" ]] || unlink "${RECOVERY_DIR}/state.json"
+    rmdir "$RECOVERY_DIR" 2>/dev/null || true
+  fi
+}
+
+write_recovery_state_locked() {
+  local pending_state
+  pending_state="$(mktemp "${RECOVERY_DIR}/state.pending.XXXXXX")"
+  chmod 600 "$pending_state"
+  if ! jq -n \
+    --arg runID "$RUN_ID" \
+    --arg recoveryNonce "$RECOVERY_NONCE" \
+    --arg fixtureNamespace "$FIXTURE_NAMESPACE" \
+    --arg namespaceUID "$NAMESPACE_UID" \
+    --arg workloadName "$WORKLOAD_NAME" \
+    --arg workloadUID "$WORKLOAD_UID" \
+    --arg policyName "$POLICY_NAME" \
+    --arg policyUID "$POLICY_UID" \
+    '{runID:$runID,recoveryNonce:$recoveryNonce,fixtureNamespace:$fixtureNamespace,namespaceUID:$namespaceUID,workloadName:$workloadName,workloadUID:$workloadUID,policyName:$policyName,policyUID:$policyUID}' \
+    >"$pending_state"; then
+    unlink "$pending_state"
+    return 1
+  fi
+  if ! mv -f "$pending_state" "${RECOVERY_DIR}/state.json"; then
+    unlink "$pending_state" 2>/dev/null || true
+    return 1
+  fi
+}
+
+begin_mutation() {
+  mkdir "$MUTATION_IN_PROGRESS" 2>/dev/null || { echo "refusing mutation: another mutation marker exists" >&2; return 1; }
+  if [[ -d "${RECOVERY_DIR}/cleanup-requested" || -d "${RECOVERY_DIR}/cleanup-started" || -d "${RECOVERY_DIR}/cleanup-complete" ]] ||
+     (( $(date +%s) >= HARD_DEADLINE_EPOCH )); then
+    rmdir "$MUTATION_IN_PROGRESS"
+    echo "refusing mutation: recovery cleanup has started or deadline elapsed" >&2
+    return 1
+  fi
+}
+
+end_mutation() {
+  rmdir "$MUTATION_IN_PROGRESS"
+}
+
+cleanup_bootstrap() {
+  local active_status=0
+  trap - EXIT INT TERM HUP
+  if [[ -n "${PROCESS_GUARD_ACTIVE_FILE:-}" ]]; then
+    quiesce_active_process_state "$PROCESS_GUARD_ACTIVE_FILE" || active_status=$?
+  fi
+  if [[ "$active_status" -ne 0 ]]; then
+    echo "FATAL: bootstrap command could not be quiesced; recovery artifacts retained in $RECOVERY_DIR" >&2
+    exit 90
+  fi
+  remove_runtime_kubeconfig
+  remove_recovery_directory
+}
+
+trap cleanup_bootstrap EXIT
+
+# Use the standard EKS exec credential plugin from a private kubeconfig. This
+# refreshes tokens for long journeys without ever putting a bearer token in a
+# process argument, where another local process could observe it.
+RECOVERY_DIR="$(mktemp -d)"
+chmod 700 "$RECOVERY_DIR"
+PROCESS_GUARD_ACTIVE_FILE="${RECOVERY_DIR}/active-command"
+RUNTIME_KUBECONFIG="${RECOVERY_DIR}/kubeconfig"
+: >"$RUNTIME_KUBECONFIG"
+chmod 600 "$RUNTIME_KUBECONFIG"
+aws_cmd eks update-kubeconfig --name "$EXPECTED_CLUSTER" --region "$AWS_REGION" \
+  --alias "$EXPECTED_CONTEXT" --kubeconfig "$RUNTIME_KUBECONFIG" \
+  --profile "$AURA_POWER_AWS_PROFILE" >/dev/null
+export KUBECONFIG="$RUNTIME_KUBECONFIG"
+export AURA_POWER_RUNTIME_KUBECONFIG="$RUNTIME_KUBECONFIG"
+[[ "$(kube config current-context)" == "$EXPECTED_CONTEXT" ]] || { echo "refusing mutation: generated kube context is unexpected" >&2; exit 2; }
+
+cluster_json="$(aws_cmd eks describe-cluster --name "$EXPECTED_CLUSTER" --region "$AWS_REGION" --profile "$AURA_POWER_AWS_PROFILE" --output json)"
 expected_endpoint="$(jq -er .cluster.endpoint <<<"$cluster_json")"
 cluster_arn="$(jq -er .cluster.arn <<<"$cluster_json")"
-current_endpoint="$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')"
+current_endpoint="$(kube config view --minify -o jsonpath='{.clusters[0].cluster.server}')"
 [[ "$current_endpoint" == "$expected_endpoint" ]] || { echo "refusing mutation: kubeconfig endpoint does not match EKS" >&2; exit 2; }
 [[ "$cluster_arn" == arn:aws:eks:"$AWS_REGION":*:cluster/"$EXPECTED_CLUSTER" ]] || { echo "refusing mutation: unexpected cluster ARN" >&2; exit 2; }
 
-kube() {
-  local token
-  token="$(aws eks get-token --cluster-name "$EXPECTED_CLUSTER" --region "$AWS_REGION" | jq -er .status.token)"
-  kubectl --token="$token" "$@"
-}
-
-for permission in "create namespaces" "delete namespaces" "create deployments.apps" "patch deployments.apps" "create powerpolicies.power.aura.sh" "delete powerpolicies.power.aura.sh"; do
-  read -r verb resource <<<"$permission"
-  [[ "$(kube auth can-i "$verb" "$resource" -n "$CONTROL_NAMESPACE")" == "yes" ]] || { echo "missing permission: ${verb} ${resource}" >&2; exit 3; }
+for permission in \
+  "create namespaces -" \
+  "get namespaces -" \
+  "list namespaces -" \
+  "delete namespaces -" \
+  "create deployments.apps ${FIXTURE_NAMESPACE}" \
+  "get deployments.apps ${FIXTURE_NAMESPACE}" \
+  "list deployments.apps ${FIXTURE_NAMESPACE}" \
+  "watch deployments.apps ${FIXTURE_NAMESPACE}" \
+  "update deployments.apps ${FIXTURE_NAMESPACE}" \
+  "patch deployments.apps ${FIXTURE_NAMESPACE}" \
+  "get deployments.apps/scale ${FIXTURE_NAMESPACE}" \
+  "update deployments.apps/scale ${FIXTURE_NAMESPACE}" \
+  "patch deployments.apps/scale ${FIXTURE_NAMESPACE}" \
+  "delete deployments.apps ${FIXTURE_NAMESPACE}" \
+  "get deployments.apps ${CONTROL_NAMESPACE}" \
+  "watch deployments.apps ${CONTROL_NAMESPACE}" \
+  "list pods ${CONTROL_NAMESPACE}" \
+  "get customresourcedefinitions.apiextensions.k8s.io -" \
+  "create powerpolicies.power.aura.sh ${CONTROL_NAMESPACE}" \
+  "get powerpolicies.power.aura.sh ${CONTROL_NAMESPACE}" \
+  "list powerpolicies.power.aura.sh ${CONTROL_NAMESPACE}" \
+  "patch powerpolicies.power.aura.sh ${CONTROL_NAMESPACE}" \
+  "delete powerpolicies.power.aura.sh ${CONTROL_NAMESPACE}" \
+  "get powertargets.power.aura.sh ${CONTROL_NAMESPACE}" \
+  "list powertargets.power.aura.sh ${CONTROL_NAMESPACE}" \
+  "get powerauditevents.power.aura.sh ${CONTROL_NAMESPACE}" \
+  "list powerauditevents.power.aura.sh ${CONTROL_NAMESPACE}" \
+  "get powernotificationchannels.power.aura.sh ${CONTROL_NAMESPACE}" \
+  "list powernotificationchannels.power.aura.sh ${CONTROL_NAMESPACE}" \
+  "watch powernotificationchannels.power.aura.sh ${CONTROL_NAMESPACE}"; do
+  read -r verb resource permission_namespace <<<"$permission"
+  auth_args=(auth can-i "$verb" "$resource")
+  if [[ "$permission_namespace" != "-" ]]; then
+    auth_args+=(-n "$permission_namespace")
+  fi
+  [[ "$(kube "${auth_args[@]}")" == "yes" ]] || { echo "missing permission: ${verb} ${resource} namespace=${permission_namespace}" >&2; exit 3; }
 done
 
 # Prove the running controller, not only the chart metadata, has the suppression
@@ -97,56 +243,136 @@ fi
 
 WATCHDOG_PID=""
 CHANNEL_WATCH_PID=""
-NAMESPACE_UID=""
-WORKLOAD_UID=""
 cleanup_on_exit() {
   local original_status=$?
+  local watchdog_status=0 cleanup_status=0 shutdown_deadline=0 active_status=0
   trap - EXIT INT TERM HUP
-  if [[ -n "$WATCHDOG_PID" ]]; then
-    kill "$WATCHDOG_PID" >/dev/null 2>&1 || true
-    wait "$WATCHDOG_PID" 2>/dev/null || true
+  quiesce_active_process_state "$PROCESS_GUARD_ACTIVE_FILE" || active_status=$?
+  if [[ "$active_status" -ne 0 ]]; then
+    mkdir "${RECOVERY_DIR}/cleanup-requested" 2>/dev/null || true
+    echo "FATAL: active command could not be quiesced; mutation marker and recovery artifacts retained in $RECOVERY_DIR" >&2
+    exit 90
   fi
+  rmdir "$MUTATION_IN_PROGRESS" 2>/dev/null || true
   if [[ -n "$CHANNEL_WATCH_PID" ]]; then
-    kill "$CHANNEL_WATCH_PID" >/dev/null 2>&1 || true
+    [[ -z "$CHANNEL_WATCH_IDENTITY" ]] || terminate_and_wait_process_tree "$CHANNEL_WATCH_PID" "$CHANNEL_WATCH_IDENTITY" 1 3 || true
     wait "$CHANNEL_WATCH_PID" 2>/dev/null || true
   fi
-  if [[ -n "$CHANNEL_WATCH_LOG" && -f "$CHANNEL_WATCH_LOG" ]]; then
-    rm -f "$CHANNEL_WATCH_LOG"
+  if ! mkdir "${RECOVERY_DIR}/cleanup-requested" 2>/dev/null && [[ ! -d "${RECOVERY_DIR}/cleanup-requested" && ! -d "${RECOVERY_DIR}/cleanup-complete" ]]; then
+    echo "FATAL: could not signal the recovery supervisor; artifacts retained in $RECOVERY_DIR" >&2
+    exit 90
   fi
-  if [[ -n "$CHANNEL_WATCH_ERROR_LOG" && -f "$CHANNEL_WATCH_ERROR_LOG" ]]; then
-    rm -f "$CHANNEL_WATCH_ERROR_LOG"
+  if [[ -n "$WATCHDOG_PID" ]]; then
+    shutdown_deadline=$(( $(date +%s) + 420 ))
+    while process_is_running_identity "$WATCHDOG_PID" "$WATCHDOG_IDENTITY" && (( $(date +%s) < shutdown_deadline )); do
+      sleep 1
+    done
+    if process_is_running_identity "$WATCHDOG_PID" "$WATCHDOG_IDENTITY"; then
+      terminate_and_wait_process_tree "$WATCHDOG_PID" "$WATCHDOG_IDENTITY" 1 3 || true
+      watchdog_status=124
+    fi
+    wait "$WATCHDOG_PID" 2>/dev/null || watchdog_status=$?
   fi
-  local cleanup_status=0
-  if [[ -n "$NAMESPACE_UID" && -n "$WORKLOAD_UID" ]]; then
-    export RUN_ID FIXTURE_NAMESPACE NAMESPACE_UID WORKLOAD_NAME WORKLOAD_UID POLICY_NAME
+  if [[ ! -d "${RECOVERY_DIR}/cleanup-complete" ]]; then
     "$WATCHDOG" cleanup || cleanup_status=$?
   fi
-  unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
-  if [[ "$cleanup_status" -ne 0 ]]; then
+  if [[ "$watchdog_status" -ne 0 && "$cleanup_status" -eq 0 && ! -d "${RECOVERY_DIR}/cleanup-complete" ]]; then
+    cleanup_status="$watchdog_status"
+  fi
+  if [[ "$cleanup_status" -ne 0 || ! -d "${RECOVERY_DIR}/cleanup-complete" ]]; then
+    echo "FATAL: recovery artifacts retained in $RECOVERY_DIR" >&2
     echo "FATAL: fixture recovery or deletion was not verified" >&2
     exit 90
   fi
+  for private_log in "$CHANNEL_WATCH_LOG" "$CHANNEL_WATCH_ERROR_LOG" "$WATCHDOG_LOG"; do
+    [[ -z "$private_log" || ! -f "$private_log" ]] || unlink "$private_log"
+  done
+  remove_recovery_directory
+  if [[ -e "$RUNTIME_KUBECONFIG" ]]; then
+    echo "FATAL: watchdog completed without removing the runtime kubeconfig" >&2
+    exit 90
+  fi
+  unset AURA_POWER_RUNTIME_KUBECONFIG
   exit "$original_status"
+}
+
+# Build the recovery state and start its supervisor before the first Kubernetes
+# mutation. Empty UIDs mean "capture the exact run+nonce-labelled object"; once
+# the API server returns an identity, the state is atomically replaced.
+MUTATION_IN_PROGRESS="${RECOVERY_DIR}/mutation-in-progress"
+HARD_DEADLINE_EPOCH="$(( $(date +%s) + TIMEOUT_SECONDS * 4 + CHANNEL_QUIESCENCE_SECONDS + 300 ))"
+state_status=0
+write_recovery_state_locked || state_status=$?
+[[ "$state_status" -eq 0 ]] || exit "$state_status"
+export RUN_ID RECOVERY_NONCE FIXTURE_NAMESPACE WORKLOAD_NAME POLICY_NAME RECOVERY_DIR PARENT_IDENTITY
+export PARENT_PID="$$" HARD_DEADLINE_EPOCH
+WATCHDOG_LOG="${RECOVERY_DIR}/watchdog.log"
+: >"$WATCHDOG_LOG"
+chmod 600 "$WATCHDOG_LOG"
+nohup "$WATCHDOG" watch </dev/null >"$WATCHDOG_LOG" 2>&1 &
+WATCHDOG_PID=$!
+disown "$WATCHDOG_PID" 2>/dev/null || true
+WATCHDOG_IDENTITY="$(process_identity "$WATCHDOG_PID")" || {
+  echo "refusing mutation: could not capture recovery supervisor identity" >&2
+  exit 5
 }
 trap cleanup_on_exit EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
+ready_attempts=0
+while [[ ! -d "${RECOVERY_DIR}/supervisor-ready" ]]; do
+  process_is_running_identity "$WATCHDOG_PID" "$WATCHDOG_IDENTITY" || {
+    cat "$WATCHDOG_LOG" >&2
+    echo "refusing mutation: recovery supervisor failed before readiness" >&2
+    exit 5
+  }
+  ready_attempts=$((ready_attempts + 1))
+  (( ready_attempts < 40 )) || { echo "refusing mutation: recovery supervisor readiness timed out" >&2; exit 5; }
+  sleep 0.25
+done
+process_is_running_identity "$WATCHDOG_PID" "$WATCHDOG_IDENTITY" || {
+  cat "$WATCHDOG_LOG" >&2
+  echo "refusing mutation: recovery supervisor lost after readiness" >&2
+  exit 5
+}
 
-kube create -f - <<YAML
+begin_mutation
+namespace_status=0
+namespace_response="${RECOVERY_DIR}/namespace-create.json"
+kube create -f - -o json >"$namespace_response" <<YAML || namespace_status=$?
 apiVersion: v1
 kind: Namespace
 metadata:
   name: ${FIXTURE_NAMESPACE}
   labels:
     aura-power-quality/run: "${RUN_ID}"
+    aura-power-quality/nonce: "${RECOVERY_NONCE}"
     app.kubernetes.io/part-of: aura-power-quality
     power.aura.sh/notification-policy: disabled
   annotations:
     aura.sh/power-eligible: "true"
 YAML
-NAMESPACE_UID="$(kube get namespace "$FIXTURE_NAMESPACE" -o jsonpath='{.metadata.uid}')"
+if [[ "$namespace_status" -ne 0 ]]; then
+  end_mutation
+  exit "$namespace_status"
+fi
+namespace_json="$(cat "$namespace_response")"
+unlink "$namespace_response"
+uid_status=0
+NAMESPACE_UID="$(jq -er '.metadata.uid' <<<"$namespace_json")" || uid_status=$?
+if [[ "$uid_status" -ne 0 ]]; then
+  end_mutation
+  exit "$uid_status"
+fi
+state_status=0
+write_recovery_state_locked || state_status=$?
+end_mutation
+[[ "$state_status" -eq 0 ]] || exit "$state_status"
 
-kube create -f - <<YAML
+begin_mutation
+workload_status=0
+workload_response="${RECOVERY_DIR}/workload-create.json"
+kube create -f - -o json >"$workload_response" <<YAML || workload_status=$?
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -154,6 +380,7 @@ metadata:
   namespace: ${FIXTURE_NAMESPACE}
   labels:
     aura-power-quality/run: "${RUN_ID}"
+    aura-power-quality/nonce: "${RECOVERY_NONCE}"
   annotations:
     aura.sh/power-eligible: "true"
 spec:
@@ -173,7 +400,22 @@ spec:
             requests: {cpu: 10m, memory: 8Mi}
             limits: {cpu: 20m, memory: 16Mi}
 YAML
-WORKLOAD_UID="$(kube get deployment "$WORKLOAD_NAME" -n "$FIXTURE_NAMESPACE" -o jsonpath='{.metadata.uid}')"
+if [[ "$workload_status" -ne 0 ]]; then
+  end_mutation
+  exit "$workload_status"
+fi
+workload_json="$(cat "$workload_response")"
+unlink "$workload_response"
+uid_status=0
+WORKLOAD_UID="$(jq -er '.metadata.uid' <<<"$workload_json")" || uid_status=$?
+if [[ "$uid_status" -ne 0 ]]; then
+  end_mutation
+  exit "$uid_status"
+fi
+state_status=0
+write_recovery_state_locked || state_status=$?
+end_mutation
+[[ "$state_status" -eq 0 ]] || exit "$state_status"
 kube rollout status deployment "$WORKLOAD_NAME" -n "$FIXTURE_NAMESPACE" --timeout=120s
 
 # Suppression is a discovered, durable property of the exact target. Prove it
@@ -195,33 +437,35 @@ namespace_notification_policy="$(jq -r '.status.namespaceLabels["power.aura.sh/n
   exit 13
 }
 
-export RUN_ID FIXTURE_NAMESPACE NAMESPACE_UID WORKLOAD_NAME WORKLOAD_UID POLICY_NAME
-export PARENT_PID="$$" HARD_DEADLINE_EPOCH="$(( $(date +%s) + TIMEOUT_SECONDS * 2 + 60 ))"
-watchdog_log="$(mktemp)"
-chmod 600 "$watchdog_log"
-nohup "$WATCHDOG" watch </dev/null >"$watchdog_log" 2>&1 &
-WATCHDOG_PID=$!
-disown "$WATCHDOG_PID" 2>/dev/null || true
-
 echo "run_id=${RUN_ID} context=${EXPECTED_CONTEXT} cluster_arn=${cluster_arn}"
 live_namespace_json="$(kube get namespace "$FIXTURE_NAMESPACE" -o json)"
+live_workload_json="$(kube get deployment "$WORKLOAD_NAME" -n "$FIXTURE_NAMESPACE" -o json)"
 live_target_json="$(kube get powertarget "$target" -n "$CONTROL_NAMESPACE" -o json)"
 [[ "$(jq -r '.metadata.uid' <<<"$live_namespace_json")" == "$NAMESPACE_UID" && "$(jq -r '.metadata.labels["power.aura.sh/notification-policy"]' <<<"$live_namespace_json")" == "disabled" ]] || { echo "FAIL: campaign namespace identity or suppression policy changed" >&2; exit 13; }
+[[ "$(jq -r '.metadata.uid' <<<"$live_workload_json")" == "$WORKLOAD_UID" ]] || { echo "FAIL: fixture workload UID changed before policy creation" >&2; exit 13; }
 [[ "$(jq -r '.spec.targetRef.uid' <<<"$live_target_json")" == "$WORKLOAD_UID" ]] || { echo "FAIL: exact target UID changed before policy creation" >&2; exit 13; }
-CHANNEL_WATCH_LOG="$(mktemp)"
-CHANNEL_WATCH_ERROR_LOG="$(mktemp)"
+CHANNEL_WATCH_LOG="${RECOVERY_DIR}/channel-watch.log"
+CHANNEL_WATCH_ERROR_LOG="${RECOVERY_DIR}/channel-watch-error.log"
+: >"$CHANNEL_WATCH_LOG"
+: >"$CHANNEL_WATCH_ERROR_LOG"
 chmod 600 "$CHANNEL_WATCH_LOG"
 chmod 600 "$CHANNEL_WATCH_ERROR_LOG"
-kube get powernotificationchannel -n "$CONTROL_NAMESPACE" --watch -o json 2>>"$CHANNEL_WATCH_ERROR_LOG" |
-  jq --unbuffered -r '.status.recentAttempts[]?.auditEventRefs[]? // empty' >>"$CHANNEL_WATCH_LOG" 2>>"$CHANNEL_WATCH_ERROR_LOG" &
+(
+  kube_watch get powernotificationchannel -n "$CONTROL_NAMESPACE" --watch -o json 2>>"$CHANNEL_WATCH_ERROR_LOG" |
+    jq --unbuffered -r '.status.recentAttempts[]?.auditEventRefs[]? // empty' >>"$CHANNEL_WATCH_LOG" 2>>"$CHANNEL_WATCH_ERROR_LOG"
+) &
 CHANNEL_WATCH_PID=$!
+CHANNEL_WATCH_IDENTITY="$(process_identity "$CHANNEL_WATCH_PID")" || { echo "FAIL: notification channel watch identity unavailable" >&2; exit 15; }
 sleep 2
-kill -0 "$CHANNEL_WATCH_PID" 2>/dev/null || {
+same_process_identity "$CHANNEL_WATCH_PID" "$CHANNEL_WATCH_IDENTITY" || {
   echo "FAIL: notification channel watch did not become ready" >&2
   tail -n 20 "$CHANNEL_WATCH_ERROR_LOG" >&2 || true
   exit 15
 }
-kube create -f - <<YAML
+begin_mutation
+policy_status=0
+policy_response="${RECOVERY_DIR}/policy-create.json"
+kube create -f - -o json >"$policy_response" <<YAML || policy_status=$?
 apiVersion: power.aura.sh/v1alpha1
 kind: PowerPolicy
 metadata:
@@ -229,6 +473,7 @@ metadata:
   namespace: ${CONTROL_NAMESPACE}
   labels:
     aura-power-quality/run: "${RUN_ID}"
+    aura-power-quality/nonce: "${RECOVERY_NONCE}"
 spec:
   scope:
     namespaces: ["${FIXTURE_NAMESPACE}"]
@@ -238,6 +483,22 @@ spec:
   priority: 1000
   description: "Disposable Aura Power acceptance fixture ${RUN_ID}"
 YAML
+if [[ "$policy_status" -ne 0 ]]; then
+  end_mutation
+  exit "$policy_status"
+fi
+policy_json="$(cat "$policy_response")"
+unlink "$policy_response"
+uid_status=0
+POLICY_UID="$(jq -er '.metadata.uid' <<<"$policy_json")" || uid_status=$?
+if [[ "$uid_status" -ne 0 ]]; then
+  end_mutation
+  exit "$uid_status"
+fi
+state_status=0
+write_recovery_state_locked || state_status=$?
+end_mutation
+[[ "$state_status" -eq 0 ]] || exit "$state_status"
 
 deadline=$((SECONDS + TIMEOUT_SECONDS))
 replicas=""
@@ -254,7 +515,11 @@ power_down_action="$(kube get powertarget "$target" -n "$CONTROL_NAMESPACE" -o j
 jq -e --arg namespaceUID "$NAMESPACE_UID" '.status.action.notificationSuppressed == true and .status.action.notificationSuppressionSource == "namespace-label" and .status.action.notificationSuppressionNamespaceUID == $namespaceUID' <<<"$power_down_action" >/dev/null || { echo "FAIL: power-down action did not persist the suppression decision" >&2; exit 15; }
 echo "power_down=passed original_replicas=2 snapshot_replicas=${snapshot:-missing}"
 
-kube patch powerpolicy "$POLICY_NAME" -n "$CONTROL_NAMESPACE" --type=merge -p '{"spec":{"schedule":{"desiredState":"on","windows":[]}}}'
+begin_mutation
+patch_status=0
+kube patch powerpolicy "$POLICY_NAME" -n "$CONTROL_NAMESPACE" --type=json -p "$(jq -nc --arg uid "$POLICY_UID" '[{op:"test",path:"/metadata/uid",value:$uid},{op:"replace",path:"/spec/schedule/desiredState",value:"on"}]')" || patch_status=$?
+end_mutation
+[[ "$patch_status" -eq 0 ]] || exit "$patch_status"
 deadline=$((SECONDS + TIMEOUT_SECONDS))
 while (( SECONDS < deadline )); do
   replicas="$(kube get deployment "$WORKLOAD_NAME" -n "$FIXTURE_NAMESPACE" -o jsonpath='{.spec.replicas}')"
@@ -287,12 +552,12 @@ jq -e --arg namespaceUID "$NAMESPACE_UID" '[.items[] | select(.spec.action == "w
   exit 15
 }
 sleep "$CHANNEL_QUIESCENCE_SECONDS"
-kill -0 "$CHANNEL_WATCH_PID" 2>/dev/null || {
+same_process_identity "$CHANNEL_WATCH_PID" "$CHANNEL_WATCH_IDENTITY" || {
   echo "FAIL: notification channel watch ended before the evidence window closed" >&2
   tail -n 20 "$CHANNEL_WATCH_ERROR_LOG" >&2 || true
   exit 15
 }
-kill "$CHANNEL_WATCH_PID" >/dev/null 2>&1 || true
+terminate_and_wait_process_tree "$CHANNEL_WATCH_PID" "$CHANNEL_WATCH_IDENTITY" 1 3 || true
 wait "$CHANNEL_WATCH_PID" 2>/dev/null || true
 CHANNEL_WATCH_PID=""
 while IFS= read -r audit_name; do

@@ -44,6 +44,7 @@ Use 'aura-power login --server <URL>' to authenticate with the server.`,
 	cmd.AddCommand(newLoginCmd())
 	cmd.AddCommand(newLogoutCmd())
 	cmd.AddCommand(newWhoamiCmd())
+	cmd.AddCommand(newChangePasswordCmd())
 
 	// Data commands
 	cmd.AddCommand(newStatusCmd())

@@ -53,3 +53,45 @@ test('@mutation member receives an authorization denial for policy creation', as
     expect([200, 204]).toContain(cleanup.status());
   }
 });
+
+test('@mutation authenticated member changes password and must sign in again', async ({ page, browser }, testInfo) => {
+  const username = `codex-password-${Date.now()}`;
+  const currentPassword = `Current-fixture-${Date.now()}!`;
+  const newPassword = `Rotated-fixture-${Date.now()}!`;
+  const create = await page.request.post('/api/v1/users', { data: { username, password: currentPassword, role: 'member' } });
+  expect(create.status()).toBe(201);
+  const created = await create.json();
+  const memberContext = await browser.newContext({
+    baseURL: testInfo.project.use.baseURL as string,
+    storageState: { cookies: [], origins: [] },
+  });
+  const memberPage = await memberContext.newPage();
+  try {
+    await memberPage.goto('/');
+    await memberPage.getByLabel('Username').fill(username);
+    await memberPage.getByLabel('Password').fill(currentPassword);
+    await memberPage.getByRole('button', { name: 'Sign in' }).click();
+    await expect(memberPage.getByRole('heading', { name: 'Cluster Overview' })).toBeVisible();
+
+    const openNavigation = memberPage.getByRole('button', { name: 'Open navigation' });
+    if (await openNavigation.isVisible()) {
+      await openNavigation.click();
+    }
+    await memberPage.getByRole('button', { name: 'Change password' }).click();
+    const dialog = memberPage.getByRole('dialog', { name: 'Change password' });
+    await dialog.getByLabel(/Current password/).fill(currentPassword);
+    await dialog.getByLabel(/^New password/).fill(newPassword);
+    await dialog.getByLabel(/Confirm new password/).fill(newPassword);
+    await dialog.getByRole('button', { name: 'Change password', exact: true }).click();
+    await expect(memberPage.getByRole('button', { name: 'Sign in' })).toBeVisible();
+
+    await memberPage.getByLabel('Username').fill(username);
+    await memberPage.getByLabel('Password').fill(newPassword);
+    await memberPage.getByRole('button', { name: 'Sign in' }).click();
+    await expect(memberPage.getByRole('heading', { name: 'Cluster Overview' })).toBeVisible();
+  } finally {
+    await memberContext.close();
+    const cleanup = await page.request.delete(`/api/v1/users/${created.id}`);
+    expect([200, 204]).toContain(cleanup.status());
+  }
+});

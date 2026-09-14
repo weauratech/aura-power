@@ -13,8 +13,39 @@ for crd in powerpolicies poweroverrides; do
 done
 
 # A release has one SemVer identity and validates it before expensive work.
-grep -q '^version: 2.2.1$' charts/aura-power/Chart.yaml
-grep -q '^appVersion: "2.2.1"$' charts/aura-power/Chart.yaml
+grep -q '^version: 2.2.2$' charts/aura-power/Chart.yaml
+grep -q '^appVersion: "2.2.2"$' charts/aura-power/Chart.yaml
+if grep -R --line-number -- '--token=' scripts/quality/eks-*.sh; then
+  echo "EKS quality scripts must not expose bearer tokens in process arguments" >&2
+  exit 1
+fi
+grep -q 'aws_cmd eks update-kubeconfig' scripts/quality/eks-core-journey.sh
+grep -q 'AURA_POWER_RUNTIME_KUBECONFIG' scripts/quality/eks-fixture-watchdog.sh
+grep -Fq 'create -f - -o json' scripts/quality/eks-core-journey.sh
+grep -Fq 'write_recovery_state' scripts/quality/eks-core-journey.sh
+grep -Fq 'RECOVERY_STATE' scripts/quality/eks-fixture-watchdog.sh
+grep -Fq '"create deployments.apps ${FIXTURE_NAMESPACE}"' scripts/quality/eks-core-journey.sh
+grep -Fq '"update deployments.apps ${FIXTURE_NAMESPACE}"' scripts/quality/eks-core-journey.sh
+grep -Fq '"update deployments.apps/scale ${FIXTURE_NAMESPACE}"' scripts/quality/eks-core-journey.sh
+grep -Fq '"patch deployments.apps ${FIXTURE_NAMESPACE}"' scripts/quality/eks-core-journey.sh
+grep -Fq '"delete deployments.apps ${FIXTURE_NAMESPACE}"' scripts/quality/eks-core-journey.sh
+grep -Fq '"create powerpolicies.power.aura.sh ${CONTROL_NAMESPACE}"' scripts/quality/eks-core-journey.sh
+grep -Fq 'POLICY_UID=' scripts/quality/eks-core-journey.sh
+grep -Fq 'preconditions:{uid:$uid}' scripts/quality/eks-fixture-watchdog.sh
+grep -Fq 'kube delete --raw "$api_path" -f -' scripts/quality/eks-fixture-watchdog.sh
+grep -Fq 'RUNTIME_KUBECONFIG="${RECOVERY_DIR}/kubeconfig"' scripts/quality/eks-core-journey.sh
+grep -Fq 'mkdir "$SUPERVISOR_READY"' scripts/quality/eks-fixture-watchdog.sh
+grep -Fq 'same_process_identity "$PARENT_PID" "$PARENT_IDENTITY"' scripts/quality/eks-fixture-watchdog.sh
+grep -Fq 'run_with_process_timeout "$WATCHDOG_COMMAND_TIMEOUT_SECONDS"' scripts/quality/eks-fixture-watchdog.sh
+grep -Fq 'PROCESS_GUARD_ACTIVE_FILE="${RECOVERY_DIR}/active-command"' scripts/quality/eks-core-journey.sh
+grep -Fq 'quiesce_active_process_state "$ACTIVE_COMMAND_STATE"' scripts/quality/eks-fixture-watchdog.sh
+grep -Fq 'WATCHDOG_LOG="${RECOVERY_DIR}/watchdog.log"' scripts/quality/eks-core-journey.sh
+grep -Fq 'CHANNEL_WATCH_LOG="${RECOVERY_DIR}/channel-watch.log"' scripts/quality/eks-core-journey.sh
+perl -0ne 'exit(!/nohup "\$WATCHDOG" watch.*supervisor-ready.*recovery supervisor lost after readiness.*namespace_response=.*kube create/s)' scripts/quality/eks-core-journey.sh
+perl -0ne 'exit(!/cleanup_on_exit\(\).*quiesce_active_process_state.*rmdir "\$MUTATION_IN_PROGRESS"/s)' scripts/quality/eks-core-journey.sh
+perl -0ne 'exit(!/stat -c '\''%a'\''.*stat -f '\''%Lp'\''/s)' scripts/quality/eks-fixture-watchdog.sh
+scripts/quality/process-guard-test.sh
+scripts/quality/eks-fixture-watchdog-test.sh
 grep -Fq 'group: aura-power-release-promotion' .github/workflows/release.yaml
 perl -0ne 'exit(!/validate:.*Validate release identity.*scripts\/release\/preflight\.sh/s)' .github/workflows/release.yaml
 grep -Fq 'scripts/release/github-release-guard.sh assert-releasable "$GITHUB_REF_NAME"' .github/workflows/release.yaml
@@ -23,12 +54,12 @@ if grep -Eq 'gh release view .*\|\| true' .github/workflows/release.yaml; then
   echo "GitHub release state checks must fail closed" >&2
   exit 1
 fi
-RELEASE_TAG=v2.2.1 REQUIRE_TAG_REF=false REQUIRE_MAIN_ANCESTRY=false scripts/release/preflight.sh >/dev/null
-if RELEASE_TAG=2.2.1 REQUIRE_TAG_REF=false REQUIRE_MAIN_ANCESTRY=false scripts/release/preflight.sh >/dev/null 2>&1; then
+RELEASE_TAG=v2.2.2 REQUIRE_TAG_REF=false REQUIRE_MAIN_ANCESTRY=false scripts/release/preflight.sh >/dev/null
+if RELEASE_TAG=2.2.2 REQUIRE_TAG_REF=false REQUIRE_MAIN_ANCESTRY=false scripts/release/preflight.sh >/dev/null 2>&1; then
   echo "release preflight accepted a tag without the v prefix" >&2
   exit 1
 fi
-if RELEASE_TAG=v2.2.2 REQUIRE_TAG_REF=false REQUIRE_MAIN_ANCESTRY=false scripts/release/preflight.sh >/dev/null 2>&1; then
+if RELEASE_TAG=v2.2.1 REQUIRE_TAG_REF=false REQUIRE_MAIN_ANCESTRY=false scripts/release/preflight.sh >/dev/null 2>&1; then
   echo "release preflight accepted a tag that differs from the chart" >&2
   exit 1
 fi
@@ -135,19 +166,21 @@ grep -Fq 'Version: fmt.Sprintf("%s (commit %s)", version, commit)' internal/cli/
 scripts/release/github-release-guard-test.sh
 
 chart_repro_dir="$(mktemp -d)"
-scripts/release/package-chart-reproducibly.sh charts/aura-power "$chart_repro_dir/one" 2.2.1 2.2.1
+scripts/release/package-chart-reproducibly.sh charts/aura-power "$chart_repro_dir/one" 2.2.2 2.2.2
 sleep 1
-scripts/release/package-chart-reproducibly.sh charts/aura-power "$chart_repro_dir/two" 2.2.1 2.2.1
-cmp "$chart_repro_dir/one/aura-power-2.2.1.tgz" "$chart_repro_dir/two/aura-power-2.2.1.tgz"
+scripts/release/package-chart-reproducibly.sh charts/aura-power "$chart_repro_dir/two" 2.2.2 2.2.2
+cmp "$chart_repro_dir/one/aura-power-2.2.2.tgz" "$chart_repro_dir/two/aura-power-2.2.2.tgz"
 
 default_render="$(mktemp)"
 ephemeral_render="$(mktemp)"
 external_secret_render="$(mktemp)"
-trap 'rm -f "$default_render" "$ephemeral_render" "$external_secret_render"' EXIT
+retained_secret_render="$(mktemp)"
+trap 'rm -f "$default_render" "$ephemeral_render" "$external_secret_render" "$retained_secret_render"' EXIT
 
 helm template aura-power charts/aura-power >"$default_render"
 helm template aura-power charts/aura-power --set server.persistence.enabled=false >"$ephemeral_render"
 helm template aura-power charts/aura-power --set server.auth.existingSecret=managed-auth >"$external_secret_render"
+helm template aura-power charts/aura-power --set server.auth.keepManagedSecret=true >"$retained_secret_render"
 
 grep -q 'name: ACCESS_TOKEN_TTL' "$default_render"
 grep -q 'name: REFRESH_TOKEN_TTL' "$default_render"
@@ -156,7 +189,7 @@ grep -q 'name: LEADER_ELECTION_ENABLED' "$default_render"
 grep -q 'name: SYSTEM_NAMESPACES' "$default_render"
 grep -q 'path: /readyz/notification-suppression-v1' "$default_render"
 grep -Fq '.status.recentAttempts[]?.auditEventRefs[]? // empty' scripts/quality/eks-core-journey.sh
-grep -Fq 'kill -0 "$CHANNEL_WATCH_PID"' scripts/quality/eks-core-journey.sh
+grep -Fq 'same_process_identity "$CHANNEL_WATCH_PID" "$CHANNEL_WATCH_IDENTITY"' scripts/quality/eks-core-journey.sh
 grep -Fq 'any(.items[]; .spec.action == "workload.powered_down") and any(.items[]; .spec.action == "workload.restored")' scripts/quality/eks-core-journey.sh
 perl -0ne 'exit(!/name: data\n\s+emptyDir:/s)' "$ephemeral_render"
 if grep -q '# Source: aura-power/templates/server-secret.yaml' "$external_secret_render"; then
@@ -165,15 +198,16 @@ if grep -q '# Source: aura-power/templates/server-secret.yaml' "$external_secret
 fi
 perl -0ne 'exit(!/name: managed-auth\n\s+key: jwt-secret/s)' "$external_secret_render"
 perl -0ne 'exit(!/name: managed-auth\n\s+key: admin-password/s)' "$external_secret_render"
+perl -0ne 'exit(!/name: aura-power-server-secret\n\s+annotations:\n\s+helm.sh\/resource-policy: keep/s)' "$retained_secret_render"
 
-grep -q 'image: "ghcr.io/weauratech/aura-power-server:2.2.1"' "$default_render"
-grep -q 'image: "ghcr.io/weauratech/aura-power-controller:2.2.1"' "$default_render"
+grep -q 'image: "ghcr.io/weauratech/aura-power-server:2.2.2"' "$default_render"
+grep -q 'image: "ghcr.io/weauratech/aura-power-controller:2.2.2"' "$default_render"
 server_digest="sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 controller_digest="sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 digest_render="$(helm template aura-power charts/aura-power --set server.image.digest="$server_digest" --set controller.image.digest="$controller_digest")"
 grep -q "image: \"ghcr.io/weauratech/aura-power-server@${server_digest}\"" <<<"$digest_render"
 grep -q "image: \"ghcr.io/weauratech/aura-power-controller@${controller_digest}\"" <<<"$digest_render"
-if helm template aura-power charts/aura-power --set server.image.tag=v2.2.1 --set server.image.digest="$server_digest" >/dev/null 2>&1; then
+if helm template aura-power charts/aura-power --set server.image.tag=v2.2.2 --set server.image.digest="$server_digest" >/dev/null 2>&1; then
   echo "server image tag and digest must be mutually exclusive" >&2
   exit 1
 fi
@@ -196,10 +230,67 @@ if helm template aura-power charts/aura-power --set server.replicas=2 >/dev/null
   echo "server.replicas=2 must be rejected while SQLite is pod-local" >&2
   exit 1
 fi
+maintenance_render="$(helm template aura-power charts/aura-power --set server.replicas=0 --set controller.replicas=0)"
+grep -q '^  replicas: 0$' <<<"$maintenance_render"
+[[ "$(grep -c '^  replicas: 0$' <<<"$maintenance_render")" -eq 2 ]]
+grep -Fq 'server is paused with server.replicas=0' charts/aura-power/templates/NOTES.txt
+grep -Fq 'controller is paused with controller.replicas=0' charts/aura-power/templates/NOTES.txt
+grep -Fq 'DELETE is not intercepted' charts/aura-power/templates/NOTES.txt
+grep -Fq 'failurePolicy={{ .Values.webhook.failurePolicy }}' charts/aura-power/templates/NOTES.txt
+grep -Fq 'The admission webhook is disabled' charts/aura-power/templates/NOTES.txt
+fail_closed_render="$(helm template aura-power charts/aura-power --set webhook.enabled=true --set webhook.failurePolicy=Fail)"
+[[ "$(grep -c '^    failurePolicy: Fail$' <<<"$fail_closed_render")" -eq 2 ]]
+ignore_render="$(helm template aura-power charts/aura-power --set webhook.enabled=true --set webhook.failurePolicy=Ignore)"
+[[ "$(grep -c '^    failurePolicy: Ignore$' <<<"$ignore_render")" -eq 2 ]]
+disabled_webhook_render="$(helm template aura-power charts/aura-power --set webhook.enabled=false)"
+if grep -q '^kind: ValidatingWebhookConfiguration$' <<<"$disabled_webhook_render"; then
+  echo "disabled admission unexpectedly rendered a webhook configuration" >&2
+  exit 1
+fi
+current_server_digest="sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+current_controller_digest="sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+quiescence_render="$(helm template aura-power charts/aura-power -f <(cat <<YAML
+server:
+  replicas: 1
+  image:
+    repository: registry.example/current-server
+    tag: ""
+    digest: ${current_server_digest}
+controller:
+  replicas: 0
+  image:
+    repository: registry.example/current-controller
+    tag: ""
+    digest: ${current_controller_digest}
+YAML
+))"
+grep -q "image: \"registry.example/current-server@${current_server_digest}\"" <<<"$quiescence_render"
+grep -q "image: \"registry.example/current-controller@${current_controller_digest}\"" <<<"$quiescence_render"
+if grep -Eq 'image: .*:2\.2\.2' <<<"$quiescence_render"; then
+  echo "maintenance quiescence unexpectedly selected candidate application images" >&2
+  exit 1
+fi
+grep -Fq 'CURRENT_SERVER_DIGEST' charts/aura-power/README.md
+grep -Fq 'CURRENT_CONTROLLER_DIGEST' charts/aura-power/README.md
+grep -Fq 'At this point no candidate binary has run' charts/aura-power/README.md
+grep -Fq '.webhook.enabled == true and .webhook.failurePolicy == "Fail"' charts/aura-power/README.md
+grep -Fq 'DELETE' charts/aura-power/README.md
+grep -Fq 'holderIdentity' charts/aura-power/README.md
+grep -Fq 'complete configured discovery and reconciliation intervals' charts/aura-power/README.md
+[[ "$(grep -c -- '--cleanup-on-fail --wait --timeout 8m' charts/aura-power/README.md)" -eq 5 ]]
+if helm template aura-power charts/aura-power --set server.replicas=-1 >/dev/null 2>&1; then
+  echo "negative server replicas must be rejected" >&2
+  exit 1
+fi
+if helm template aura-power charts/aura-power --set controller.replicas=-1 >/dev/null 2>&1; then
+  echo "negative controller replicas must be rejected" >&2
+  exit 1
+fi
 if helm template aura-power charts/aura-power --set controller.replicas=2 --set controller.leaderElection.enabled=false >/dev/null 2>&1; then
   echo "multiple controllers without leader election must be rejected" >&2
   exit 1
 fi
+helm template aura-power charts/aura-power --set controller.replicas=2 --set controller.leaderElection.enabled=true >/dev/null
 
 observability_render="$(helm template aura-power charts/aura-power --namespace aura-system --set networkPolicy.enabled=true --set serviceMonitor.enabled=true --set serviceMonitor.namespace=monitoring)"
 grep -q 'port: 9003' <<<"$observability_render"
@@ -239,5 +330,12 @@ if helm template aura-power charts/aura-power --set webhook.enabled=true --set w
   echo "webhook.existingSecret without webhook.caBundle must be rejected" >&2
   exit 1
 fi
+
+for workflow in .github/workflows/ci.yaml .github/workflows/release.yaml; do
+  perl -0ne 'exit(!/name: Prove managed auth Secret externalization\n\s+run: \|\n\s+export KUBECONFIG="\$\{KUBECONFIG:-\$HOME\/\.kube\/config\}"\n\s+\.\/scripts\/quality\/kind-secret-externalization-journey\.sh/s)' "$workflow" || {
+    echo "FAIL: $workflow must give the Secret externalization journey an explicit Kind kubeconfig" >&2
+    exit 1
+  }
+done
 
 echo "Helm/release contract checks passed"

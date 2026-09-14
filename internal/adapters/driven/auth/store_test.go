@@ -12,6 +12,15 @@ import (
 	"time"
 )
 
+func createTestUser(t *testing.T, s *SQLiteStore, role Role) *User {
+	t.Helper()
+	user, err := s.CreateUser(string(role)+"-"+GenerateID(), GenerateID(), role)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return user
+}
+
 func TestSQLiteBusyTimeoutAppliesToEveryPooledConnection(t *testing.T) {
 	s, err := NewSQLiteStore(filepath.Join(t.TempDir(), "auth db?.sqlite"))
 	if err != nil {
@@ -114,9 +123,10 @@ func TestSQLitePendingDecisionIsTerminal(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
+	requester := createTestUser(t, s, RoleMember)
 	for _, decision := range []string{"approved", "rejected"} {
 		t.Run(decision, func(t *testing.T) {
-			c, err := s.CreatePendingChange(PendingChange{UserID: "requester", Username: "member", Action: "create", ResourceKind: "PowerPolicy", ResourceName: decision, Payload: `{"scope":{"namespaces":["dev"]}}`})
+			c, err := s.CreatePendingChange(PendingChange{UserID: requester.ID, Username: requester.Username, Action: "create", ResourceKind: "PowerPolicy", ResourceName: decision, Payload: `{"scope":{"namespaces":["dev"]}}`})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -162,7 +172,8 @@ func TestSQLitePendingDecisionCannotReverseAfterDurableIntent(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	change, err := s.CreatePendingChange(PendingChange{UserID: "requester", Username: "member", Action: "create", ResourceKind: "PowerPolicy", ResourceName: "nightly", Payload: `{}`})
+	requester := createTestUser(t, s, RoleMember)
+	change, err := s.CreatePendingChange(PendingChange{UserID: requester.ID, Username: requester.Username, Action: "create", ResourceKind: "PowerPolicy", ResourceName: "nightly", Payload: `{}`})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +196,8 @@ func TestSQLitePendingDecisionCanCancelOrReclaimExpiredLease(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	change, err := s.CreatePendingChange(PendingChange{UserID: "requester", Username: "member", Action: "create", ResourceKind: "PowerPolicy", ResourceName: "nightly", Payload: `{}`})
+	requester := createTestUser(t, s, RoleMember)
+	change, err := s.CreatePendingChange(PendingChange{UserID: requester.ID, Username: requester.Username, Action: "create", ResourceKind: "PowerPolicy", ResourceName: "nightly", Payload: `{}`})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +239,8 @@ func TestSQLitePendingDecisionLeaseIsExclusiveForSameReviewer(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	change, err := s.CreatePendingChange(PendingChange{UserID: "requester", Username: "member", Action: "create", ResourceKind: "PowerPolicy", ResourceName: "nightly", Payload: `{}`})
+	requester := createTestUser(t, s, RoleMember)
+	change, err := s.CreatePendingChange(PendingChange{UserID: requester.ID, Username: requester.Username, Action: "create", ResourceKind: "PowerPolicy", ResourceName: "nightly", Payload: `{}`})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +258,8 @@ func TestSQLitePendingDecisionConcurrentAcquisitionHasOneWinner(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	change, err := s.CreatePendingChange(PendingChange{UserID: "requester", Username: "member", Action: "create", ResourceKind: "PowerPolicy", ResourceName: "nightly", Payload: `{}`})
+	requester := createTestUser(t, s, RoleMember)
+	change, err := s.CreatePendingChange(PendingChange{UserID: requester.ID, Username: requester.Username, Action: "create", ResourceKind: "PowerPolicy", ResourceName: "nightly", Payload: `{}`})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,7 +299,7 @@ func TestJWTConfiguredLifetimeAndInvalidTokens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	claims, err := svc.ValidateToken(pair.AccessToken)
+	claims, err := svc.ValidateToken(pair.AccessToken, TokenTypeAccess)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -296,12 +310,12 @@ func TestJWTConfiguredLifetimeAndInvalidTokens(t *testing.T) {
 		t.Fatal("configured TTL lost")
 	}
 	for _, token := range []string{"", "not-a-jwt", pair.AccessToken + "tampered"} {
-		if _, err := svc.ValidateToken(token); err == nil {
+		if _, err := svc.ValidateToken(token, TokenTypeAccess); err == nil {
 			t.Fatal("invalid token accepted")
 		}
 	}
 	other := NewJWTService(JWTConfig{})
-	if _, err := other.ValidateToken(pair.AccessToken); err == nil {
+	if _, err := other.ValidateToken(pair.AccessToken, TokenTypeAccess); err == nil {
 		t.Fatal("different signing key accepted")
 	}
 	expired := NewJWTService(JWTConfig{AccessTokenTTL: -time.Minute})
@@ -309,7 +323,7 @@ func TestJWTConfiguredLifetimeAndInvalidTokens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := expired.ValidateToken(old.AccessToken); err == nil {
+	if _, err := expired.ValidateToken(old.AccessToken, TokenTypeAccess); err == nil {
 		t.Fatal("expired token accepted")
 	}
 }

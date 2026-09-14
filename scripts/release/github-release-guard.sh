@@ -12,29 +12,69 @@ tag="${2:-${GITHUB_REF_NAME:-}}"
   exit 1
 }
 
+load_release() {
+  local requested_tag="$1" release_file="$2"
+  local matches_file matches_raw error_file count release_id listed_draft
+  matches_file="${RUNNER_TEMP:-/tmp}/aura-power-release-matches-${requested_tag}-$$.json"
+  matches_raw="${matches_file}.raw"
+  error_file="${matches_file}.error"
+
+  # GitHub's /releases/tags/:tag endpoint does not return draft releases. List
+  # every page, select the exact canonical tag, then dereference the unique ID.
+  # This also detects ambiguous states such as concurrent or legacy duplicate
+  # drafts instead of guessing which release may be mutated.
+  if ! gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+    --jq ".[] | select(.tag_name == \"${requested_tag}\")" >"$matches_raw" 2>"$error_file"; then
+    echo "GitHub release list lookup failed closed for ${requested_tag}" >&2
+    cat "$error_file" >&2
+    return 1
+  fi
+  if ! jq -s '.' "$matches_raw" >"$matches_file"; then
+    echo "GitHub release list returned malformed JSON for ${requested_tag}" >&2
+    return 1
+  fi
+
+  count="$(jq 'length' "$matches_file")"
+  if [[ "$count" -eq 0 ]]; then
+    jq -n '{state:"absent"}' >"$release_file"
+    return
+  fi
+  if [[ "$count" -ne 1 ]]; then
+    echo "GitHub release lookup is ambiguous for ${requested_tag}: ${count} matching releases" >&2
+    jq -r '.[] | "id=\(.id // \"unknown\") draft=\(.draft // \"unknown\")"' "$matches_file" >&2
+    return 1
+  fi
+
+  release_id="$(jq -r '.[0].id // empty' "$matches_file")"
+  listed_draft="$(jq -r '.[0].draft | if type == "boolean" then tostring else empty end' "$matches_file")"
+  [[ "$release_id" =~ ^[1-9][0-9]*$ && -n "$listed_draft" ]] || {
+    echo "GitHub release list returned an invalid release record for ${requested_tag}" >&2
+    return 1
+  }
+  if ! gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}" >"$release_file" 2>"$error_file"; then
+    echo "GitHub release ID lookup failed closed for ${requested_tag} (id ${release_id})" >&2
+    cat "$error_file" >&2
+    return 1
+  fi
+  if ! jq -e --arg tag "$requested_tag" --argjson id "$release_id" --arg listed_draft "$listed_draft" \
+    '.id == $id and .tag_name == $tag and (.draft | type == "boolean") and (.draft | tostring) == $listed_draft and (.assets | type == "array")' \
+    "$release_file" >/dev/null; then
+    echo "GitHub release changed or returned an invalid record for ${requested_tag} (id ${release_id})" >&2
+    return 1
+  fi
+}
+
 release_state() {
-  local requested_tag="$1" response error_file status
-  response="${RUNNER_TEMP:-/tmp}/aura-power-release-${requested_tag}-$$.response"
-  error_file="${response}.error"
-  set +e
-  gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${requested_tag}" >"$response" 2>"$error_file"
-  status=$?
-  set -e
-  if [[ $status -eq 0 ]]; then
-    if jq -e '.draft == true' "$response" >/dev/null; then
-      printf 'draft\n'
-    else
-      printf 'published\n'
-    fi
-    return
-  fi
-  if grep -Eq '\(HTTP 404\)$' "$error_file"; then
+  local requested_tag="$1" release_file
+  release_file="${RUNNER_TEMP:-/tmp}/aura-power-release-${requested_tag}-$$.json"
+  load_release "$requested_tag" "$release_file" || return 1
+  if jq -e '.state == "absent"' "$release_file" >/dev/null; then
     printf 'absent\n'
-    return
+  elif jq -e '.draft == true' "$release_file" >/dev/null; then
+    printf 'draft\n'
+  else
+    printf 'published\n'
   fi
-  echo "GitHub release state lookup failed closed for ${requested_tag}" >&2
-  cat "$error_file" >&2
-  exit 1
 }
 
 latest_published_tag() {
@@ -60,11 +100,13 @@ upload_immutable_assets() {
   [[ $# -gt 0 ]] || { echo "at least one release asset is required" >&2; exit 2; }
 
   local state release_file file name local_digest remote_digest asset_id asset_count remote_file requested_names=""
-  if ! state="$(release_state "$requested_tag")"; then exit 1; fi
-  [[ "$state" == draft ]] || { echo "release $requested_tag is not a draft" >&2; exit 1; }
-
   release_file="${RUNNER_TEMP:-/tmp}/aura-power-release-assets-${requested_tag}-$$.json"
-  gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${requested_tag}" >"$release_file"
+  load_release "$requested_tag" "$release_file" || exit 1
+  if jq -e '.state == "absent"' "$release_file" >/dev/null; then state=absent
+  elif jq -e '.draft == true' "$release_file" >/dev/null; then state=draft
+  else state=published
+  fi
+  [[ "$state" == draft ]] || { echo "release $requested_tag is not a draft" >&2; exit 1; }
 
   for file in "$@"; do
     [[ -f "$file" ]] || { echo "release asset does not exist: $file" >&2; exit 1; }

@@ -97,6 +97,22 @@ AURA_POWER_AWS_PROFILE=hub-eks-aura-prd-operations \
 Raw kubeconfigs, credentials, logs and cluster exports belong in restricted
 evidence storage and must never be committed.
 
+The EKS runner prints its private recovery directory on any unverified cleanup.
+That directory contains the mode-0600 kubeconfig, watchdog/channel logs, atomic
+resource state and the active-command PID plus boot/start identity. Keep it
+private. The watchdog will not remove `mutation-in-progress` until the recorded
+command tree has terminated, and it preserves every artifact when identity or
+API absence is inconclusive. `cleanup-started` is deliberately fail-closed and
+has no automatically reclaimed PID owner. If the cleanup executor itself is
+forcibly killed, use the printed recovery path to prove that no core/watchdog
+process still has that directory open and that every exact identity recorded in
+`active-command` has ended. Only then remove the empty `cleanup-started`
+directory, reconstruct the required environment from the private kubeconfig,
+`state.json` and campaign invocation, and rerun
+`scripts/quality/eks-fixture-watchdog.sh cleanup`. Never delete the marker merely
+because a remembered PID is not visible, and never delete the recovery
+directory until UID-preconditioned cleanup and final NotFound checks succeed.
+
 The remote browser smoke is read-only. Mutating Kubernetes acceptance uses the
 disposable Kind journey or the EKS runner with UID ownership checks and a
 detached watchdog. Load contracts run explicitly through `make quality-load`.

@@ -65,6 +65,17 @@ func (f *contractFixture) token(t *testing.T, role auth.Role) string {
 	}
 	return p.AccessToken
 }
+
+func (f *contractFixture) createPending(t *testing.T, change auth.PendingChange) (*auth.PendingChange, error) {
+	t.Helper()
+	requester, err := f.store.CreateUser("requester-"+auth.GenerateID(), auth.GenerateID(), auth.RoleMember)
+	if err != nil {
+		return nil, err
+	}
+	change.UserID = requester.ID
+	change.Username = requester.Username
+	return f.store.CreatePendingChange(change)
+}
 func requestContract(t *testing.T, h http.Handler, method, path, token string, body any) *httptest.ResponseRecorder {
 	t.Helper()
 	var data []byte
@@ -275,7 +286,7 @@ func TestHTTPLoginRefreshCookieAndLogoutContract(t *testing.T) {
 		t.Fatalf("cookie refresh: %d", r.Code)
 	}
 	refreshed := decodeContract[auth.TokenPair](t, r)
-	claims, err := f.jwt.ValidateToken(refreshed.AccessToken)
+	claims, err := f.jwt.ValidateToken(refreshed.AccessToken, auth.TokenTypeAccess)
 	if err != nil || claims.UserID != user.ID {
 		t.Fatal("refresh returned invalid identity")
 	}
@@ -326,12 +337,14 @@ func TestHTTPReadinessAndMalformedJSON(t *testing.T) {
 	if r.Code != 503 || decodeContract[map[string]any](t, r)["component"] != "database" {
 		t.Fatal("database failure must fail readiness")
 	}
+	malformedFixture := newContractFixture(t)
+	adminToken := malformedFixture.token(t, auth.RoleAdmin)
 	for _, path := range []string{"/preview/policy", "/preview/override", "/policies", "/overrides", "/namespace-groups", "/notification-channels"} {
 		req := httptest.NewRequest("POST", "/api/v1"+path, bytes.NewBufferString("{"))
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+f.token(t, auth.RoleAdmin))
+		req.Header.Set("Authorization", "Bearer "+adminToken)
 		r := httptest.NewRecorder()
-		f.server.Handler().ServeHTTP(r, req)
+		malformedFixture.server.Handler().ServeHTTP(r, req)
 		if r.Code != 400 {
 			t.Errorf("malformed %s: %d", path, r.Code)
 		}

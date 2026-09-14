@@ -72,8 +72,6 @@ The server handles user interactions and serves the web panel. The controller ru
 ```bash
 helm install aura-power oci://ghcr.io/weauratech/charts/aura-power \
   --namespace aura-system --create-namespace \
-  --set server.auth.jwtSecret=$(openssl rand -hex 32) \
-  --set server.auth.initialAdmin.password=changeme \
   --set server.prometheus.url=http://prometheus.monitoring.svc:9090 \
   --set server.gateway.enabled=true \
   --set server.gateway.gatewayRef.name=my-gateway \
@@ -87,8 +85,6 @@ helm install aura-power oci://ghcr.io/weauratech/charts/aura-power \
 ```bash
 helm install aura-power oci://ghcr.io/weauratech/charts/aura-power \
   --namespace aura-system --create-namespace \
-  --set server.auth.jwtSecret=$(openssl rand -hex 32) \
-  --set server.auth.initialAdmin.password=changeme \
   --set server.prometheus.url=http://prometheus.monitoring.svc:9090 \
   --set server.ingress.enabled=true \
   --set server.ingress.className=nginx \
@@ -101,9 +97,7 @@ helm install aura-power oci://ghcr.io/weauratech/charts/aura-power \
 
 ```bash
 helm install aura-power oci://ghcr.io/weauratech/charts/aura-power \
-  --namespace aura-system --create-namespace \
-  --set server.auth.jwtSecret=$(openssl rand -hex 32) \
-  --set server.auth.initialAdmin.password=changeme
+  --namespace aura-system --create-namespace
 ```
 
 ### Access the Panel
@@ -184,6 +178,10 @@ Pre-built binaries are available on the [Releases](https://github.com/weauratech
 ```bash
 # Login to the server
 aura-power login --server https://power.int.example.com --username admin
+
+# Rotate your own password through hidden prompts. All existing sessions are
+# invalidated and the CLI requires a new login after success.
+aura-power change-password
 
 # Check status
 aura-power status

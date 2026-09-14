@@ -279,13 +279,42 @@ Prometheus metrics endpoint. Exposes:
 
 ## User Management
 
-### GET /api/v1/auth/users
+### GET /api/v1/users
 
 List all users. Requires `admin` role.
 
-### GET /api/v1/auth/pending
+### POST /api/v1/users
 
-List pending user registrations. Requires `admin` role.
+Create a user. Requires `admin` role and a password of at least 12 characters
+(maximum 72 UTF-8 bytes). Common and repetitive passwords are rejected.
+
+### PUT /api/v1/users/:id
+
+Change a user's role. Requires `admin`. The final administrator cannot be
+demoted. A role change invalidates all access and refresh tokens issued to the
+affected user.
+
+### DELETE /api/v1/users/:id
+
+Delete a user. Requires `admin`. Administrators cannot delete their own
+account, the final administrator, or a user referenced by approval history.
+
+### PUT /api/v1/auth/password
+
+Change the authenticated user's password without changing the user ID or
+approval history. The current password is required. A successful change
+invalidates every access and refresh token previously issued to that user.
+
+```json
+{
+  "currentPassword": "current secret from your password manager",
+  "newPassword": "new secret from your password manager"
+}
+```
+
+### GET /api/v1/pending
+
+List pending approval changes. Requires `approver` or `admin` role.
 
 ---
 
@@ -293,6 +322,6 @@ List pending user registrations. Requires `admin` role.
 
 | Role | Permissions |
 |------|-------------|
-| `viewer` | Read-only access to all GET endpoints |
-| `approver` | Create/update policies and overrides |
+| `member` | Read and preview resources; submit changes for approval |
+| `approver` | Member access plus approve/reject requests and create/update resources |
 | `admin` | Full access including user management and deletions |

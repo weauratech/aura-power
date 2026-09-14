@@ -6,7 +6,7 @@
       "type": "object",
       "properties": {
         "enabled": { "type": "boolean" },
-        "replicas": { "type": "integer", "const": 1 },
+        "replicas": { "type": "integer", "minimum": 0, "maximum": 1 },
         "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
         "image": {
           "type": "object",
@@ -24,6 +24,7 @@
           "type": "object",
           "properties": {
             "existingSecret": { "type": "string" },
+            "keepManagedSecret": { "type": "boolean" },
             "jwtSecret": { "type": "string" },
             "initialAdmin": {
               "type": "object",
@@ -41,7 +42,7 @@
     "controller": {
       "type": "object",
       "properties": {
-        "replicas": { "type": "integer", "minimum": 1 },
+        "replicas": { "type": "integer", "minimum": 0 },
         "image": {
           "type": "object",
           "properties": {

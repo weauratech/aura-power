@@ -1,10 +1,17 @@
 package auth
 
 import (
-	"errors"
+	"fmt"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+)
+
+type TokenType string
+
+const (
+	TokenTypeAccess  TokenType = "access"
+	TokenTypeRefresh TokenType = "refresh"
 )
 
 // JWTConfig holds JWT configuration.
@@ -16,9 +23,11 @@ type JWTConfig struct {
 
 // Claims represents JWT token claims.
 type Claims struct {
-	UserID   string `json:"sub"`
-	Username string `json:"username"`
-	Role     Role   `json:"role"`
+	UserID      string    `json:"sub"`
+	Username    string    `json:"username"`
+	Role        Role      `json:"role"`
+	AuthVersion int64     `json:"ver"`
+	Type        TokenType `json:"typ"`
 	jwt.RegisteredClaims
 }
 
@@ -63,13 +72,16 @@ func (s *JWTService) GenerateTokens(user *User) (*TokenPair, error) {
 	expiresAt := now.Add(s.config.AccessTokenTTL)
 
 	accessClaims := Claims{
-		UserID:   user.ID,
-		Username: user.Username,
-		Role:     user.Role,
+		UserID:      user.ID,
+		Username:    user.Username,
+		Role:        user.Role,
+		AuthVersion: user.AuthVersion,
+		Type:        TokenTypeAccess,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
 			IssuedAt:  jwt.NewNumericDate(now),
 			Issuer:    "aura-power",
+			ID:        GenerateID(),
 		},
 	}
 
@@ -80,13 +92,16 @@ func (s *JWTService) GenerateTokens(user *User) (*TokenPair, error) {
 	}
 
 	refreshClaims := Claims{
-		UserID:   user.ID,
-		Username: user.Username,
-		Role:     user.Role,
+		UserID:      user.ID,
+		Username:    user.Username,
+		Role:        user.Role,
+		AuthVersion: user.AuthVersion,
+		Type:        TokenTypeRefresh,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(now.Add(s.config.RefreshTokenTTL)),
 			IssuedAt:  jwt.NewNumericDate(now),
 			Issuer:    "aura-power",
+			ID:        GenerateID(),
 		},
 	}
 
@@ -103,21 +118,19 @@ func (s *JWTService) GenerateTokens(user *User) (*TokenPair, error) {
 	}, nil
 }
 
-// ValidateToken parses and validates a JWT token.
-func (s *JWTService) ValidateToken(tokenStr string) (*Claims, error) {
+// ValidateToken parses a JWT and requires the token purpose expected by the
+// caller. Access and refresh tokens are never interchangeable.
+func (s *JWTService) ValidateToken(tokenStr string, expectedType TokenType) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenStr, &Claims{}, func(token *jwt.Token) (interface{}, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, errors.New("unexpected signing method")
-		}
 		return []byte(s.config.SecretKey), nil
-	})
+	}, jwt.WithIssuer("aura-power"), jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}))
 	if err != nil {
 		return nil, err
 	}
 
 	claims, ok := token.Claims.(*Claims)
-	if !ok || !token.Valid {
-		return nil, errors.New("invalid token")
+	if !ok || !token.Valid || claims.Type != expectedType {
+		return nil, fmt.Errorf("invalid %s token", expectedType)
 	}
 
 	return claims, nil

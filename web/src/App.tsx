@@ -45,12 +45,22 @@ export function App() {
     window.location.reload();
   };
 
+  const handlePasswordChanged = async () => {
+    try {
+      await logout();
+    } finally {
+      // The password change already revoked this session on the server. Always
+      // return to authentication even when the best-effort logout request fails.
+      window.location.reload();
+    }
+  };
+
   return (
 	<CurrentUserContext.Provider value={user}>
 	<BrowserRouter>
 	  <Suspense fallback={<Box sx={{ p: 4 }}><CircularProgress size={24} aria-label="Loading page" /></Box>}>
       <Routes>
-        <Route element={<Layout user={user} onLogout={handleLogout} />}>
+        <Route element={<Layout user={user} onLogout={handleLogout} onPasswordChanged={handlePasswordChanged} />}>
           <Route path="/" element={<Dashboard />} />
           <Route path="/targets" element={<Targets />} />
           <Route path="/targets/:namespace" element={<NamespaceDetail />} />

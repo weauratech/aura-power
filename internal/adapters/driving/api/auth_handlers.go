@@ -72,6 +72,7 @@ func (h *AuthHandlers) RegisterProtectedRoutes(router *gin.RouterGroup) {
 		users.PUT("/:id", h.handleUpdateUser)
 		users.DELETE("/:id", h.handleDeleteUser)
 	}
+	router.PUT("/auth/password", h.handleChangePassword)
 
 	// Pending changes (approver + admin)
 	pending := router.Group("/pending")
@@ -195,7 +196,7 @@ func (h *AuthHandlers) handleRefresh(c *gin.Context) {
 		req.RefreshToken = cookieToken
 	}
 
-	claims, err := h.jwtService.ValidateToken(req.RefreshToken)
+	claims, err := h.jwtService.ValidateToken(req.RefreshToken, auth.TokenTypeRefresh)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid refresh token"})
 		return
@@ -204,6 +205,10 @@ func (h *AuthHandlers) handleRefresh(c *gin.Context) {
 	user, err := h.store.GetUserByID(claims.UserID)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "user not found"})
+		return
+	}
+	if user.Username != claims.Username || user.Role != claims.Role || user.AuthVersion != claims.AuthVersion {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "session is no longer valid"})
 		return
 	}
 
@@ -272,6 +277,10 @@ func (h *AuthHandlers) handleCreateUser(c *gin.Context) {
 
 	user, err := h.store.CreateUser(req.Username, req.Password, req.Role)
 	if err != nil {
+		if errors.Is(err, auth.ErrWeakPassword) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 		return
 	}
@@ -294,6 +303,10 @@ func (h *AuthHandlers) handleUpdateUser(c *gin.Context) {
 	}
 
 	if err := h.store.UpdateUser(id, req.Role); err != nil {
+		if errors.Is(err, auth.ErrLastAdmin) {
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			return
+		}
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 		return
 	}
@@ -303,11 +316,42 @@ func (h *AuthHandlers) handleUpdateUser(c *gin.Context) {
 
 func (h *AuthHandlers) handleDeleteUser(c *gin.Context) {
 	id := c.Param("id")
+	if id == c.GetString("userID") {
+		c.JSON(http.StatusConflict, gin.H{"error": "administrators cannot delete their own account"})
+		return
+	}
 	if err := h.store.DeleteUser(id); err != nil {
+		if errors.Is(err, auth.ErrLastAdmin) || errors.Is(err, auth.ErrUserReferenced) {
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			return
+		}
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"deleted": true})
+}
+
+func (h *AuthHandlers) handleChangePassword(c *gin.Context) {
+	var req struct {
+		CurrentPassword string `json:"currentPassword" binding:"required"`
+		NewPassword     string `json:"newPassword" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "currentPassword and newPassword are required"})
+		return
+	}
+	if err := h.store.UpdatePassword(c.GetString("userID"), req.CurrentPassword, req.NewPassword); err != nil {
+		switch {
+		case errors.Is(err, auth.ErrInvalidCurrentPassword):
+			c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+		case errors.Is(err, auth.ErrWeakPassword):
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update password"})
+		}
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"updated": true})
 }
 
 func (h *AuthHandlers) handleListPending(c *gin.Context) {

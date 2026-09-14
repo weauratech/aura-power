@@ -103,7 +103,7 @@ func TestPendingApprovalDefaultsPayloadNamespaceToControlNamespace(t *testing.T)
 
 func TestFailedApprovalPreservesPendingState(t *testing.T) {
 	f := newContractFixture(t)
-	pending, err := f.store.CreatePendingChange(auth.PendingChange{
+	pending, err := f.createPending(t, auth.PendingChange{
 		UserID: "requester", Username: "member", Action: "create", ResourceKind: "PowerPolicy",
 		ResourceNamespace: "aura-system", ResourceName: "broken", Payload: `{not-json}`,
 	})
@@ -133,7 +133,7 @@ func TestStaleUpdateRemainsPending(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pending, err := f.store.CreatePendingChange(auth.PendingChange{
+	pending, err := f.createPending(t, auth.PendingChange{
 		UserID: "requester", Username: "member", Action: "update", ResourceKind: "PowerPolicy",
 		ResourceNamespace: "aura-system", ResourceName: "nightly", ResourceVersion: "1", Payload: string(payload),
 	})
@@ -160,14 +160,14 @@ func TestStaleUpdateRemainsPending(t *testing.T) {
 func TestDowngradedReviewerCannotDecide(t *testing.T) {
 	f := newContractFixture(t)
 	token := f.token(t, auth.RoleApprover)
-	claims, err := f.jwt.ValidateToken(token)
+	claims, err := f.jwt.ValidateToken(token, auth.TokenTypeAccess)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := f.store.UpdateUser(claims.UserID, auth.RoleMember); err != nil {
 		t.Fatal(err)
 	}
-	pending, err := f.store.CreatePendingChange(auth.PendingChange{
+	pending, err := f.createPending(t, auth.PendingChange{
 		UserID: "requester", Username: "member", Action: "create", ResourceKind: "PowerPolicy",
 		ResourceNamespace: "aura-system", ResourceName: "denied", Payload: mustJSON(t, pendingPolicyPayload("denied", v1alpha1.PowerPolicySpec{})),
 	})
@@ -175,7 +175,7 @@ func TestDowngradedReviewerCannotDecide(t *testing.T) {
 		t.Fatal(err)
 	}
 	response := requestContract(t, f.server.Handler(), "POST", "/api/v1/pending/"+pending.ID+"/approve", token, nil)
-	if response.Code != 403 {
+	if response.Code != 401 {
 		t.Fatalf("downgraded reviewer got %d", response.Code)
 	}
 	got, _ := f.store.GetPendingChange(pending.ID)
@@ -205,7 +205,7 @@ func TestAppliedApprovalCannotBeReversedWhenAuditFails(t *testing.T) {
 	server := NewServer(wrapped, nil, f.server.config)
 	server.RegisterAuthRoutes(f.store, f.jwt)
 	server.FinalizeRoutes()
-	pending, err := f.store.CreatePendingChange(auth.PendingChange{UserID: "requester", Username: "member", Action: "create", ResourceKind: "PowerPolicy", ResourceNamespace: "aura-system", ResourceName: "audit-window", Payload: mustJSON(t, pendingPolicyPayload("audit-window", v1alpha1.PowerPolicySpec{}))})
+	pending, err := f.createPending(t, auth.PendingChange{Action: "create", ResourceKind: "PowerPolicy", ResourceNamespace: "aura-system", ResourceName: "audit-window", Payload: mustJSON(t, pendingPolicyPayload("audit-window", v1alpha1.PowerPolicySpec{}))})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +231,7 @@ func TestAppliedAndAuditedApprovalCannotBeReversedWhenFinalizeFails(t *testing.T
 	server := NewServer(f.client, nil, f.server.config)
 	server.RegisterAuthRoutes(finalizeFailingStore{Store: f.store}, f.jwt)
 	server.FinalizeRoutes()
-	pending, err := f.store.CreatePendingChange(auth.PendingChange{UserID: "requester", Username: "member", Action: "create", ResourceKind: "PowerPolicy", ResourceNamespace: "aura-system", ResourceName: "finalize-window", Payload: mustJSON(t, pendingPolicyPayload("finalize-window", v1alpha1.PowerPolicySpec{}))})
+	pending, err := f.createPending(t, auth.PendingChange{Action: "create", ResourceKind: "PowerPolicy", ResourceNamespace: "aura-system", ResourceName: "finalize-window", Payload: mustJSON(t, pendingPolicyPayload("finalize-window", v1alpha1.PowerPolicySpec{}))})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,15 +250,15 @@ func TestAppliedAndAuditedApprovalCannotBeReversedWhenFinalizeFails(t *testing.T
 
 func TestApprovalReplayPreservesOriginalDecisionOwner(t *testing.T) {
 	f := newContractFixture(t)
-	original, err := f.store.CreateUser("original-reviewer", "password", auth.RoleApprover)
+	original, err := f.store.CreateUser("original-reviewer", "Original-reviewer-passphrase", auth.RoleApprover)
 	if err != nil {
 		t.Fatal(err)
 	}
-	retrying, err := f.store.CreateUser("retrying-reviewer", "password", auth.RoleApprover)
+	retrying, err := f.store.CreateUser("retrying-reviewer", "Retrying-reviewer-passphrase", auth.RoleApprover)
 	if err != nil {
 		t.Fatal(err)
 	}
-	pending, err := f.store.CreatePendingChange(auth.PendingChange{
+	pending, err := f.createPending(t, auth.PendingChange{
 		UserID: "requester", Username: "member", Action: "create", ResourceKind: "PowerPolicy",
 		ResourceNamespace: "aura-system", ResourceName: "owned-replay", Payload: mustJSON(t, pendingPolicyPayload("owned-replay", v1alpha1.PowerPolicySpec{})),
 	})

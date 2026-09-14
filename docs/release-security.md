@@ -3,7 +3,7 @@
 Aura Power releases use one version across the Git tag, Helm `version`, Helm
 `appVersion`, image tags, and CLI archives. The release workflow accepts only a
 canonical `vMAJOR.MINOR.PATCH` SemVer tag whose commit is reachable from
-`origin/main`. The current release identity is `v2.2.1` / `2.2.1`.
+`origin/main`. The current release identity is `v2.2.2` / `2.2.2`.
 
 The amd64 server and controller images are built once and staged in GHCR by
 digest without a mutable candidate tag. Kind pulls each candidate by that exact
@@ -51,11 +51,11 @@ Existing-release upgrades in this example require Helm 3.14 or later for
 helm version --short
 export SERVER_DIGEST="$(jq -er '.serverDigests.index' release-manifest.json)"
 export CONTROLLER_DIGEST="$(jq -er '.controllerDigests.index' release-manifest.json)"
-helm show crds oci://ghcr.io/weauratech/charts/aura-power --version 2.2.1 > /tmp/aura-power-crds.yaml
+helm show crds oci://ghcr.io/weauratech/charts/aura-power --version 2.2.2 > /tmp/aura-power-crds.yaml
 kubectl apply --server-side --dry-run=server --field-manager=aura-power-release -f /tmp/aura-power-crds.yaml
 kubectl apply --server-side --field-manager=aura-power-release -f /tmp/aura-power-crds.yaml
 helm upgrade --install aura-power oci://ghcr.io/weauratech/charts/aura-power \
-  --version 2.2.1 --namespace aura-system --create-namespace \
+  --version 2.2.2 --namespace aura-system --create-namespace \
   --reset-then-reuse-values \
   --set-string server.image.tag= \
   --set-string controller.image.tag= \
@@ -72,7 +72,7 @@ downgrade procedure before changing the controller version.
 Verify an image signature and its GitHub-hosted provenance before deployment:
 
 ```bash
-export RELEASE=v2.2.1
+export RELEASE=v2.2.2
 export IMAGE=ghcr.io/weauratech/aura-power-controller
 export DIGEST=sha256:... # copy the controller digest from the release
 export IDENTITY="https://github.com/weauratech/aura-power/.github/workflows/release.yaml@refs/tags/${RELEASE}"
@@ -106,7 +106,7 @@ cosign verify-blob \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --bundle checksums.txt.bundle checksums.txt
 sha256sum --check checksums.txt --ignore-missing
-gh attestation verify ./aura-power_2.2.1_linux_amd64.tar.gz \
+gh attestation verify ./aura-power_2.2.2_linux_amd64.tar.gz \
   --repo weauratech/aura-power
 ```
 
