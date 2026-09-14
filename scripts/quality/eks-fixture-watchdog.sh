@@ -25,6 +25,7 @@ CLEANUP_STARTED="${RECOVERY_DIR}/cleanup-started"
 CLEANUP_COMPLETE="${RECOVERY_DIR}/cleanup-complete"
 MUTATION_IN_PROGRESS="${RECOVERY_DIR}/mutation-in-progress"
 SUPERVISOR_READY="${RECOVERY_DIR}/supervisor-ready"
+ACTIVE_COMMAND_STATE="${RECOVERY_DIR}/active-command"
 WATCHDOG_COMMAND_TIMEOUT_SECONDS="${WATCHDOG_COMMAND_TIMEOUT_SECONDS:-30}"
 [[ "$WATCHDOG_COMMAND_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ && "$WATCHDOG_COMMAND_TIMEOUT_SECONDS" -le 60 ]] || {
   echo "refusing cleanup: watchdog command timeout must be between 1 and 60 seconds" >&2
@@ -197,7 +198,7 @@ cleanup_fixture_locked() {
 }
 
 cleanup_transaction() {
-  local cleanup_status=0 wait_attempts=0 parent_identity
+  local cleanup_status=0 wait_attempts=0 parent_identity active_status=0
   [[ ! -d "$CLEANUP_COMPLETE" ]] || return 0
   if ! mkdir "$CLEANUP_STARTED" 2>/dev/null; then
     [[ -d "$CLEANUP_COMPLETE" ]] && return 0
@@ -207,6 +208,12 @@ cleanup_transaction() {
   while [[ -d "$MUTATION_IN_PROGRESS" ]]; do
     parent_identity="$(process_identity "$PARENT_PID" 2>/dev/null || true)"
     if [[ "$parent_identity" != "$PARENT_IDENTITY" ]]; then
+      quiesce_active_process_state "$ACTIVE_COMMAND_STATE" || active_status=$?
+      if [[ "$active_status" -ne 0 ]]; then
+        echo "recovery refuses to remove mutation marker while an active command is unverified" >&2
+        rmdir "$CLEANUP_STARTED" 2>/dev/null || true
+        return 1
+      fi
       rmdir "$MUTATION_IN_PROGRESS" 2>/dev/null || true
       break
     fi
@@ -227,6 +234,13 @@ cleanup_transaction() {
     }
     sleep 0.25
   done
+  active_status=0
+  quiesce_active_process_state "$ACTIVE_COMMAND_STATE" || active_status=$?
+  if [[ "$active_status" -ne 0 ]]; then
+    echo "recovery refuses cleanup while an active command is unverified" >&2
+    rmdir "$CLEANUP_STARTED" 2>/dev/null || true
+    return 1
+  fi
   cleanup_fixture_locked || cleanup_status=$?
   if [[ "$cleanup_status" -eq 0 ]]; then
     remove_recovery_state

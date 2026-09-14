@@ -192,6 +192,61 @@ mkdir "${RECOVERY_DIR_PATH}/mutation-in-progress"
 invoke_watchdog watch "${CASE_DIR}/stderr.log"
 assert_success_cleanup abandoned-mutation-marker-after-parent-death
 
+prepare_case parent-killed-with-active-command true true false
+write_state namespace-uid workload-uid ""
+mkdir "${RECOVERY_DIR_PATH}/mutation-in-progress"
+cat >"${CASE_DIR}/killed-parent.sh" <<'KILLED_PARENT'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+source "$1"
+PROCESS_GUARD_ACTIVE_FILE="$2/active-command"
+# Command substitution reproduces the old orphaning path when the principal is
+# untrappably killed while waiting for create output.
+command_output="$(run_with_process_timeout 30 sh -c 'trap "" INT TERM HUP; sleep 30 & child=$!; printf "%s\n" "$child" >"$1/active-descendant.pid"; wait "$child"' sh "$3")"
+: "$command_output"
+KILLED_PARENT
+chmod +x "${CASE_DIR}/killed-parent.sh"
+"${CASE_DIR}/killed-parent.sh" "${repo_root}/scripts/quality/process-guard.sh" "$RECOVERY_DIR_PATH" "$CASE_DIR" &
+killed_parent_pid=$!
+attempts=0
+killed_parent_identity=""
+while [[ -z "$killed_parent_identity" ]]; do
+  killed_parent_identity="$(process_identity "$killed_parent_pid" 2>/dev/null || true)"
+  attempts=$((attempts + 1))
+  (( attempts < 200 )) || { echo 'killed parent identity was unavailable' >&2; exit 1; }
+  sleep 0.05
+done
+attempts=0
+while [[ ! -f "${CASE_DIR}/active-descendant.pid" || ! -f "${RECOVERY_DIR_PATH}/active-command" ]]; do
+  attempts=$((attempts + 1))
+  (( attempts < 400 )) || { echo 'active descendant did not start' >&2; exit 1; }
+  sleep 0.05
+done
+active_command_pid="$(sed -n '1p' "${RECOVERY_DIR_PATH}/active-command")"
+kill -KILL "$killed_parent_pid"
+wait "$killed_parent_pid" 2>/dev/null || true
+INVOKE_PARENT_PID="$killed_parent_pid"
+INVOKE_PARENT_IDENTITY="$killed_parent_identity"
+invoke_watchdog watch "${CASE_DIR}/stderr.log"
+unset INVOKE_PARENT_PID INVOKE_PARENT_IDENTITY
+assert_success_cleanup parent-killed-with-active-command
+active_descendant_pid="$(cat "${CASE_DIR}/active-descendant.pid")"
+if process_identity "$active_command_pid" >/dev/null 2>&1 || process_identity "$active_descendant_pid" >/dev/null 2>&1; then
+  echo 'watchdog removed mutation marker before the killed parent command tree quiesced' >&2
+  exit 1
+fi
+
+prepare_case invalid-active-command-state true false false
+write_state namespace-uid "" ""
+mkdir "${RECOVERY_DIR_PATH}/mutation-in-progress"
+printf 'not-a-valid-process-registry\n' >"${RECOVERY_DIR_PATH}/active-command"
+chmod 600 "${RECOVERY_DIR_PATH}/active-command"
+invalid_active_status=0
+invoke_watchdog watch "${CASE_DIR}/stderr.log" || invalid_active_status=$?
+[[ "$invalid_active_status" -ne 0 && -d "${RECOVERY_DIR_PATH}/mutation-in-progress" && -f "${CASE_DIR}/namespace.exists" && -f "$KUBECONFIG_PATH" && -f "${RECOVERY_DIR_PATH}/state.json" ]] || {
+  echo 'invalid active-command state did not preserve the marker and recovery artifacts' >&2; exit 1;
+}
+
 prepare_case namespace-replacement-race true false false
 write_state namespace-uid "" ""
 : >"${CASE_DIR}/namespace.replace-on-delete"
@@ -303,4 +358,4 @@ elapsed=$(( $(date +%s) - started ))
 [[ "$api_status" -ne 0 && "$elapsed" -lt 8 && -f "${CASE_DIR}/namespace.exists" && -f "$KUBECONFIG_PATH" && -f "${RECOVERY_DIR_PATH}/state.json" ]] || { echo "API timeout did not fail closed promptly: status=${api_status} elapsed=${elapsed}" >&2; exit 1; }
 unset INVOKE_COMMAND_TIMEOUT_SECONDS
 
-echo "eks_fixture_watchdog_contract=passed pre_mutation=true nonce_capture=true preconditions=true replacement_race=true deadline_trap=true signal_trap=true abandoned_marker=true parent_identity=true api_fail_closed=true external_timeout=true invalid_state=true"
+echo "eks_fixture_watchdog_contract=passed pre_mutation=true nonce_capture=true preconditions=true replacement_race=true deadline_trap=true signal_trap=true abandoned_marker=true killed_parent_tree=true parent_identity=true api_fail_closed=true external_timeout=true invalid_state=true invalid_active_state=true"

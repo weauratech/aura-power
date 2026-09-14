@@ -39,6 +39,7 @@ POLICY_UID=""
 MUTATION_IN_PROGRESS=""
 WATCHDOG_IDENTITY=""
 CHANNEL_WATCH_IDENTITY=""
+PROCESS_GUARD_ACTIVE_FILE=""
 PARENT_IDENTITY="$(process_identity "$$")"
 AWS_COMMAND_TIMEOUT_SECONDS="${AWS_COMMAND_TIMEOUT_SECONDS:-60}"
 KUBE_COMMAND_TIMEOUT_SECONDS="${KUBE_COMMAND_TIMEOUT_SECONDS:-330}"
@@ -64,7 +65,7 @@ kube() {
 }
 
 kube_watch() {
-  run_with_process_timeout "$KUBE_WATCH_TIMEOUT_SECONDS" kubectl --request-timeout=30s "$@"
+  PROCESS_GUARD_ACTIVE_FILE="" run_with_process_timeout "$KUBE_WATCH_TIMEOUT_SECONDS" kubectl --request-timeout=30s "$@"
 }
 
 [[ "$(kube config current-context)" == "$EXPECTED_CONTEXT" ]] || { echo "refusing mutation: unexpected kube context" >&2; exit 2; }
@@ -76,13 +77,22 @@ remove_runtime_kubeconfig() {
 }
 
 remove_recovery_directory() {
-  local entry pending_state
+  local entry pending_state private_file launch_dir
   if [[ -n "${RECOVERY_DIR:-}" && -d "$RECOVERY_DIR" ]]; then
     for entry in cleanup-complete cleanup-requested cleanup-started mutation-in-progress supervisor-ready; do
       rmdir "${RECOVERY_DIR}/${entry}" 2>/dev/null || true
     done
     for pending_state in "${RECOVERY_DIR}"/state.pending.*; do
       [[ ! -f "$pending_state" ]] || unlink "$pending_state"
+    done
+    for pending_state in "${RECOVERY_DIR}"/active-command.pending.*; do
+      [[ ! -f "$pending_state" ]] || unlink "$pending_state"
+    done
+    for launch_dir in "${RECOVERY_DIR}"/active-command.launch.*; do
+      [[ ! -d "$launch_dir" ]] || rmdir "$launch_dir" 2>/dev/null || true
+    done
+    for private_file in active-command watchdog.log channel-watch.log channel-watch-error.log namespace-create.json workload-create.json policy-create.json; do
+      [[ ! -f "${RECOVERY_DIR}/${private_file}" ]] || unlink "${RECOVERY_DIR}/${private_file}"
     done
     [[ ! -f "${RECOVERY_DIR}/state.json" ]] || unlink "${RECOVERY_DIR}/state.json"
     rmdir "$RECOVERY_DIR" 2>/dev/null || true
@@ -128,6 +138,15 @@ end_mutation() {
 }
 
 cleanup_bootstrap() {
+  local active_status=0
+  trap - EXIT INT TERM HUP
+  if [[ -n "${PROCESS_GUARD_ACTIVE_FILE:-}" ]]; then
+    quiesce_active_process_state "$PROCESS_GUARD_ACTIVE_FILE" || active_status=$?
+  fi
+  if [[ "$active_status" -ne 0 ]]; then
+    echo "FATAL: bootstrap command could not be quiesced; recovery artifacts retained in $RECOVERY_DIR" >&2
+    exit 90
+  fi
   remove_runtime_kubeconfig
   remove_recovery_directory
 }
@@ -139,6 +158,7 @@ trap cleanup_bootstrap EXIT
 # process argument, where another local process could observe it.
 RECOVERY_DIR="$(mktemp -d)"
 chmod 700 "$RECOVERY_DIR"
+PROCESS_GUARD_ACTIVE_FILE="${RECOVERY_DIR}/active-command"
 RUNTIME_KUBECONFIG="${RECOVERY_DIR}/kubeconfig"
 : >"$RUNTIME_KUBECONFIG"
 chmod 600 "$RUNTIME_KUBECONFIG"
@@ -225,11 +245,17 @@ WATCHDOG_PID=""
 CHANNEL_WATCH_PID=""
 cleanup_on_exit() {
   local original_status=$?
-  local watchdog_status=0 cleanup_status=0 shutdown_deadline=0
+  local watchdog_status=0 cleanup_status=0 shutdown_deadline=0 active_status=0
   trap - EXIT INT TERM HUP
+  quiesce_active_process_state "$PROCESS_GUARD_ACTIVE_FILE" || active_status=$?
+  if [[ "$active_status" -ne 0 ]]; then
+    mkdir "${RECOVERY_DIR}/cleanup-requested" 2>/dev/null || true
+    echo "FATAL: active command could not be quiesced; mutation marker and recovery artifacts retained in $RECOVERY_DIR" >&2
+    exit 90
+  fi
   rmdir "$MUTATION_IN_PROGRESS" 2>/dev/null || true
   if [[ -n "$CHANNEL_WATCH_PID" ]]; then
-    [[ -z "$CHANNEL_WATCH_IDENTITY" ]] || terminate_process_tree "$CHANNEL_WATCH_PID" "$CHANNEL_WATCH_IDENTITY" TERM
+    [[ -z "$CHANNEL_WATCH_IDENTITY" ]] || terminate_and_wait_process_tree "$CHANNEL_WATCH_PID" "$CHANNEL_WATCH_IDENTITY" 1 3 || true
     wait "$CHANNEL_WATCH_PID" 2>/dev/null || true
   fi
   if ! mkdir "${RECOVERY_DIR}/cleanup-requested" 2>/dev/null && [[ ! -d "${RECOVERY_DIR}/cleanup-requested" && ! -d "${RECOVERY_DIR}/cleanup-complete" ]]; then
@@ -242,7 +268,7 @@ cleanup_on_exit() {
       sleep 1
     done
     if process_is_running_identity "$WATCHDOG_PID" "$WATCHDOG_IDENTITY"; then
-      terminate_process_tree "$WATCHDOG_PID" "$WATCHDOG_IDENTITY" TERM
+      terminate_and_wait_process_tree "$WATCHDOG_PID" "$WATCHDOG_IDENTITY" 1 3 || true
       watchdog_status=124
     fi
     wait "$WATCHDOG_PID" 2>/dev/null || watchdog_status=$?
@@ -280,7 +306,8 @@ write_recovery_state_locked || state_status=$?
 [[ "$state_status" -eq 0 ]] || exit "$state_status"
 export RUN_ID RECOVERY_NONCE FIXTURE_NAMESPACE WORKLOAD_NAME POLICY_NAME RECOVERY_DIR PARENT_IDENTITY
 export PARENT_PID="$$" HARD_DEADLINE_EPOCH
-WATCHDOG_LOG="$(mktemp)"
+WATCHDOG_LOG="${RECOVERY_DIR}/watchdog.log"
+: >"$WATCHDOG_LOG"
 chmod 600 "$WATCHDOG_LOG"
 nohup "$WATCHDOG" watch </dev/null >"$WATCHDOG_LOG" 2>&1 &
 WATCHDOG_PID=$!
@@ -303,10 +330,16 @@ while [[ ! -d "${RECOVERY_DIR}/supervisor-ready" ]]; do
   (( ready_attempts < 40 )) || { echo "refusing mutation: recovery supervisor readiness timed out" >&2; exit 5; }
   sleep 0.25
 done
+process_is_running_identity "$WATCHDOG_PID" "$WATCHDOG_IDENTITY" || {
+  cat "$WATCHDOG_LOG" >&2
+  echo "refusing mutation: recovery supervisor lost after readiness" >&2
+  exit 5
+}
 
 begin_mutation
 namespace_status=0
-namespace_json="$(kube create -f - -o json <<YAML
+namespace_response="${RECOVERY_DIR}/namespace-create.json"
+kube create -f - -o json >"$namespace_response" <<YAML || namespace_status=$?
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -319,11 +352,12 @@ metadata:
   annotations:
     aura.sh/power-eligible: "true"
 YAML
-)" || namespace_status=$?
 if [[ "$namespace_status" -ne 0 ]]; then
   end_mutation
   exit "$namespace_status"
 fi
+namespace_json="$(cat "$namespace_response")"
+unlink "$namespace_response"
 uid_status=0
 NAMESPACE_UID="$(jq -er '.metadata.uid' <<<"$namespace_json")" || uid_status=$?
 if [[ "$uid_status" -ne 0 ]]; then
@@ -337,7 +371,8 @@ end_mutation
 
 begin_mutation
 workload_status=0
-workload_json="$(kube create -f - -o json <<YAML
+workload_response="${RECOVERY_DIR}/workload-create.json"
+kube create -f - -o json >"$workload_response" <<YAML || workload_status=$?
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -365,11 +400,12 @@ spec:
             requests: {cpu: 10m, memory: 8Mi}
             limits: {cpu: 20m, memory: 16Mi}
 YAML
-)" || workload_status=$?
 if [[ "$workload_status" -ne 0 ]]; then
   end_mutation
   exit "$workload_status"
 fi
+workload_json="$(cat "$workload_response")"
+unlink "$workload_response"
 uid_status=0
 WORKLOAD_UID="$(jq -er '.metadata.uid' <<<"$workload_json")" || uid_status=$?
 if [[ "$uid_status" -ne 0 ]]; then
@@ -408,8 +444,10 @@ live_target_json="$(kube get powertarget "$target" -n "$CONTROL_NAMESPACE" -o js
 [[ "$(jq -r '.metadata.uid' <<<"$live_namespace_json")" == "$NAMESPACE_UID" && "$(jq -r '.metadata.labels["power.aura.sh/notification-policy"]' <<<"$live_namespace_json")" == "disabled" ]] || { echo "FAIL: campaign namespace identity or suppression policy changed" >&2; exit 13; }
 [[ "$(jq -r '.metadata.uid' <<<"$live_workload_json")" == "$WORKLOAD_UID" ]] || { echo "FAIL: fixture workload UID changed before policy creation" >&2; exit 13; }
 [[ "$(jq -r '.spec.targetRef.uid' <<<"$live_target_json")" == "$WORKLOAD_UID" ]] || { echo "FAIL: exact target UID changed before policy creation" >&2; exit 13; }
-CHANNEL_WATCH_LOG="$(mktemp)"
-CHANNEL_WATCH_ERROR_LOG="$(mktemp)"
+CHANNEL_WATCH_LOG="${RECOVERY_DIR}/channel-watch.log"
+CHANNEL_WATCH_ERROR_LOG="${RECOVERY_DIR}/channel-watch-error.log"
+: >"$CHANNEL_WATCH_LOG"
+: >"$CHANNEL_WATCH_ERROR_LOG"
 chmod 600 "$CHANNEL_WATCH_LOG"
 chmod 600 "$CHANNEL_WATCH_ERROR_LOG"
 (
@@ -426,7 +464,8 @@ same_process_identity "$CHANNEL_WATCH_PID" "$CHANNEL_WATCH_IDENTITY" || {
 }
 begin_mutation
 policy_status=0
-policy_json="$(kube create -f - -o json <<YAML
+policy_response="${RECOVERY_DIR}/policy-create.json"
+kube create -f - -o json >"$policy_response" <<YAML || policy_status=$?
 apiVersion: power.aura.sh/v1alpha1
 kind: PowerPolicy
 metadata:
@@ -444,11 +483,12 @@ spec:
   priority: 1000
   description: "Disposable Aura Power acceptance fixture ${RUN_ID}"
 YAML
-)" || policy_status=$?
 if [[ "$policy_status" -ne 0 ]]; then
   end_mutation
   exit "$policy_status"
 fi
+policy_json="$(cat "$policy_response")"
+unlink "$policy_response"
 uid_status=0
 POLICY_UID="$(jq -er '.metadata.uid' <<<"$policy_json")" || uid_status=$?
 if [[ "$uid_status" -ne 0 ]]; then
@@ -517,7 +557,7 @@ same_process_identity "$CHANNEL_WATCH_PID" "$CHANNEL_WATCH_IDENTITY" || {
   tail -n 20 "$CHANNEL_WATCH_ERROR_LOG" >&2 || true
   exit 15
 }
-terminate_process_tree "$CHANNEL_WATCH_PID" "$CHANNEL_WATCH_IDENTITY" TERM
+terminate_and_wait_process_tree "$CHANNEL_WATCH_PID" "$CHANNEL_WATCH_IDENTITY" 1 3 || true
 wait "$CHANNEL_WATCH_PID" 2>/dev/null || true
 CHANNEL_WATCH_PID=""
 while IFS= read -r audit_name; do

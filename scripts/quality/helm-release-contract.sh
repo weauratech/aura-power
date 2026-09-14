@@ -37,7 +37,12 @@ grep -Fq 'RUNTIME_KUBECONFIG="${RECOVERY_DIR}/kubeconfig"' scripts/quality/eks-c
 grep -Fq 'mkdir "$SUPERVISOR_READY"' scripts/quality/eks-fixture-watchdog.sh
 grep -Fq 'same_process_identity "$PARENT_PID" "$PARENT_IDENTITY"' scripts/quality/eks-fixture-watchdog.sh
 grep -Fq 'run_with_process_timeout "$WATCHDOG_COMMAND_TIMEOUT_SECONDS"' scripts/quality/eks-fixture-watchdog.sh
-perl -0ne 'exit(!/nohup "\$WATCHDOG" watch.*supervisor-ready.*namespace_json="\$\(kube create/s)' scripts/quality/eks-core-journey.sh
+grep -Fq 'PROCESS_GUARD_ACTIVE_FILE="${RECOVERY_DIR}/active-command"' scripts/quality/eks-core-journey.sh
+grep -Fq 'quiesce_active_process_state "$ACTIVE_COMMAND_STATE"' scripts/quality/eks-fixture-watchdog.sh
+grep -Fq 'WATCHDOG_LOG="${RECOVERY_DIR}/watchdog.log"' scripts/quality/eks-core-journey.sh
+grep -Fq 'CHANNEL_WATCH_LOG="${RECOVERY_DIR}/channel-watch.log"' scripts/quality/eks-core-journey.sh
+perl -0ne 'exit(!/nohup "\$WATCHDOG" watch.*supervisor-ready.*recovery supervisor lost after readiness.*namespace_response=.*kube create/s)' scripts/quality/eks-core-journey.sh
+perl -0ne 'exit(!/cleanup_on_exit\(\).*quiesce_active_process_state.*rmdir "\$MUTATION_IN_PROGRESS"/s)' scripts/quality/eks-core-journey.sh
 perl -0ne 'exit(!/stat -c '\''%a'\''.*stat -f '\''%Lp'\''/s)' scripts/quality/eks-fixture-watchdog.sh
 scripts/quality/process-guard-test.sh
 scripts/quality/eks-fixture-watchdog-test.sh
