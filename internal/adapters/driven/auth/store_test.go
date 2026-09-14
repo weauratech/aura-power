@@ -1,6 +1,8 @@
 package auth
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"path/filepath"
@@ -9,6 +11,36 @@ import (
 	"testing"
 	"time"
 )
+
+func TestSQLiteBusyTimeoutAppliesToEveryPooledConnection(t *testing.T) {
+	s, err := NewSQLiteStore(filepath.Join(t.TempDir(), "auth db?.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+
+	ctx := context.Background()
+	first, err := s.db.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	second, err := s.db.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+
+	for i, conn := range []*sql.Conn{first, second} {
+		var timeout int
+		if err := conn.QueryRowContext(ctx, "PRAGMA busy_timeout").Scan(&timeout); err != nil {
+			t.Fatalf("connection %d busy timeout: %v", i+1, err)
+		}
+		if timeout != sqliteBusyTimeoutMillis {
+			t.Fatalf("connection %d busy timeout=%d, want %d", i+1, timeout, sqliteBusyTimeoutMillis)
+		}
+	}
+}
 
 func TestSQLiteUserLifecycleAndPersistence(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "auth.db")

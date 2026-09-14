@@ -3,6 +3,8 @@ package auth
 import (
 	"database/sql"
 	"fmt"
+	"net/url"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -14,24 +16,47 @@ type SQLiteStore struct {
 	db *sql.DB
 }
 
+const sqliteBusyTimeoutMillis = 5000
+
 // NewSQLiteStore creates a new SQLite-backed auth store.
 func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
-	db, err := sql.Open("sqlite", dbPath)
+	dsn, err := sqliteDSN(dbPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve sqlite path: %w", err)
+	}
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open sqlite: %w", err)
 	}
-
-	// Enable WAL mode for better concurrent read performance
-	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
-		return nil, err
-	}
+	// Both settings belong in the DSN because PRAGMAs executed through db.Exec
+	// configure only the physical connection selected from database/sql's pool.
+	// The driver applies DSN PRAGMAs whenever it opens a connection. The busy
+	// timeout lets concurrent writers wait for the atomic conditional UPDATE,
+	// whose predicate then determines the single lease winner.
 
 	store := &SQLiteStore{db: db}
 	if err := store.migrate(); err != nil {
+		_ = db.Close()
 		return nil, fmt.Errorf("failed to migrate: %w", err)
 	}
 
 	return store, nil
+}
+
+func sqliteDSN(dbPath string) (string, error) {
+	if dbPath == ":memory:" {
+		return fmt.Sprintf("file::memory:?_busy_timeout=%d&_journal_mode=MEMORY", sqliteBusyTimeoutMillis), nil
+	}
+	absPath, err := filepath.Abs(dbPath)
+	if err != nil {
+		return "", err
+	}
+	u := url.URL{Scheme: "file", Path: absPath}
+	query := u.Query()
+	query.Set("_busy_timeout", fmt.Sprint(sqliteBusyTimeoutMillis))
+	query.Set("_journal_mode", "WAL")
+	u.RawQuery = query.Encode()
+	return u.String(), nil
 }
 
 func (s *SQLiteStore) migrate() error {
