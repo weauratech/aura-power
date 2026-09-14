@@ -140,7 +140,7 @@ yq -i '
 helm upgrade aura-power "$CANDIDATE_CHART" --namespace aura-system \
   --reset-values -f "$maintenance_values" --dry-run=server --hide-secret
 helm upgrade aura-power "$CANDIDATE_CHART" --namespace aura-system \
-  --reset-values -f "$maintenance_values" --wait
+  --reset-values -f "$maintenance_values" --cleanup-on-fail --wait --timeout 8m
 
 kubectl get deployment aura-power-controller --namespace aura-system -o json \
   | jq -e '(.status.replicas // 0) == 0' >/dev/null
@@ -150,7 +150,7 @@ yq -i '.server.replicas = 0' "$maintenance_values"
 helm upgrade aura-power "$CANDIDATE_CHART" --namespace aura-system \
   --reset-values -f "$maintenance_values" --dry-run=server --hide-secret
 helm upgrade aura-power "$CANDIDATE_CHART" --namespace aura-system \
-  --reset-values -f "$maintenance_values" --wait
+  --reset-values -f "$maintenance_values" --cleanup-on-fail --wait --timeout 8m
 ```
 
 At this point no candidate binary has run: the controller stopped first and the
@@ -177,17 +177,17 @@ yq -i '
 helm upgrade aura-power "$CANDIDATE_CHART" --namespace aura-system \
   --reset-values -f "$maintenance_values" --dry-run=server --hide-secret
 helm upgrade aura-power "$CANDIDATE_CHART" --namespace aura-system \
-  --reset-values -f "$maintenance_values" --wait
+  --reset-values -f "$maintenance_values" --cleanup-on-fail --wait --timeout 8m
 
 yq -i '.server.replicas = 1' "$maintenance_values"
 helm upgrade aura-power "$CANDIDATE_CHART" --namespace aura-system \
-  --reset-values -f "$maintenance_values" --wait
+  --reset-values -f "$maintenance_values" --cleanup-on-fail --wait --timeout 8m
 kubectl rollout status statefulset/aura-power-server \
   --namespace aura-system --timeout=5m
 
 yq -i '.controller.replicas = 1' "$maintenance_values"
 helm upgrade aura-power "$CANDIDATE_CHART" --namespace aura-system \
-  --reset-values -f "$maintenance_values" --wait
+  --reset-values -f "$maintenance_values" --cleanup-on-fail --wait --timeout 8m
 kubectl rollout status deployment/aura-power-controller \
   --namespace aura-system --timeout=5m
 
@@ -200,12 +200,12 @@ while (( SECONDS < deadline )); do
   sleep 2
 done
 [[ -n "$new_holder" && "$new_holder" != "$old_holder" ]]
-cmp --silent "$decision_inventory" <(inventory_decisions)
+cmp -s "$decision_inventory" <(inventory_decisions)
 
 : "${POST_START_OBSERVATION_SECONDS:?set at least two times the larger configured interval}"
 [[ "$POST_START_OBSERVATION_SECONDS" =~ ^[1-9][0-9]*$ ]]
 sleep "$POST_START_OBSERVATION_SECONDS"
-cmp --silent "$decision_inventory" <(inventory_decisions)
+cmp -s "$decision_inventory" <(inventory_decisions)
 ```
 
 `--wait` proves Pod readiness, not controller leadership or successful

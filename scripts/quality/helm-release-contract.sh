@@ -259,6 +259,7 @@ grep -Fq '.webhook.enabled == true and .webhook.failurePolicy == "Fail"' charts/
 grep -Fq 'DELETE' charts/aura-power/README.md
 grep -Fq 'holderIdentity' charts/aura-power/README.md
 grep -Fq 'complete configured discovery and reconciliation intervals' charts/aura-power/README.md
+[[ "$(grep -c -- '--cleanup-on-fail --wait --timeout 8m' charts/aura-power/README.md)" -eq 5 ]]
 if helm template aura-power charts/aura-power --set server.replicas=-1 >/dev/null 2>&1; then
   echo "negative server replicas must be rejected" >&2
   exit 1
