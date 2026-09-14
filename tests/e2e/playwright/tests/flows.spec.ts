@@ -73,6 +73,10 @@ test('@mutation authenticated member changes password and must sign in again', a
     await memberPage.getByRole('button', { name: 'Sign in' }).click();
     await expect(memberPage.getByRole('heading', { name: 'Cluster Overview' })).toBeVisible();
 
+    const openNavigation = memberPage.getByRole('button', { name: 'Open navigation' });
+    if (await openNavigation.isVisible()) {
+      await openNavigation.click();
+    }
     await memberPage.getByRole('button', { name: 'Change password' }).click();
     const dialog = memberPage.getByRole('dialog', { name: 'Change password' });
     await dialog.getByLabel(/Current password/).fill(currentPassword);
