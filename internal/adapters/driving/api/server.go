@@ -89,8 +89,8 @@ func (s *Server) setupRoutes() {
 	}
 
 	// Apply auth middleware to remaining API routes
-	if s.jwtService != nil {
-		api.Use(AuthMiddleware(s.jwtService))
+	if s.jwtService != nil && s.authStore != nil {
+		api.Use(AuthMiddleware(s.jwtService, s.authStore))
 	}
 
 	// Protected auth routes (me, users, pending)

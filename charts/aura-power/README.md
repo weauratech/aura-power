@@ -6,9 +6,7 @@ Deploys Aura Power (Server + Controller) on a Kubernetes cluster.
 
 ```bash
 helm install aura-power oci://ghcr.io/weauratech/charts/aura-power \
-  --namespace aura-system --create-namespace \
-  --set server.auth.jwtSecret=$(openssl rand -base64 32) \
-  --set server.auth.initialAdmin.password=changeme
+  --namespace aura-system --create-namespace
 ```
 
 ## Values
@@ -27,6 +25,7 @@ helm install aura-power oci://ghcr.io/weauratech/charts/aura-power \
 | `server.resources.limits.cpu` | CPU limit | `500m` |
 | `server.resources.limits.memory` | Memory limit | `256Mi` |
 | `server.auth.existingSecret` | Existing Secret with `jwt-secret` and `admin-password` | `""` |
+| `server.auth.keepManagedSecret` | Transitional retention annotation used before moving the managed Secret to `existingSecret` | `false` |
 | `server.auth.jwtSecret` | JWT signing key; generated once and retained when empty | `""` |
 | `server.auth.initialAdmin.username` | Initial admin username | `admin` |
 | `server.auth.initialAdmin.password` | Initial password; generated once and retained when empty | `""` |

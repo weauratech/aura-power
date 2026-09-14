@@ -10,7 +10,7 @@ import (
 )
 
 // AuthMiddleware validates JWT tokens on protected endpoints.
-func AuthMiddleware(jwtService *auth.JWTService) gin.HandlerFunc {
+func AuthMiddleware(jwtService *auth.JWTService, store auth.Store) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// Skip panel static assets — only protect /api/* routes
 		path := c.Request.URL.Path
@@ -41,16 +41,21 @@ func AuthMiddleware(jwtService *auth.JWTService) gin.HandlerFunc {
 			return
 		}
 
-		claims, err := jwtService.ValidateToken(token)
+		claims, err := jwtService.ValidateToken(token, auth.TokenTypeAccess)
 		if err != nil {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired token"})
 			return
 		}
+		user, err := store.GetUserByID(claims.UserID)
+		if err != nil || user.Username != claims.Username || user.Role != claims.Role || user.AuthVersion != claims.AuthVersion {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "session is no longer valid"})
+			return
+		}
 
 		// Set user context
-		c.Set("userID", claims.UserID)
-		c.Set("username", claims.Username)
-		c.Set("role", string(claims.Role))
+		c.Set("userID", user.ID)
+		c.Set("username", user.Username)
+		c.Set("role", string(user.Role))
 		c.Next()
 	}
 }

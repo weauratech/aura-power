@@ -24,6 +24,7 @@
           "type": "object",
           "properties": {
             "existingSecret": { "type": "string" },
+            "keepManagedSecret": { "type": "boolean" },
             "jwtSecret": { "type": "string" },
             "initialAdmin": {
               "type": "object",

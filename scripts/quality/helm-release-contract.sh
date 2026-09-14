@@ -143,11 +143,13 @@ cmp "$chart_repro_dir/one/aura-power-2.2.1.tgz" "$chart_repro_dir/two/aura-power
 default_render="$(mktemp)"
 ephemeral_render="$(mktemp)"
 external_secret_render="$(mktemp)"
-trap 'rm -f "$default_render" "$ephemeral_render" "$external_secret_render"' EXIT
+retained_secret_render="$(mktemp)"
+trap 'rm -f "$default_render" "$ephemeral_render" "$external_secret_render" "$retained_secret_render"' EXIT
 
 helm template aura-power charts/aura-power >"$default_render"
 helm template aura-power charts/aura-power --set server.persistence.enabled=false >"$ephemeral_render"
 helm template aura-power charts/aura-power --set server.auth.existingSecret=managed-auth >"$external_secret_render"
+helm template aura-power charts/aura-power --set server.auth.keepManagedSecret=true >"$retained_secret_render"
 
 grep -q 'name: ACCESS_TOKEN_TTL' "$default_render"
 grep -q 'name: REFRESH_TOKEN_TTL' "$default_render"
@@ -165,6 +167,7 @@ if grep -q '# Source: aura-power/templates/server-secret.yaml' "$external_secret
 fi
 perl -0ne 'exit(!/name: managed-auth\n\s+key: jwt-secret/s)' "$external_secret_render"
 perl -0ne 'exit(!/name: managed-auth\n\s+key: admin-password/s)' "$external_secret_render"
+perl -0ne 'exit(!/name: aura-power-server-secret\n\s+annotations:\n\s+helm.sh\/resource-policy: keep/s)' "$retained_secret_render"
 
 grep -q 'image: "ghcr.io/weauratech/aura-power-server:2.2.1"' "$default_render"
 grep -q 'image: "ghcr.io/weauratech/aura-power-controller:2.2.1"' "$default_render"

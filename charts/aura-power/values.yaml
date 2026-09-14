@@ -29,6 +29,9 @@ server:
     # Reuse a pre-created Secret in GitOps environments. It must contain the
     # keys jwt-secret and admin-password.
     existingSecret: ""
+    # Transitional guard for moving the chart-managed Secret to
+    # existingSecret without replacing its UID. See docs/admin-credential-rotation.md.
+    keepManagedSecret: false
     jwtSecret: ""  # generated once and retained when empty
     initialAdmin:
       username: "admin"

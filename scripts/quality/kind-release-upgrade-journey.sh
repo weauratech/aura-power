@@ -150,10 +150,19 @@ forward_pid=""
 kubectl port-forward -n aura-system statefulset/aura-power-server 19094:8080 >"$port_forward_log" 2>&1 &
 forward_pid=$!
 for _ in $(seq 1 45); do curl -fsS http://127.0.0.1:19094/readyz >/dev/null 2>&1 && break; sleep 1; done
-refresh_result="$(curl -fsS -H 'content-type: application/json' \
+legacy_refresh_status="$(curl -sS -o /dev/null -w '%{http_code}' -H 'content-type: application/json' \
   --data "$(jq -nc --arg token "$refresh_token" '{refreshToken:$token}')" \
   http://127.0.0.1:19094/api/v1/auth/refresh)"
-[[ -n "$(jq -er .accessToken <<<"$refresh_result")" ]] || { echo "FAIL: pre-upgrade refresh token was not accepted" >&2; exit 26; }
+[[ "$legacy_refresh_status" == "401" ]] || { echo "FAIL: untyped pre-upgrade refresh token returned $legacy_refresh_status, want 401" >&2; exit 26; }
+candidate_login="$(curl -fsS -H 'content-type: application/json' \
+  --data '{"username":"admin","password":"UpgradeAdmin-217!"}' \
+  http://127.0.0.1:19094/api/v1/auth/login)"
+candidate_access_token="$(jq -er .accessToken <<<"$candidate_login")"
+candidate_refresh_token="$(jq -er .refreshToken <<<"$candidate_login")"
+[[ -n "$candidate_access_token" && -n "$candidate_refresh_token" ]] || { echo "FAIL: post-upgrade login returned no typed tokens" >&2; exit 26; }
+[[ "$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $candidate_access_token" http://127.0.0.1:19094/api/v1/auth/me)" == "200" ]] || { echo "FAIL: post-upgrade access token was rejected" >&2; exit 26; }
+[[ "$(curl -sS -o /dev/null -w '%{http_code}' -H 'content-type: application/json' --data "$(jq -nc --arg token "$candidate_refresh_token" '{refreshToken:$token}')" http://127.0.0.1:19094/api/v1/auth/refresh)" == "200" ]] || { echo "FAIL: post-upgrade refresh token was rejected" >&2; exit 26; }
+unset legacy_login refresh_token candidate_login candidate_access_token candidate_refresh_token
 
 tls_before="$(kubectl get secret aura-power-controller-webhook-tls -n aura-system -o json | jq -r '.data["tls.crt"] + ":" + .data["tls.key"]')"
 [[ -n "$tls_before" ]] || { echo "FAIL: candidate webhook TLS Secret is missing" >&2; exit 27; }
@@ -488,4 +497,4 @@ kubectl delete namespace "$fixture_namespace" --wait=true --timeout=180s >/dev/n
 kubectl delete powertarget -n aura-system -l "power.aura.sh/target-namespace=${fixture_namespace}" --wait=true --timeout=120s >/dev/null 2>&1 || true
 [[ -z "$(kubectl get powertarget -n aura-system -l "power.aura.sh/target-namespace=${fixture_namespace}" -o name)" ]] || { echo "FAIL: fixture PowerTarget cleanup was incomplete" >&2; exit 33; }
 
-echo "kind_release_upgrade_journey=passed from=${LEGACY_REF} old_chart=true old_server=true old_controller=true crds_updated=true status_subresource=true auth_secret_stable=true refresh_token_survived=true pvc_stable=true webhook_tls_stable=true uid_migrated=true power_off=true snapshot=3 restore=3 audit_events=${audit_count} safe_downgrade=true downgrade_idempotent=true deployment_restore=3 statefulset_restore=2 cronjob_restore=false targetrefs_quarantined=true no_global_action=true cleanup=true"
+echo "kind_release_upgrade_journey=passed from=${LEGACY_REF} old_chart=true old_server=true old_controller=true crds_updated=true status_subresource=true auth_secret_stable=true legacy_session_invalidated=true typed_session_valid=true pvc_stable=true webhook_tls_stable=true uid_migrated=true power_off=true snapshot=3 restore=3 audit_events=${audit_count} safe_downgrade=true downgrade_idempotent=true deployment_restore=3 statefulset_restore=2 cronjob_restore=false targetrefs_quarantined=true no_global_action=true cleanup=true"

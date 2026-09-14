@@ -4,7 +4,10 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"golang.org/x/crypto/bcrypt"
 )
@@ -24,6 +27,7 @@ type User struct {
 	Username     string    `json:"username"`
 	PasswordHash string    `json:"-"`
 	Role         Role      `json:"role"`
+	AuthVersion  int64     `json:"-"`
 	CreatedAt    time.Time `json:"createdAt"`
 }
 
@@ -55,6 +59,7 @@ type Store interface {
 	GetUserByID(id string) (*User, error)
 	ListUsers() ([]User, error)
 	UpdateUser(id string, role Role) error
+	UpdatePassword(id, currentPassword, newPassword string) error
 	DeleteUser(id string) error
 	ValidatePassword(user *User, password string) bool
 
@@ -67,6 +72,49 @@ type Store interface {
 	ApprovePendingChange(id, reviewerID string) (*PendingChange, error)
 	RejectPendingChange(id, reviewerID string) (*PendingChange, error)
 	GetPendingChange(id string) (*PendingChange, error)
+}
+
+const (
+	minPasswordRunes = 12
+	maxPasswordBytes = 72 // bcrypt silently ignores bytes after this boundary.
+)
+
+var rejectedPasswords = map[string]struct{}{
+	"password123!":  {},
+	"administrator": {},
+	"changeme123!":  {},
+}
+
+// ValidatePasswordStrength enforces a predictable bcrypt-safe password policy.
+// Composition rules are deliberately avoided: long generated passwords and
+// passphrases are stronger than short strings that merely satisfy character
+// class requirements.
+func ValidatePasswordStrength(password string) error {
+	if !utf8.ValidString(password) {
+		return fmt.Errorf("%w: password must be valid UTF-8", ErrWeakPassword)
+	}
+	if utf8.RuneCountInString(password) < minPasswordRunes {
+		return fmt.Errorf("%w: password must contain at least %d characters", ErrWeakPassword, minPasswordRunes)
+	}
+	if len([]byte(password)) > maxPasswordBytes {
+		return fmt.Errorf("%w: password must not exceed %d bytes", ErrWeakPassword, maxPasswordBytes)
+	}
+	if _, rejected := rejectedPasswords[strings.ToLower(password)]; rejected {
+		return fmt.Errorf("%w: password is too common", ErrWeakPassword)
+	}
+	var first rune
+	allSame := true
+	for i, r := range password {
+		if i == 0 {
+			first = r
+		} else if r != first {
+			allSame = false
+		}
+	}
+	if allSame {
+		return fmt.Errorf("%w: password is too repetitive", ErrWeakPassword)
+	}
+	return nil
 }
 
 // HashPassword hashes a password with bcrypt.
@@ -92,6 +140,19 @@ var ErrUserNotFound = errors.New("user not found")
 
 // ErrUserExists is returned when username already exists.
 var ErrUserExists = errors.New("username already exists")
+
+// ErrInvalidCurrentPassword is returned when a password rotation cannot
+// authenticate the current credential.
+var ErrInvalidCurrentPassword = errors.New("current password is invalid")
+
+// ErrWeakPassword is returned when a password does not satisfy the policy.
+var ErrWeakPassword = errors.New("password does not satisfy the security policy")
+
+// ErrLastAdmin prevents an operation from removing the final administrator.
+var ErrLastAdmin = errors.New("cannot remove or demote the last administrator")
+
+// ErrUserReferenced prevents deletion from orphaning approval history.
+var ErrUserReferenced = errors.New("user is referenced by approval history")
 
 // ErrPendingNotFound is returned when a pending change is not found.
 var ErrPendingNotFound = errors.New("pending change not found")

@@ -49,6 +49,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Upgrade notes
 - Apply the `v2.2.0` CRDs before upgrading the Helm release.
+- Authentication sessions issued by releases without typed, versioned tokens
+  are invalidated by this upgrade. Verify a fresh administrator login after the
+  server becomes Ready.
 - Keep the existing server Secret and PVC; do not regenerate the admin password
   or SQLite state during upgrade.
 - Configure one control namespace per installation. A second controller must

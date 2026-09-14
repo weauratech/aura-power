@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"embed"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -127,16 +128,23 @@ func main() {
 	// Create initial admin if configured (ensure role is always admin on startup)
 	if adminPass != "" {
 		existing, getErr := authStore.GetUserByUsername(adminUser)
-		if getErr != nil {
+		if errors.Is(getErr, auth.ErrUserNotFound) {
 			// User doesn't exist — create it
-			if _, createErr := authStore.CreateUser(adminUser, adminPass, auth.RoleAdmin); createErr == nil {
-				slog.Info("created initial admin user", "username", adminUser)
+			if _, createErr := authStore.CreateUser(adminUser, adminPass, auth.RoleAdmin); createErr != nil {
+				slog.Error("failed to create initial admin", "error", createErr, "username", adminUser)
+				os.Exit(1)
 			}
+			slog.Info("created initial admin user", "username", adminUser)
+		} else if getErr != nil {
+			slog.Error("failed to read initial admin", "error", getErr, "username", adminUser)
+			os.Exit(1)
 		} else if existing.Role != auth.RoleAdmin {
 			// User exists but role changed — force back to admin
-			if err := authStore.UpdateUser(existing.ID, auth.RoleAdmin); err == nil {
-				slog.Info("restored admin role for initial admin user", "username", adminUser)
+			if err := authStore.UpdateUser(existing.ID, auth.RoleAdmin); err != nil {
+				slog.Error("failed to restore initial admin role", "error", err, "username", adminUser)
+				os.Exit(1)
 			}
+			slog.Info("restored admin role for initial admin user", "username", adminUser)
 		}
 	}
 

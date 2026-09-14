@@ -2,6 +2,7 @@ package auth
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/url"
 	"path/filepath"
@@ -45,7 +46,7 @@ func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
 
 func sqliteDSN(dbPath string) (string, error) {
 	if dbPath == ":memory:" {
-		return fmt.Sprintf("file::memory:?_busy_timeout=%d&_journal_mode=MEMORY", sqliteBusyTimeoutMillis), nil
+		return fmt.Sprintf("file::memory:?_busy_timeout=%d&_foreign_keys=on&_journal_mode=MEMORY", sqliteBusyTimeoutMillis), nil
 	}
 	absPath, err := filepath.Abs(dbPath)
 	if err != nil {
@@ -54,6 +55,7 @@ func sqliteDSN(dbPath string) (string, error) {
 	u := url.URL{Scheme: "file", Path: absPath}
 	query := u.Query()
 	query.Set("_busy_timeout", fmt.Sprint(sqliteBusyTimeoutMillis))
+	query.Set("_foreign_keys", "on")
 	query.Set("_journal_mode", "WAL")
 	u.RawQuery = query.Encode()
 	return u.String(), nil
@@ -66,6 +68,7 @@ func (s *SQLiteStore) migrate() error {
 		username TEXT UNIQUE NOT NULL,
 		password_hash TEXT NOT NULL,
 		role TEXT NOT NULL DEFAULT 'member',
+		auth_version INTEGER NOT NULL DEFAULT 1,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
 
@@ -94,12 +97,37 @@ func (s *SQLiteStore) migrate() error {
 	}
 	// Existing installations may predate the approval precondition columns.
 	for _, statement := range []string{
+		"ALTER TABLE users ADD COLUMN auth_version INTEGER NOT NULL DEFAULT 1",
 		"ALTER TABLE pending_changes ADD COLUMN resource_namespace TEXT NOT NULL DEFAULT 'aura-system'",
 		"ALTER TABLE pending_changes ADD COLUMN resource_version TEXT NOT NULL DEFAULT ''",
 	} {
 		if _, err := s.db.Exec(statement); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
 			return err
 		}
+	}
+	return s.verifyForeignKeys()
+}
+
+func (s *SQLiteStore) verifyForeignKeys() error {
+	rows, err := s.db.Query("PRAGMA foreign_key_check")
+	if err != nil {
+		return fmt.Errorf("failed to verify foreign keys: %w", err)
+	}
+	defer rows.Close()
+	if rows.Next() {
+		return errors.New("database contains orphaned foreign key references")
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	var orphanedReviewers int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM pending_changes p
+		LEFT JOIN users u ON u.id = p.reviewed_by
+		WHERE p.reviewed_by IS NOT NULL AND p.reviewed_by != '' AND u.id IS NULL`).Scan(&orphanedReviewers); err != nil {
+		return fmt.Errorf("failed to verify approval reviewers: %w", err)
+	}
+	if orphanedReviewers != 0 {
+		return errors.New("database contains orphaned approval reviewer references")
 	}
 	return nil
 }
@@ -118,6 +146,9 @@ func (s *SQLiteStore) Ping() error {
 // --- Users ---
 
 func (s *SQLiteStore) CreateUser(username, password string, role Role) (*User, error) {
+	if err := ValidatePasswordStrength(password); err != nil {
+		return nil, err
+	}
 	hash, err := HashPassword(password)
 	if err != nil {
 		return nil, err
@@ -127,22 +158,22 @@ func (s *SQLiteStore) CreateUser(username, password string, role Role) (*User, e
 	now := time.Now()
 
 	_, err = s.db.Exec(
-		"INSERT INTO users (id, username, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?)",
-		id, username, hash, string(role), now,
+		"INSERT INTO users (id, username, password_hash, role, auth_version, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+		id, username, hash, string(role), 1, now,
 	)
 	if err != nil {
 		return nil, ErrUserExists
 	}
 
-	return &User{ID: id, Username: username, PasswordHash: hash, Role: role, CreatedAt: now}, nil
+	return &User{ID: id, Username: username, PasswordHash: hash, Role: role, AuthVersion: 1, CreatedAt: now}, nil
 }
 
 func (s *SQLiteStore) GetUserByUsername(username string) (*User, error) {
 	var user User
 	err := s.db.QueryRow(
-		"SELECT id, username, password_hash, role, created_at FROM users WHERE username = ?",
+		"SELECT id, username, password_hash, role, auth_version, created_at FROM users WHERE username = ?",
 		username,
-	).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.CreatedAt)
+	).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.AuthVersion, &user.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, ErrUserNotFound
 	}
@@ -155,9 +186,9 @@ func (s *SQLiteStore) GetUserByUsername(username string) (*User, error) {
 func (s *SQLiteStore) GetUserByID(id string) (*User, error) {
 	var user User
 	err := s.db.QueryRow(
-		"SELECT id, username, password_hash, role, created_at FROM users WHERE id = ?",
+		"SELECT id, username, password_hash, role, auth_version, created_at FROM users WHERE id = ?",
 		id,
-	).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.CreatedAt)
+	).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.AuthVersion, &user.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, ErrUserNotFound
 	}
@@ -168,7 +199,7 @@ func (s *SQLiteStore) GetUserByID(id string) (*User, error) {
 }
 
 func (s *SQLiteStore) ListUsers() ([]User, error) {
-	rows, err := s.db.Query("SELECT id, username, role, created_at FROM users ORDER BY created_at")
+	rows, err := s.db.Query("SELECT id, username, role, auth_version, created_at FROM users ORDER BY created_at")
 	if err != nil {
 		return nil, err
 	}
@@ -177,7 +208,7 @@ func (s *SQLiteStore) ListUsers() ([]User, error) {
 	var users []User
 	for rows.Next() {
 		var u User
-		if err := rows.Scan(&u.ID, &u.Username, &u.Role, &u.CreatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Username, &u.Role, &u.AuthVersion, &u.CreatedAt); err != nil {
 			return nil, err
 		}
 		users = append(users, u)
@@ -186,24 +217,80 @@ func (s *SQLiteStore) ListUsers() ([]User, error) {
 }
 
 func (s *SQLiteStore) UpdateUser(id string, role Role) error {
-	result, err := s.db.Exec("UPDATE users SET role = ? WHERE id = ?", string(role), id)
+	result, err := s.db.Exec(`UPDATE users SET auth_version = auth_version + CASE WHEN role != ? THEN 1 ELSE 0 END,
+		role = ? WHERE id = ? AND
+		(role != ? OR ? = ? OR (SELECT COUNT(*) FROM users WHERE role = ?) > 1)`,
+		string(role), string(role), id, string(RoleAdmin), string(role), string(RoleAdmin), string(RoleAdmin))
 	if err != nil {
 		return err
 	}
 	rows, _ := result.RowsAffected()
 	if rows == 0 {
+		user, getErr := s.GetUserByID(id)
+		if getErr != nil {
+			return getErr
+		}
+		if user.Role == RoleAdmin && role != RoleAdmin {
+			return ErrLastAdmin
+		}
 		return ErrUserNotFound
 	}
 	return nil
 }
 
-func (s *SQLiteStore) DeleteUser(id string) error {
-	result, err := s.db.Exec("DELETE FROM users WHERE id = ?", id)
+func (s *SQLiteStore) UpdatePassword(id, currentPassword, newPassword string) error {
+	if err := ValidatePasswordStrength(newPassword); err != nil {
+		return err
+	}
+	user, err := s.GetUserByID(id)
+	if err != nil {
+		return err
+	}
+	if !CheckPassword(currentPassword, user.PasswordHash) {
+		return ErrInvalidCurrentPassword
+	}
+	newHash, err := HashPassword(newPassword)
+	if err != nil {
+		return err
+	}
+	result, err := s.db.Exec("UPDATE users SET password_hash = ?, auth_version = auth_version + 1 WHERE id = ? AND password_hash = ?", newHash, id, user.PasswordHash)
 	if err != nil {
 		return err
 	}
 	rows, _ := result.RowsAffected()
 	if rows == 0 {
+		return ErrInvalidCurrentPassword
+	}
+	return nil
+}
+
+func (s *SQLiteStore) DeleteUser(id string) error {
+	result, err := s.db.Exec(`DELETE FROM users WHERE id = ? AND
+		(role != ? OR (SELECT COUNT(*) FROM users WHERE role = ?) > 1) AND
+		NOT EXISTS (SELECT 1 FROM pending_changes WHERE user_id = ? OR reviewed_by = ?)`,
+		id, string(RoleAdmin), string(RoleAdmin), id, id)
+	if err != nil {
+		if strings.Contains(err.Error(), "FOREIGN KEY constraint failed") {
+			return ErrUserReferenced
+		}
+		return err
+	}
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		user, getErr := s.GetUserByID(id)
+		if getErr != nil {
+			return getErr
+		}
+		var references int
+		if countErr := s.db.QueryRow("SELECT COUNT(*) FROM pending_changes WHERE user_id = ? OR reviewed_by = ?", id, id).Scan(&references); countErr != nil {
+			return countErr
+		}
+		if references != 0 {
+			return ErrUserReferenced
+		}
+		if user.Role == RoleAdmin {
+			return ErrLastAdmin
+		}
 		return ErrUserNotFound
 	}
 	return nil

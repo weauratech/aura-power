@@ -13,9 +13,7 @@ Get Aura Power running and your first schedule active in under 10 minutes.
 ```bash
 helm install aura-power oci://ghcr.io/weauratech/charts/aura-power \
   --version 2.2.1 \
-  --namespace aura-system --create-namespace \
-  --set server.auth.jwtSecret=$(openssl rand -base64 32) \
-  --set server.auth.initialAdmin.password=changeme
+  --namespace aura-system --create-namespace
 ```
 
 For production, pin both component images by their published `sha256` digest.
@@ -44,7 +42,8 @@ kubectl port-forward -n aura-system svc/aura-power-server 8080:8080
 
 Open [http://localhost:8080](http://localhost:8080) and login:
 - **Username**: `admin`
-- **Password**: the password you set above (`changeme`)
+- **Password**: read the generated `admin-password` using the command in
+  `helm get notes aura-power -n aura-system`, then rotate it after first login.
 
 You'll see the **Discovery Mode** banner showing how many workloads were found.
 
