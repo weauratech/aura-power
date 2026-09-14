@@ -27,7 +27,7 @@ owned_control_resource() {
 }
 
 cleanup() {
-  local original_status=$? cleanup_status=0 actual_uid actual_run audit_name target_name
+  local original_status=$? cleanup_status=0 actual_uid actual_run audit_name target_name delivery_cleanup_deadline
   trap - EXIT INT TERM HUP
 
   if kubectl get powernotificationchannel "$channel_name" -n aura-system >/dev/null 2>&1; then
@@ -92,12 +92,27 @@ cleanup() {
     fi
   fi
 
+  delivery_cleanup_deadline=$((SECONDS + 60))
+  while (( SECONDS < delivery_cleanup_deadline )); do
+    if ! kubectl get namespace "$fixture_namespace" >/dev/null 2>&1 &&
+      ! kubectl get powernotificationchannel "$channel_name" -n aura-system >/dev/null 2>&1 &&
+      ! kubectl get powerpolicy "$policy_name" -n aura-system >/dev/null 2>&1 &&
+      ! kubectl get secret "$secret_name" -n aura-system >/dev/null 2>&1 &&
+      ! kubectl get powertarget -n aura-system -l "power.aura.sh/target-namespace=${fixture_namespace}" -o name 2>/dev/null | grep -q . &&
+      ! kubectl get powerauditevent -n aura-system -l "power.aura.sh/target-namespace=${fixture_namespace}" -o name 2>/dev/null | grep -q . &&
+      ! kubectl get powernotificationdelivery -n aura-system -o json 2>/dev/null | jq -e --arg channel "$channel_name" 'any(.items[]; .spec.channel.name == $channel)' >/dev/null; then
+      break
+    fi
+    sleep 2
+  done
+
   if kubectl get namespace "$fixture_namespace" >/dev/null 2>&1 ||
     kubectl get powernotificationchannel "$channel_name" -n aura-system >/dev/null 2>&1 ||
     kubectl get powerpolicy "$policy_name" -n aura-system >/dev/null 2>&1 ||
     kubectl get secret "$secret_name" -n aura-system >/dev/null 2>&1 ||
     kubectl get powertarget -n aura-system -l "power.aura.sh/target-namespace=${fixture_namespace}" -o name 2>/dev/null | grep -q . ||
-    kubectl get powerauditevent -n aura-system -l "power.aura.sh/target-namespace=${fixture_namespace}" -o name 2>/dev/null | grep -q .; then
+    kubectl get powerauditevent -n aura-system -l "power.aura.sh/target-namespace=${fixture_namespace}" -o name 2>/dev/null | grep -q . ||
+    kubectl get powernotificationdelivery -n aura-system -o json 2>/dev/null | jq -e --arg channel "$channel_name" 'any(.items[]; .spec.channel.name == $channel)' >/dev/null; then
     cleanup_status=1
   fi
   [[ "$cleanup_status" -eq 0 ]] || { echo "FATAL: notification fixture cleanup was not verified" >&2; exit 90; }
@@ -148,7 +163,7 @@ data:
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
     lock = threading.Lock()
-    state = {"count": 0, "requests": []}
+    state = {"count": 0, "requests": [], "idempotencyKeys": []}
     token = os.environ["WEBHOOK_TOKEN"]
 
     class Handler(BaseHTTPRequestHandler):
@@ -178,11 +193,18 @@ data:
             with lock:
                 state["count"] += 1
                 state["requests"].append(payload)
+                key = self.headers.get("Idempotency-Key", "")
+                state["idempotencyKeys"].append(key)
+                first_delivery_request = state["count"] == 1
                 with open("/tmp/receiver-state.json.tmp", "w", encoding="utf-8") as output:
                     json.dump(state, output)
                 os.replace("/tmp/receiver-state.json.tmp", "/tmp/receiver-state.json")
-                status = 503 if state["count"] <= 3 else 204
-            self.send_response(status)
+            # Persist the first accepted request, then deliberately outlive the
+            # controller's HTTP request while the test restarts its leader.
+            if first_delivery_request:
+                import time
+                time.sleep(60)
+            self.send_response(204)
             self.end_headers()
 
     ThreadingHTTPServer(("0.0.0.0", 8080), Handler).serve_forever()
@@ -349,6 +371,8 @@ spec:
   namespaceFilter: ["${fixture_namespace}"]
   throttle: 1s
   enabled: true
+  deliveryPolicy: at-least-once
+  maxDeliveryAttempts: 4
 ---
 apiVersion: power.aura.sh/v1alpha1
 kind: PowerPolicy
@@ -379,47 +403,59 @@ while (( SECONDS < deadline )); do
 done
 [[ "$replicas" == "0" ]] || { echo "FAIL: notification fixture did not power down" >&2; exit 10; }
 
-deadline=$((SECONDS + timeout_seconds)); channel_json=""
+deadline=$((SECONDS + timeout_seconds)); delivery_json="" receiver_state=""
 while (( SECONDS < deadline )); do
-  channel_json="$(kubectl get powernotificationchannel "$channel_name" -n aura-system -o json)"
-  if jq -e '.status.totalErrors == 1 and (.status.totalSent // 0) == 0 and .status.lastAttempt.phase == "Failed"' <<<"$channel_json" >/dev/null; then
+  delivery_json="$(kubectl get powernotificationdelivery -n aura-system -o json 2>/dev/null | jq --arg channel "$channel_name" '.items = [.items[] | select(.spec.channel.name == $channel)]' || true)"
+  receiver_pod="$(kubectl get pod -n "$fixture_namespace" -l "app=${receiver_name}" -o jsonpath='{.items[0].metadata.name}')"
+  receiver_state="$(kubectl exec -n "$fixture_namespace" "$receiver_pod" -- sh -c 'cat /tmp/receiver-state.json 2>/dev/null || true')"
+  if jq -e '.items | length == 1 and .[0].status.phase == "InProgress" and .[0].status.attemptCount == 1' <<<"$delivery_json" >/dev/null 2>&1 &&
+     jq -e '.count == 1 and (.idempotencyKeys[0] | length) > 0' <<<"$receiver_state" >/dev/null 2>&1; then
     break
   fi
   sleep 3
 done
-jq -e '
-  .status.totalErrors == 1 and
-  (.status.totalSent // 0) == 0 and
-  (.status.recentAttempts | length) == 1 and
-  .status.lastAttempt.phase == "Failed" and
-  .status.lastAttempt.providerStatusCode == 503 and
-  .status.lastAttempt.attemptCount == 3 and
-  .status.lastAttempt.response == "notification delivery failed; endpoint and transport details <redacted>" and
-  .status.lastError == "notification delivery failed; endpoint and transport details <redacted>" and
-  (.status.lastAttempt.eventIDs | length) == 1 and
-  (.status.lastAttempt.auditEventRefs | length) == 1
-' <<<"$channel_json" >/dev/null || { echo "FAIL: first HTTP failure was not persisted as one sanitized attempt" >&2; exit 11; }
-failed_attempt_id="$(jq -er '.status.lastAttempt.id' <<<"$channel_json")"
-failed_event_id="$(jq -er '.status.lastAttempt.eventIDs[0]' <<<"$channel_json")"
-failed_audit_ref="$(jq -er '.status.lastAttempt.auditEventRefs[0]' <<<"$channel_json")"
-failed_audit_name="${failed_audit_ref#aura-system/}"
-[[ "$failed_audit_ref" == "aura-system/${failed_audit_name}" ]] || { echo "FAIL: failure has a malformed audit reference" >&2; exit 12; }
-kubectl get powerauditevent "$failed_audit_name" -n aura-system -o json | jq -e --arg ns "$fixture_namespace" --arg uid "$workload_uid" '
+first_delivery_name="$(jq -er '.items[0].metadata.name' <<<"$delivery_json")"
+first_idempotency_key="$(jq -er '.items[0].spec.idempotencyKey' <<<"$delivery_json")"
+first_audit_name="$(jq -er '.items[0].spec.auditEvent.name' <<<"$delivery_json")"
+[[ "$(jq -er '.idempotencyKeys[0]' <<<"$receiver_state")" == "$first_idempotency_key" ]] || { echo "FAIL: receiver did not observe the durable idempotency key" >&2; exit 11; }
+if kubectl patch powernotificationdelivery "$first_delivery_name" -n aura-system --type=merge -p '{"spec":{"event":{"reason":"tampered"}}}' >/dev/null 2>&1; then
+  echo "FAIL: API server allowed mutation of an immutable delivery contract" >&2
+  exit 11
+fi
+
+# Kill the active request after the receiver has durably accepted it. The new
+# leader must recover the InProgress record and replay with the same key.
+controller_logs_before_restart="$(kubectl logs -n aura-system -l app.kubernetes.io/component=controller --all-containers --prefix 2>/dev/null || true)"
+kubectl rollout restart deployment -n aura-system -l app.kubernetes.io/component=controller >/dev/null
+kubectl rollout status deployment -n aura-system -l app.kubernetes.io/component=controller --timeout=120s
+deadline=$((SECONDS + timeout_seconds)); channel_json=""
+while (( SECONDS < deadline )); do
+  delivery_json="$(kubectl get powernotificationdelivery "$first_delivery_name" -n aura-system -o json)"
+  channel_json="$(kubectl get powernotificationchannel "$channel_name" -n aura-system -o json)"
+  receiver_state="$(kubectl exec -n "$fixture_namespace" "$receiver_pod" -- cat /tmp/receiver-state.json)"
+  if jq -e '.status.phase == "Succeeded" and .status.attemptCount == 2 and .status.channelStatusRecorded == true' <<<"$delivery_json" >/dev/null &&
+     jq -e '.status.totalSent == 1 and (.status.totalErrors // 0) == 0' <<<"$channel_json" >/dev/null &&
+     jq -e --arg key "$first_idempotency_key" '.count == 2 and .idempotencyKeys == [$key, $key]' <<<"$receiver_state" >/dev/null; then
+    break
+  fi
+  sleep 3
+done
+jq -e '.status.phase == "Succeeded" and .status.attemptCount == 2 and .status.response == "accepted" and .status.channelStatusRecorded == true' <<<"$delivery_json" >/dev/null || { echo "FAIL: restart did not resume the durable delivery" >&2; exit 12; }
+jq -e --arg key "$first_idempotency_key" '.count == 2 and .idempotencyKeys == [$key, $key]' <<<"$receiver_state" >/dev/null || { echo "FAIL: replay did not preserve the provider idempotency key" >&2; exit 13; }
+kubectl get powerauditevent "$first_audit_name" -n aura-system -o json | jq -e --arg ns "$fixture_namespace" --arg uid "$workload_uid" '
   .spec.action == "workload.powered_down" and .spec.result == "success" and
   .spec.target.namespace == $ns and .spec.target.kind == "Deployment" and .spec.target.uid == $uid
-' >/dev/null || { echo "FAIL: failed delivery does not correlate to the powered-down audit event" >&2; exit 12; }
+' >/dev/null || { echo "FAIL: delivery does not correlate to the powered-down audit event" >&2; exit 13; }
 
-receiver_pod="$(kubectl get pod -n "$fixture_namespace" -l "app=${receiver_name}" -o jsonpath='{.items[0].metadata.name}')"
-receiver_state="$(kubectl exec -n "$fixture_namespace" "$receiver_pod" -- cat /tmp/receiver-state.json)"
-jq -e --arg attempt "$failed_attempt_id" --arg event "$failed_event_id" --arg audit "$failed_audit_ref" '
-  .count == 3 and (.requests | length) == 3 and
-  all(.requests[];
-    .correlation.attemptID == $attempt and
-    .correlation.eventIDs == [$event] and
-    .correlation.auditEventRefs == [$audit])
-' <<<"$receiver_state" >/dev/null || { echo "FAIL: receiver payload and durable failed attempt are not correlated" >&2; exit 13; }
-
-kubectl patch powerpolicy "$policy_name" -n aura-system --type=merge -p '{"spec":{"schedule":{"desiredState":"on","windows":[]}}}' >/dev/null
+policy_restored=false
+for _ in $(seq 1 20); do
+  if kubectl patch powerpolicy "$policy_name" -n aura-system --type=merge -p '{"spec":{"schedule":{"desiredState":"on","windows":[]}}}' >/dev/null 2>&1; then
+    policy_restored=true
+    break
+  fi
+  sleep 2
+done
+[[ "$policy_restored" == true ]] || { echo "FAIL: validation webhook did not recover after controller restart" >&2; exit 14; }
 deadline=$((SECONDS + timeout_seconds)); replicas=""
 while (( SECONDS < deadline )); do
   replicas="$(kubectl get deployment "$workload_name" -n "$fixture_namespace" -o jsonpath='{.spec.replicas}')"
@@ -431,22 +467,21 @@ done
 deadline=$((SECONDS + timeout_seconds)); channel_json=""
 while (( SECONDS < deadline )); do
   channel_json="$(kubectl get powernotificationchannel "$channel_name" -n aura-system -o json)"
-  if jq -e '.status.totalErrors == 1 and .status.totalSent == 1 and .status.lastAttempt.phase == "Succeeded"' <<<"$channel_json" >/dev/null; then
+  if jq -e '(.status.totalErrors // 0) == 0 and .status.totalSent == 2 and .status.lastAttempt.phase == "Succeeded"' <<<"$channel_json" >/dev/null; then
     break
   fi
   sleep 3
 done
-jq -e --arg failed "$failed_attempt_id" '
-  .status.totalErrors == 1 and .status.totalSent == 1 and
+jq -e '
+  (.status.totalErrors // 0) == 0 and .status.totalSent == 2 and
   (.status.recentAttempts | length) == 2 and
-  .status.recentAttempts[0].id == $failed and .status.recentAttempts[0].phase == "Failed" and
-  .status.lastAttempt.id != $failed and .status.lastAttempt.phase == "Succeeded" and
+  .status.recentAttempts[0].phase == "Succeeded" and
+  .status.lastAttempt.phase == "Succeeded" and
   .status.lastAttempt.providerStatusCode == 204 and .status.lastAttempt.attemptCount == 1 and
   .status.lastAttempt.response == "accepted" and (.status.lastError // "") == "" and
   (.status.lastAttempt.eventIDs | length) == 1 and (.status.lastAttempt.auditEventRefs | length) == 1
 ' <<<"$channel_json" >/dev/null || { echo "FAIL: successful transition did not preserve failure history and durable counters" >&2; exit 15; }
 succeeded_attempt_id="$(jq -er '.status.lastAttempt.id' <<<"$channel_json")"
-succeeded_event_id="$(jq -er '.status.lastAttempt.eventIDs[0]' <<<"$channel_json")"
 succeeded_audit_ref="$(jq -er '.status.lastAttempt.auditEventRefs[0]' <<<"$channel_json")"
 succeeded_audit_name="${succeeded_audit_ref#aura-system/}"
 kubectl get powerauditevent "$succeeded_audit_name" -n aura-system -o json | jq -e --arg ns "$fixture_namespace" --arg uid "$workload_uid" '
@@ -455,11 +490,11 @@ kubectl get powerauditevent "$succeeded_audit_name" -n aura-system -o json | jq 
 ' >/dev/null || { echo "FAIL: successful delivery does not correlate to the restored audit event" >&2; exit 16; }
 
 receiver_state="$(kubectl exec -n "$fixture_namespace" "$receiver_pod" -- cat /tmp/receiver-state.json)"
-jq -e --arg attempt "$succeeded_attempt_id" --arg event "$succeeded_event_id" --arg audit "$succeeded_audit_ref" '
-  .count == 4 and (.requests | length) == 4 and
-  .requests[3].correlation.attemptID == $attempt and
-  .requests[3].correlation.eventIDs == [$event] and
-  .requests[3].correlation.auditEventRefs == [$audit]
+jq -e --arg attempt "$succeeded_attempt_id" --arg audit "$succeeded_audit_ref" '
+  .count == 3 and (.requests | length) == 3 and
+  .requests[2].correlation.attemptID == $attempt and
+  .requests[2].correlation.auditEventRefs == [$audit] and
+  (.idempotencyKeys[2] | length) > 0
 ' <<<"$receiver_state" >/dev/null || { echo "FAIL: receiver payload and durable successful attempt are not correlated" >&2; exit 17; }
 
 # Neither the durable public status nor controller logs may disclose the Secret
@@ -468,10 +503,11 @@ if grep -Fq "$webhook_token" <<<"$channel_json"; then
   echo "FAIL: webhook credential leaked into notification status" >&2
   exit 18
 fi
-controller_logs="$(kubectl logs -n aura-system -l app.kubernetes.io/component=controller --all-containers --prefix 2>/dev/null || true)"
+controller_logs="${controller_logs_before_restart}
+$(kubectl logs -n aura-system -l app.kubernetes.io/component=controller --all-containers --prefix 2>/dev/null || true)"
 if grep -Fq "$webhook_token" <<<"$controller_logs"; then
   echo "FAIL: webhook credential leaked into controller logs" >&2
   exit 18
 fi
 
-echo "kind_notification_journey=passed secret_url=true http_failure=true sanitized=true recovery=true audit_correlation=true durable_counters=true cleanup_guarded=true"
+echo "kind_notification_journey=passed secret_url=true durable_outbox=true leader_restart=true stable_idempotency_key=true at_least_once=true audit_correlation=true durable_counters=true cleanup_guarded=true"

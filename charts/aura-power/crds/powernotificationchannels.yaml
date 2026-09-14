@@ -67,6 +67,16 @@ spec:
                 enabled:
                   type: boolean
                   default: true
+                deliveryPolicy:
+                  type: string
+                  default: at-most-once
+                  enum: ["at-most-once", "at-least-once"]
+                maxDeliveryAttempts:
+                  type: integer
+                  format: int32
+                  default: 5
+                  minimum: 1
+                  maximum: 20
             status:
               type: object
               properties:
@@ -95,7 +105,7 @@ spec:
                         type: string
                     phase:
                       type: string
-                      enum: [InProgress, Succeeded, Failed]
+                      enum: [InProgress, Succeeded, Failed, Ambiguous]
                     startedAt:
                       type: string
                       format: date-time
@@ -129,7 +139,7 @@ spec:
                           type: string
                       phase:
                         type: string
-                        enum: [InProgress, Succeeded, Failed]
+                        enum: [InProgress, Succeeded, Failed, Ambiguous]
                       startedAt:
                         type: string
                         format: date-time

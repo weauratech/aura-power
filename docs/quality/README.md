@@ -36,7 +36,8 @@ outcome truthfully.
   counters, receiver-to-audit correlation, and UID/label-guarded cleanup. Central
   off/on events retry the audit-to-queue handoff by deterministic audit ID and
   suppress replay once an attempt is persisted. Ambiguous provider outcomes use
-  at-most-once semantics; this is not an exactly-once delivery claim.
+  durable delivery semantics. The native receiver verifies stable idempotency
+  keys across restart/replay; this is not an exactly-once delivery claim.
 - `make quality-envtest` starts a real local Kubernetes API server and proves that
   both registered validators accept valid resources and reject invalid resources
   through admission.

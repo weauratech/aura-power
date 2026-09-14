@@ -1,0 +1,101 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: powernotificationdeliveries.power.aura.sh
+spec:
+  group: power.aura.sh
+  names:
+    kind: PowerNotificationDelivery
+    listKind: PowerNotificationDeliveryList
+    plural: powernotificationdeliveries
+    singular: powernotificationdelivery
+    shortNames: [pnd]
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Policy
+          type: string
+          jsonPath: .spec.deliveryPolicy
+        - name: Attempts
+          type: integer
+          jsonPath: .status.attemptCount
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [auditEvent, channel, event, idempotencyKey, deliveryPolicy, maxAttempts]
+              x-kubernetes-validations:
+                - rule: self == oldSelf
+                  message: delivery specifications are immutable
+              properties:
+                auditEvent:
+                  type: object
+                  required: [name, uid]
+                  properties:
+                    name: {type: string, minLength: 1}
+                    uid: {type: string, minLength: 1}
+                channel:
+                  type: object
+                  required: [name, uid]
+                  properties:
+                    name: {type: string, minLength: 1}
+                    uid: {type: string, minLength: 1}
+                event:
+                  type: object
+                  required: [action, target, result, reason, timestamp]
+                  properties:
+                    action: {type: string}
+                    result: {type: string}
+                    reason: {type: string}
+                    ruleName: {type: string}
+                    timestamp: {type: string, format: date-time}
+                    target:
+                      type: object
+                      required: [namespace, name, kind]
+                      properties:
+                        cluster: {type: string}
+                        apiVersion: {type: string}
+                        namespace: {type: string}
+                        name: {type: string}
+                        kind: {type: string}
+                        uid: {type: string}
+                idempotencyKey: {type: string, minLength: 1}
+                deliveryPolicy:
+                  type: string
+                  enum: [at-most-once, at-least-once]
+                maxAttempts:
+                  type: integer
+                  format: int32
+                  minimum: 1
+                  maximum: 20
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum: [Pending, InProgress, Succeeded, Failed, Ambiguous]
+                attemptCount: {type: integer, format: int32}
+                retryCount: {type: integer, format: int32}
+                preflightFailureCount: {type: integer, format: int32}
+                activeAttemptID: {type: string}
+                lastAttemptID: {type: string}
+                startedAt: {type: string, format: date-time}
+                completedAt: {type: string, format: date-time}
+                nextAttemptAt: {type: string, format: date-time}
+                providerStatusCode: {type: integer, format: int32}
+                response: {type: string}
+                observedGeneration: {type: integer, format: int64}
+                channelStatusRecorded: {type: boolean}

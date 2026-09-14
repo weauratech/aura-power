@@ -187,5 +187,5 @@ helm uninstall aura-power -n aura-system
 kubectl delete crd powertargets.power.aura.sh powerpolicies.power.aura.sh \
   poweroverrides.power.aura.sh powerschedules.power.aura.sh \
   powerauditevents.power.aura.sh powernamespacegroups.power.aura.sh \
-  powernotificationchannels.power.aura.sh
+  powernotificationchannels.power.aura.sh powernotificationdeliveries.power.aura.sh
 ```

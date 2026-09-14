@@ -66,13 +66,14 @@ func main() {
 		LeaderElectionID:       leaderElectionID,
 		HealthProbeBindAddress: ":8081",
 		Cache: cache.Options{ByObject: map[client.Object]cache.ByObject{
-			&v1alpha1.PowerTarget{}:              controlCache,
-			&v1alpha1.PowerPolicy{}:              controlCache,
-			&v1alpha1.PowerOverride{}:            controlCache,
-			&v1alpha1.PowerSchedule{}:            controlCache,
-			&v1alpha1.PowerNamespaceGroup{}:      controlCache,
-			&v1alpha1.PowerNotificationChannel{}: controlCache,
-			&v1alpha1.PowerAuditEvent{}:          controlCache,
+			&v1alpha1.PowerTarget{}:               controlCache,
+			&v1alpha1.PowerPolicy{}:               controlCache,
+			&v1alpha1.PowerOverride{}:             controlCache,
+			&v1alpha1.PowerSchedule{}:             controlCache,
+			&v1alpha1.PowerNamespaceGroup{}:       controlCache,
+			&v1alpha1.PowerNotificationChannel{}:  controlCache,
+			&v1alpha1.PowerNotificationDelivery{}: controlCache,
+			&v1alpha1.PowerAuditEvent{}:           controlCache,
 		}},
 	}
 	webhookEnabled := envBool("WEBHOOK_ENABLED", false)
@@ -109,6 +110,10 @@ func main() {
 	// Create notification dispatcher
 	notifDispatcher := notifications.NewDispatcherForNamespace(k8sClient, mgr.GetAPIReader(), controlNamespace)
 	auditRecorder.SetNotifier(notifDispatcher)
+	if err := notifDispatcher.SetupWithManager(mgr); err != nil {
+		log.Error(err, "unable to create notification delivery controller")
+		os.Exit(1)
+	}
 
 	// Register reconcilers
 	targetReconciler := &reconciler.TargetReconciler{
@@ -159,6 +164,10 @@ func main() {
 		log.Error(err, "unable to register notification suppression capability")
 		os.Exit(1)
 	}
+	if err := mgr.AddReadyzCheck("notification-outbox-v1", notificationOutboxSchemaCheck(mgr.GetAPIReader())); err != nil {
+		log.Error(err, "unable to register durable notification outbox capability")
+		os.Exit(1)
+	}
 	if webhookEnabled {
 		if err := mgr.AddReadyzCheck("webhook", mgr.GetWebhookServer().StartedChecker()); err != nil {
 			log.Error(err, "unable to set up webhook ready check")
@@ -173,12 +182,6 @@ func main() {
 		os.Exit(1)
 	}
 	go runAuditCleanup(ctx, auditRecorder)
-
-	// Start notification dispatcher (background)
-	if err := mgr.Add(notifDispatcher); err != nil {
-		log.Error(err, "unable to add notification dispatcher")
-		os.Exit(1)
-	}
 
 	// Start discovery loop (as manager runnable — starts after cache is synced)
 	// Discovery uses direct API reads so cluster-wide workload lists do not
@@ -230,9 +233,18 @@ func runAuditCleanup(ctx context.Context, recorder *kubernetes.AuditRecorder) {
 			cleanupInterval = parsed
 		}
 	}
+	deliveryRetentionDays := 30
+	if v := os.Getenv("NOTIFICATION_DELIVERY_RETENTION_DAYS"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
+			deliveryRetentionDays = parsed
+		}
+	}
+	if deliveryRetentionDays < retentionDays {
+		deliveryRetentionDays = retentionDays
+	}
 
 	log := ctrl.Log.WithName("audit-cleanup")
-	log.Info("audit retention configured", "retentionDays", retentionDays, "cleanupInterval", cleanupInterval)
+	log.Info("audit retention configured", "retentionDays", retentionDays, "deliveryRetentionDays", deliveryRetentionDays, "cleanupInterval", cleanupInterval)
 
 	ticker := time.NewTicker(cleanupInterval)
 	defer ticker.Stop()
@@ -242,7 +254,7 @@ func runAuditCleanup(ctx context.Context, recorder *kubernetes.AuditRecorder) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			deleted, err := recorder.CleanupExpired(ctx, retentionDays)
+			deleted, err := recorder.CleanupExpiredWithDeliveryRetention(ctx, retentionDays, deliveryRetentionDays)
 			if err != nil {
 				log.Error(err, "cleanup failed")
 			} else if deleted > 0 {

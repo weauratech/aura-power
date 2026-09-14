@@ -28,10 +28,27 @@ import { useNotify } from '../components/Notifications';
 import { EmptyState } from '../components/EmptyState';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 
-interface NotificationChannel {
+export interface NotificationChannel {
   metadata: { name: string; namespace: string };
-  spec: { type: string; url: string; events: string[]; namespaceFilter: string[]; throttle: string; enabled: boolean };
-  status?: { totalSent?: number; totalErrors?: number; lastError?: string };
+  spec: { type: string; url?: string; urlFrom?: { name: string; key: string }; events: string[]; namespaceFilter: string[]; throttle: string; enabled: boolean; deliveryPolicy?: string; maxDeliveryAttempts?: number };
+  status?: { totalSent?: number; totalErrors?: number; lastError?: string; lastAttempt?: { phase?: string } };
+}
+
+export function buildNotificationChannelSpec(input: {
+  type: string; url: string; events: string[]; nsFilter: string; throttle: string;
+  enabled: boolean; deliveryPolicy: string; maxDeliveryAttempts: number;
+}, editingChannel: NotificationChannel | null) {
+  return {
+    type: input.type,
+    url: input.url || undefined,
+    events: input.events.length > 0 ? input.events : undefined,
+    namespaceFilter: input.nsFilter ? input.nsFilter.split(',').map(s => s.trim()).filter(Boolean) : undefined,
+    throttle: input.throttle || undefined,
+    enabled: input.enabled,
+    deliveryPolicy: input.deliveryPolicy,
+    maxDeliveryAttempts: input.deliveryPolicy === 'at-least-once' ? input.maxDeliveryAttempts : 1,
+    ...(editingChannel?.spec.urlFrom && !input.url ? { urlFrom: editingChannel.spec.urlFrom } : {}),
+  };
 }
 
 function useNotificationChannels() {
@@ -90,6 +107,8 @@ export function Notifications() {
   const [nsFilter, setNsFilter] = useState('');
   const [throttle, setThrottle] = useState('5m');
   const [enabled, setEnabled] = useState(true);
+  const [deliveryPolicy, setDeliveryPolicy] = useState('at-most-once');
+  const [maxDeliveryAttempts, setMaxDeliveryAttempts] = useState(5);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState('');
 
@@ -97,14 +116,7 @@ export function Notifications() {
     setCreating(true);
     setCreateError('');
     try {
-      const spec = {
-        type,
-        url,
-        events: events.length > 0 ? events : undefined,
-        namespaceFilter: nsFilter ? nsFilter.split(',').map(s => s.trim()).filter(Boolean) : undefined,
-        throttle: throttle || undefined,
-        enabled,
-      };
+      const spec = buildNotificationChannelSpec({ type, url, events, nsFilter, throttle, enabled, deliveryPolicy, maxDeliveryAttempts }, editingChannel);
 
       if (editingChannel) {
         // Update existing
@@ -143,18 +155,21 @@ export function Notifications() {
 
   const resetForm = () => {
     setName(''); setType('google-chat'); setUrl(''); setEvents([]);
-    setNsFilter(''); setThrottle('5m'); setEnabled(true); setCreateError('');
+    setNsFilter(''); setThrottle('5m'); setEnabled(true);
+    setDeliveryPolicy('at-most-once'); setMaxDeliveryAttempts(5); setCreateError('');
   };
 
   const openEdit = (ch: NotificationChannel) => {
     setEditingChannel(ch);
     setName(ch.metadata.name);
     setType(ch.spec.type);
-    setUrl(ch.spec.url);
+    setUrl(ch.spec.url || '');
     setEvents(ch.spec.events || []);
     setNsFilter(ch.spec.namespaceFilter?.join(', ') || '');
     setThrottle(ch.spec.throttle || '5m');
     setEnabled(ch.spec.enabled);
+    setDeliveryPolicy(ch.spec.deliveryPolicy || 'at-most-once');
+    setMaxDeliveryAttempts(ch.spec.maxDeliveryAttempts || 5);
     setDrawerOpen(true);
   };
 
@@ -204,6 +219,7 @@ export function Notifications() {
                 <TableCell>Type</TableCell>
                 <TableCell>Events</TableCell>
                 <TableCell>Status</TableCell>
+                <TableCell>Delivery</TableCell>
                 <TableCell align="right">Sent</TableCell>
                 <TableCell align="right">Errors</TableCell>
                 <TableCell />
@@ -244,6 +260,12 @@ export function Notifications() {
                       color={ch.spec.enabled ? 'success' : 'default'}
                       sx={{ height: 22, fontSize: 11 }}
                     />
+                  </TableCell>
+                  <TableCell>
+                    <Typography variant="caption">
+                      {ch.spec.deliveryPolicy === 'at-least-once' ? 'At least once' : 'At most once'}
+                      {ch.status?.lastAttempt?.phase ? ` · ${ch.status.lastAttempt.phase}` : ''}
+                    </Typography>
                   </TableCell>
                   <TableCell align="right">
                     <Typography variant="code">{ch.status?.totalSent ?? 0}</Typography>
@@ -297,7 +319,7 @@ export function Notifications() {
                 <MenuItem value="slack">Slack</MenuItem>
                 <MenuItem value="generic">Generic Webhook</MenuItem>
               </TextField>
-              <TextField label="Webhook URL" value={url} onChange={e => setUrl(e.target.value)} size="small" fullWidth required placeholder="https://..." />
+              <TextField label="Webhook URL" value={url} onChange={e => setUrl(e.target.value)} size="small" fullWidth required={!editingChannel?.spec.urlFrom} placeholder={editingChannel?.spec.urlFrom ? `Stored in Secret ${editingChannel.spec.urlFrom.name}/${editingChannel.spec.urlFrom.key}` : 'https://...'} helperText={editingChannel?.spec.urlFrom && !url ? 'The existing Secret reference will be preserved.' : undefined} />
               <Box>
                 <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>Events (empty = all)</Typography>
                 <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
@@ -316,13 +338,20 @@ export function Notifications() {
               </Box>
               <TextField label="Namespace Filter" value={nsFilter} onChange={e => setNsFilter(e.target.value)} size="small" fullWidth helperText="Comma-separated (empty = all namespaces)" />
               <TextField label="Throttle" value={throttle} onChange={e => setThrottle(e.target.value)} size="small" fullWidth helperText="Min interval between notifications (e.g. 5m, 1h)" />
+              <TextField label="Delivery Policy" value={deliveryPolicy} onChange={e => setDeliveryPolicy(e.target.value)} select size="small" fullWidth helperText="At-most-once avoids duplicate sends after an unknown outcome. At-least-once retries with a stable idempotency key.">
+                <MenuItem value="at-most-once">At most once</MenuItem>
+                <MenuItem value="at-least-once">At least once</MenuItem>
+              </TextField>
+              {deliveryPolicy === 'at-least-once' && (
+                <TextField label="Maximum Delivery Attempts" type="number" value={maxDeliveryAttempts} onChange={e => setMaxDeliveryAttempts(Math.min(20, Math.max(1, Number(e.target.value))))} size="small" fullWidth inputProps={{ min: 1, max: 20 }} helperText="Provider requests, from 1 to 20. Preflight failures use a separate retry budget." />
+              )}
               <FormControlLabel control={<Switch checked={enabled} onChange={e => setEnabled(e.target.checked)} />} label="Enabled" />
             </Stack>
           </Box>
 
           <Stack direction="row" spacing={2} sx={{ px: 3, py: 2.5, borderTop: 1, borderColor: 'divider' }}>
             <Button onClick={() => setDrawerOpen(false)} sx={{ flex: 1 }}>Cancel</Button>
-            <Button variant="contained" onClick={handleCreate} disabled={creating || !name || !url} sx={{ flex: 1 }}>
+            <Button variant="contained" onClick={handleCreate} disabled={creating || !name || (!url && !editingChannel?.spec.urlFrom)} sx={{ flex: 1 }}>
               {creating ? 'Saving...' : editingChannel ? 'Save Changes' : 'Create Channel'}
             </Button>
           </Stack>

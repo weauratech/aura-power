@@ -68,6 +68,7 @@ kubectl get powerschedules --all-namespaces -o yaml > backup-powerschedules.yaml
 kubectl get powernamespacegroups --all-namespaces -o yaml > backup-powernamespacegroups.yaml
 kubectl get powernotificationchannels --all-namespaces -o yaml > backup-powernotificationchannels.yaml
 kubectl get powerauditevents --all-namespaces -o yaml > backup-powerauditevents.yaml
+kubectl get powernotificationdeliveries --all-namespaces -o yaml > backup-powernotificationdeliveries.yaml
 
 # Quiesce the server and snapshot its PVC with your storage provider or CSI
 # VolumeSnapshot workflow. SQLite uses WAL mode, so copying only the live .db
@@ -81,6 +82,10 @@ kubectl scale -n aura-system statefulset/aura-power-server --replicas=1
 ### 2. Update CRDs
 
 v2.0 includes CRDs in the Helm chart `crds/` directory. Helm installs CRDs on first install but does not upgrade them automatically.
+
+Install the `PowerNotificationDelivery` CRD before starting a controller version
+that uses the durable outbox. Helm does not add or update `crds/` content during
+an upgrade.
 
 Apply the new CRDs manually:
 
