@@ -463,8 +463,8 @@ func TestQualityDiscoveryPersistsSelectionLabels(t *testing.T) {
 	workload := ports.DiscoveredWorkload{
 		Ref:             domain.WorkloadRef{Namespace: "fixtures", Name: "api", Kind: domain.WorkloadKindDeployment, UID: "uid-api"},
 		Replicas:        2,
-		Labels:          map[string]string{"tier": "backend", "eligible": ""},
-		NamespaceLabels: map[string]string{"environment": "test"},
+		Labels:          map[string]string{"tier": "backend", "eligible": "", ports.NotificationPolicyLabel: ports.NotificationPolicyDisabled},
+		NamespaceLabels: map[string]string{"environment": "test", ports.NotificationPolicyLabel: ports.NotificationPolicyDisabled},
 	}
 	if _, err := loop.ensurePowerTarget(context.Background(), workload); err != nil {
 		t.Fatal(err)
@@ -475,6 +475,9 @@ func TestQualityDiscoveryPersistsSelectionLabels(t *testing.T) {
 	}
 	if target.Status.WorkloadLabels["tier"] != "backend" || target.Status.NamespaceLabels["environment"] != "test" {
 		t.Fatalf("selection metadata lost: workload=%v namespace=%v", target.Status.WorkloadLabels, target.Status.NamespaceLabels)
+	}
+	if target.Status.WorkloadLabels[ports.NotificationPolicyLabel] != ports.NotificationPolicyDisabled || target.Status.NamespaceLabels[ports.NotificationPolicyLabel] != ports.NotificationPolicyDisabled {
+		t.Fatalf("notification policy was not captured durably: workload=%v namespace=%v", target.Status.WorkloadLabels, target.Status.NamespaceLabels)
 	}
 	workload.Labels = map[string]string{"tier": "worker"}
 	workload.NamespaceLabels = map[string]string{"environment": "staging"}

@@ -125,7 +125,7 @@ func (r *TargetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 						logger.Error(statusErr, "failed to persist snapshot failure status")
 					}
 					r.Metrics.RecordAction(ports.ActionPowerDown, req.String(), false)
-					r.recordAudit(ctx, domainTarget.Ref, ports.AuditExecutionError, "error", err.Error(), "")
+					r.recordAudit(ctx, &target, domainTarget.Ref, ports.AuditExecutionError, "error", err.Error(), "")
 					return ctrl.Result{RequeueAfter: errorRequeueAfter}, nil
 				}
 			}
@@ -151,7 +151,7 @@ func (r *TargetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 					target.Status.Snapshot = nil
 				}
 				r.Metrics.RecordAction(ports.ActionPowerDown, req.String(), false)
-				r.recordAudit(ctx, domainTarget.Ref, ports.AuditExecutionError, "error", err.Error(), "")
+				r.recordAudit(ctx, &target, domainTarget.Ref, ports.AuditExecutionError, "error", err.Error(), "")
 				if statusErr := r.Status().Update(ctx, &target); statusErr != nil {
 					logger.Error(statusErr, "failed to persist power-down failure")
 				}
@@ -165,7 +165,7 @@ func (r *TargetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			if err := r.Status().Update(ctx, &target); err != nil {
 				logger.Error(err, "failed to update target status after power-down")
 				r.Metrics.RecordAction(ports.ActionPowerDown, req.String(), false)
-				r.recordAudit(ctx, domainTarget.Ref, ports.AuditExecutionError, "error", "power-down was accepted but its completion checkpoint was not persisted: "+err.Error(), ruleNameFromDecision(decision))
+				r.recordAudit(ctx, &target, domainTarget.Ref, ports.AuditExecutionError, "error", "power-down was accepted but its completion checkpoint was not persisted: "+err.Error(), ruleNameFromDecision(decision))
 				return ctrl.Result{RequeueAfter: errorRequeueAfter}, nil
 			}
 			if _, err := r.reconcilePendingAudit(ctx, &target, domainTarget.Ref, req.String()); err != nil {
@@ -185,7 +185,7 @@ func (r *TargetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 				target.Status.ConsecutiveFailures++
 				r.failAction(&target, err)
 				r.Metrics.RecordAction(ports.ActionRestore, req.String(), false)
-				r.recordAudit(ctx, domainTarget.Ref, ports.AuditExecutionError, "error", err.Error(), "")
+				r.recordAudit(ctx, &target, domainTarget.Ref, ports.AuditExecutionError, "error", err.Error(), "")
 				r.Status().Update(ctx, &target)
 				return ctrl.Result{RequeueAfter: errorRequeueAfter}, nil
 			}
@@ -197,7 +197,7 @@ func (r *TargetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			if err := r.Status().Update(ctx, &target); err != nil {
 				logger.Error(err, "failed to update target status after restore")
 				r.Metrics.RecordAction(ports.ActionRestore, req.String(), false)
-				r.recordAudit(ctx, domainTarget.Ref, ports.AuditExecutionError, "error", "restore was accepted but its completion checkpoint was not persisted: "+err.Error(), ruleNameFromDecision(decision))
+				r.recordAudit(ctx, &target, domainTarget.Ref, ports.AuditExecutionError, "error", "restore was accepted but its completion checkpoint was not persisted: "+err.Error(), ruleNameFromDecision(decision))
 				return ctrl.Result{RequeueAfter: errorRequeueAfter}, nil
 			}
 			if _, err := r.reconcilePendingAudit(ctx, &target, domainTarget.Ref, req.String()); err != nil {
@@ -384,6 +384,7 @@ func (r *TargetReconciler) reconcilePendingAudit(ctx context.Context, target *v1
 	event := ports.AuditEvent{
 		ID: action.AuditEventID, Timestamp: timestamp, Action: ports.AuditAction(action.AuditAction),
 		Actor: "system/controller", Target: ref, Result: "success", Reason: reason, RuleName: action.AuditRuleName,
+		SuppressNotification: targetSuppressesNotifications(target),
 	}
 	if err := r.Audit.Record(ctx, event); err != nil {
 		return true, err
@@ -621,16 +622,25 @@ func (r *TargetReconciler) loadOverrides(ctx context.Context) ([]domain.Override
 	return overrides, nil
 }
 
-func (r *TargetReconciler) recordAudit(ctx context.Context, ref domain.WorkloadRef, action ports.AuditAction, result, reason, ruleName string) {
+func (r *TargetReconciler) recordAudit(ctx context.Context, target *v1alpha1.PowerTarget, ref domain.WorkloadRef, action ports.AuditAction, result, reason, ruleName string) {
 	_ = r.Audit.Record(ctx, ports.AuditEvent{
-		Timestamp: time.Now(),
-		Action:    action,
-		Actor:     "system/controller",
-		Target:    ref,
-		Result:    result,
-		Reason:    reason,
-		RuleName:  ruleName,
+		Timestamp:            time.Now(),
+		Action:               action,
+		Actor:                "system/controller",
+		Target:               ref,
+		Result:               result,
+		Reason:               reason,
+		RuleName:             ruleName,
+		SuppressNotification: targetSuppressesNotifications(target),
 	})
+}
+
+func targetSuppressesNotifications(target *v1alpha1.PowerTarget) bool {
+	if target == nil {
+		return false
+	}
+	return target.Status.WorkloadLabels[ports.NotificationPolicyLabel] == ports.NotificationPolicyDisabled ||
+		target.Status.NamespaceLabels[ports.NotificationPolicyLabel] == ports.NotificationPolicyDisabled
 }
 
 func ruleNameFromDecision(d domain.Decision) string {

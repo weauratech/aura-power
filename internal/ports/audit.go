@@ -24,6 +24,13 @@ const (
 	AuditWorkloadOptedIn     AuditAction = "workload.opted_in"
 )
 
+const (
+	// NotificationPolicyLabel lets a workload or its namespace opt out of
+	// external delivery while retaining the complete durable audit trail.
+	NotificationPolicyLabel    = "power.aura.sh/notification-policy"
+	NotificationPolicyDisabled = "disabled"
+)
+
 // AuditEvent represents a structured audit record.
 type AuditEvent struct {
 	// ID requests an idempotent, deterministic record name. Empty IDs retain
@@ -36,6 +43,9 @@ type AuditEvent struct {
 	Result    string // "success", "blocked", "error"
 	Reason    string
 	RuleName  string // Name of the policy/override responsible
+	// SuppressNotification keeps the durable audit record but prevents this
+	// event from being placed on any external notification channel.
+	SuppressNotification bool
 }
 
 // AuditListOptions provides filtering for audit events.

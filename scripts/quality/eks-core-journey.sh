@@ -100,6 +100,7 @@ metadata:
   labels:
     aura-power-quality/run: "${RUN_ID}"
     app.kubernetes.io/part-of: aura-power-quality
+    power.aura.sh/notification-policy: disabled
   annotations:
     aura.sh/power-eligible: "true"
 YAML
@@ -113,6 +114,7 @@ metadata:
   namespace: ${FIXTURE_NAMESPACE}
   labels:
     aura-power-quality/run: "${RUN_ID}"
+    power.aura.sh/notification-policy: disabled
   annotations:
     aura.sh/power-eligible: "true"
 spec:
@@ -134,6 +136,24 @@ spec:
 YAML
 WORKLOAD_UID="$(kube get deployment "$WORKLOAD_NAME" -n "$FIXTURE_NAMESPACE" -o jsonpath='{.metadata.uid}')"
 kube rollout status deployment "$WORKLOAD_NAME" -n "$FIXTURE_NAMESPACE" --timeout=120s
+
+# Suppression is a discovered, durable property of the exact target. Prove it
+# before creating a policy that can emit a transition audit or external event.
+deadline=$((SECONDS + TIMEOUT_SECONDS))
+target=""
+while (( SECONDS < deadline )); do
+  target="$(kube get powertarget -n "$CONTROL_NAMESPACE" -l "power.aura.sh/target-namespace=${FIXTURE_NAMESPACE},power.aura.sh/target-name=${WORKLOAD_NAME},power.aura.sh/target-kind=Deployment" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+  [[ -n "$target" ]] && break
+  sleep 5
+done
+[[ -n "$target" ]] || { echo "FAIL: discovered PowerTarget not found before mutation" >&2; exit 10; }
+target_json="$(kube get powertarget "$target" -n "$CONTROL_NAMESPACE" -o json)"
+workload_notification_policy="$(jq -r '.status.workloadLabels["power.aura.sh/notification-policy"] // ""' <<<"$target_json")"
+namespace_notification_policy="$(jq -r '.status.namespaceLabels["power.aura.sh/notification-policy"] // ""' <<<"$target_json")"
+[[ "$workload_notification_policy" == "disabled" && "$namespace_notification_policy" == "disabled" ]] || {
+  echo "FAIL: notification suppression was not discovered on the exact fixture target" >&2
+  exit 13
+}
 
 export RUN_ID FIXTURE_NAMESPACE NAMESPACE_UID WORKLOAD_NAME WORKLOAD_UID POLICY_NAME
 export PARENT_PID="$$" HARD_DEADLINE_EPOCH="$(( $(date +%s) + TIMEOUT_SECONDS * 2 + 60 ))"
@@ -171,8 +191,6 @@ while (( SECONDS < deadline )); do
 done
 [[ "$replicas" == "0" ]] || { echo "FAIL: power-down did not converge" >&2; exit 10; }
 
-target="$(kube get powertarget -n "$CONTROL_NAMESPACE" -l "power.aura.sh/target-namespace=${FIXTURE_NAMESPACE},power.aura.sh/target-name=${WORKLOAD_NAME},power.aura.sh/target-kind=Deployment" -o jsonpath='{.items[0].metadata.name}')"
-[[ -n "$target" ]] || { echo "FAIL: discovered PowerTarget not found" >&2; exit 10; }
 snapshot="$(kube get powertarget "$target" -n "$CONTROL_NAMESPACE" -o jsonpath='{.status.snapshot.replicaCount}')"
 [[ "$snapshot" == "2" ]] || { echo "FAIL: snapshot expected replicas=2 observed=${snapshot:-missing}" >&2; exit 12; }
 echo "power_down=passed original_replicas=2 snapshot_replicas=${snapshot:-missing}"
@@ -186,3 +204,36 @@ while (( SECONDS < deadline )); do
 done
 [[ "$replicas" == "2" ]] || { echo "FAIL: restore expected replicas=2 observed=${replicas:-unknown}" >&2; exit 11; }
 echo "restore=passed replicas=2"
+
+# Both transitions remain auditable, but the campaign label must keep their
+# references out of every external channel attempt.
+deadline=$((SECONDS + TIMEOUT_SECONDS))
+audit_json=""
+while (( SECONDS < deadline )); do
+  audit_json="$(kube get powerauditevent -n "$CONTROL_NAMESPACE" -l "power.aura.sh/target-namespace=${FIXTURE_NAMESPACE},power.aura.sh/target-name=${WORKLOAD_NAME},power.aura.sh/target-kind=Deployment,power.aura.sh/target-uid=${WORKLOAD_UID}" -o json)"
+  if jq -e '[.items[] | select(.spec.action == "workload.powered_down" or .spec.action == "workload.restored")] | length >= 2' <<<"$audit_json" >/dev/null; then
+    break
+  fi
+  sleep 5
+done
+[[ -n "$audit_json" ]] || { echo "FAIL: fixture audit evidence was not readable" >&2; exit 14; }
+jq -e '[.items[] | select(.spec.action == "workload.powered_down" or .spec.action == "workload.restored")] | length >= 2' <<<"$audit_json" >/dev/null || {
+  echo "FAIL: both fixture transition audits were not persisted" >&2
+  exit 14
+}
+jq -e '[.items[] | select(.spec.action == "workload.powered_down" or .spec.action == "workload.restored" or .spec.action == "execution.error") | .metadata.labels["power.aura.sh/notification-suppressed"] == "true"] | all' <<<"$audit_json" >/dev/null || {
+  echo "FAIL: a notifiable fixture audit lacks suppression evidence" >&2
+  exit 15
+}
+
+audit_refs="$(jq -c --arg namespace "$CONTROL_NAMESPACE" '[.items[] | $namespace + "/" + .metadata.name]' <<<"$audit_json")"
+sleep 8
+channels_json="$(kube get powernotificationchannel -n "$CONTROL_NAMESPACE" -o json)"
+if jq -e --argjson refs "$audit_refs" '
+  ([.items[] | ((.status.recentAttempts // []) + ([.status.lastAttempt] | map(select(. != null))))[] | (.auditEventRefs // [])[]]) as $attempted |
+  any($refs[]; . as $ref | $attempted | index($ref) != null)
+' <<<"$channels_json" >/dev/null; then
+  echo "FAIL: an external channel attempted delivery for a suppressed fixture audit" >&2
+  exit 16
+fi
+echo "notification_suppression=passed audit_events=$(jq '.items | length' <<<"$audit_json") external_attempts=0"

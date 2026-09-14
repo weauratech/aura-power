@@ -9,6 +9,7 @@ import (
 
 	v1alpha1 "github.com/weauratech/aura-power/api/v1alpha1"
 	"github.com/weauratech/aura-power/internal/core/domain"
+	"github.com/weauratech/aura-power/internal/ports"
 )
 
 func TestQualityCRDConversionPreservesCorePolicyContract(t *testing.T) {
@@ -28,6 +29,32 @@ func TestQualityCRDConversionPreservesCorePolicyContract(t *testing.T) {
 	w := got.Schedule.Windows[0]
 	if w.Start.Hour != 22 || w.Start.Minute != 30 || w.End.Hour != 6 || w.End.Minute != 15 || w.Timezone != "UTC" {
 		t.Fatalf("time conversion lost meaning: %+v", w)
+	}
+}
+
+func TestQualityNotificationSuppressionRequiresExplicitDisabledLabel(t *testing.T) {
+	tests := []struct {
+		name       string
+		workload   map[string]string
+		namespace  map[string]string
+		suppressed bool
+	}{
+		{name: "unset"},
+		{name: "unrelated campaign label", namespace: map[string]string{"aura-power-quality/run": "run-1"}},
+		{name: "workload explicitly disabled", workload: map[string]string{ports.NotificationPolicyLabel: ports.NotificationPolicyDisabled}, suppressed: true},
+		{name: "namespace explicitly disabled", namespace: map[string]string{ports.NotificationPolicyLabel: ports.NotificationPolicyDisabled}, suppressed: true},
+		{name: "other value remains enabled", namespace: map[string]string{ports.NotificationPolicyLabel: "enabled"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			target := &v1alpha1.PowerTarget{Status: v1alpha1.PowerTargetStatus{WorkloadLabels: tt.workload, NamespaceLabels: tt.namespace}}
+			if got := targetSuppressesNotifications(target); got != tt.suppressed {
+				t.Fatalf("targetSuppressesNotifications()=%v want %v", got, tt.suppressed)
+			}
+		})
+	}
+	if targetSuppressesNotifications(nil) {
+		t.Fatal("nil target suppressed notifications")
 	}
 }
 

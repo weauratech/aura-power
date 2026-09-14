@@ -89,4 +89,9 @@ The EKS runner compares the kubeconfig endpoint with `aws eks describe-cluster`,
 uses a fixed context name, refuses preexisting names, and verifies UID plus
 campaign labels before cleanup. A detached watchdog starts before the policy is
 created and restores/removes the fixture if the parent ends or the hard deadline
-is reached. Cleanup failure changes the run result to failure.
+is reached. Cleanup failure changes the run result to failure. The fixture
+namespace and workload set `power.aura.sh/notification-policy=disabled`.
+Discovery must copy that label into the exact `PowerTarget` before the runner
+creates its policy. Transition audits remain durable and carry
+`power.aura.sh/notification-suppressed=true`; the runner also proves their audit
+references never appear in an external channel attempt.

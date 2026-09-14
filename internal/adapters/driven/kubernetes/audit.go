@@ -23,7 +23,11 @@ type AuditRecorder struct {
 	reader    client.Reader
 	recorder  record.EventRecorder
 	namespace string
-	notifier  *notifications.Dispatcher
+	notifier  notificationEnqueuer
+}
+
+type notificationEnqueuer interface {
+	Enqueue(notifications.Event) error
 }
 
 func NewAuditRecorder(c client.Client, recorder record.EventRecorder, namespace string) *AuditRecorder {
@@ -37,7 +41,7 @@ func NewAuditRecorderWithReader(c client.Client, reader client.Reader, recorder 
 }
 
 // SetNotifier attaches a notification dispatcher to the audit recorder.
-func (a *AuditRecorder) SetNotifier(n *notifications.Dispatcher) {
+func (a *AuditRecorder) SetNotifier(n notificationEnqueuer) {
 	a.notifier = n
 }
 
@@ -76,6 +80,9 @@ func (a *AuditRecorder) Record(ctx context.Context, event ports.AuditEvent) erro
 		auditEvent.Name = event.ID
 		auditEvent.GenerateName = ""
 	}
+	if event.SuppressNotification {
+		auditEvent.Labels["power.aura.sh/notification-suppressed"] = "true"
+	}
 
 	if err := a.client.Create(ctx, auditEvent); err != nil {
 		if event.ID != "" && apierrors.IsAlreadyExists(err) {
@@ -92,8 +99,13 @@ func (a *AuditRecorder) Record(ctx context.Context, event ports.AuditEvent) erro
 		}
 	}
 
-	// Dispatch notification only for real state transitions (not routine reconciliation)
-	if a.notifier != nil && isNotifiableAction(string(event.Action)) {
+	// A persisted suppression decision is monotonic for an idempotent audit ID.
+	// If status persistence is retried after the source label changes, the same
+	// audit must never become externally deliverable.
+	notificationSuppressed := event.SuppressNotification || auditEvent.Labels["power.aura.sh/notification-suppressed"] == "true"
+
+	// Dispatch notification only for real state transitions (not routine reconciliation).
+	if a.notifier != nil && !notificationSuppressed && isNotifiableAction(string(event.Action)) {
 		if err := a.notifier.Enqueue(notifications.Event{
 			AuditEventRef: fmt.Sprintf("%s/%s", auditEvent.Namespace, auditEvent.Name),
 			Action:        string(event.Action),

@@ -378,6 +378,67 @@ func TestQualityAuditRecorderIsIdempotentForDeterministicID(t *testing.T) {
 	}
 }
 
+type recordingNotificationEnqueuer struct {
+	events []notifications.Event
+}
+
+func (r *recordingNotificationEnqueuer) Enqueue(event notifications.Event) error {
+	r.events = append(r.events, event)
+	return nil
+}
+
+func TestQualityAuditRecorderSuppressesExternalDeliveryButKeepsAudit(t *testing.T) {
+	scheme := qualityScheme(t)
+	if err := v1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).Build()
+	enqueuer := &recordingNotificationEnqueuer{}
+	recorder := NewAuditRecorder(c, nil, "aura-system")
+	recorder.SetNotifier(enqueuer)
+
+	event := ports.AuditEvent{
+		ID: "suppressed-campaign-action", Timestamp: time.Unix(1700000000, 0).UTC(),
+		Action: ports.AuditWorkloadPoweredDown, Actor: "system/controller",
+		Target: domain.WorkloadRef{APIVersion: "apps/v1", Namespace: "campaign", Name: "fixture", Kind: domain.WorkloadKindDeployment, UID: "uid-fixture"},
+		Result: "success", Reason: "campaign fixture", RuleName: "quality",
+		SuppressNotification: true,
+	}
+	if err := recorder.Record(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+	if len(enqueuer.events) != 0 {
+		t.Fatalf("suppressed audit enqueued %d external notification(s)", len(enqueuer.events))
+	}
+	var persisted v1alpha1.PowerAuditEvent
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: "aura-system", Name: event.ID}, &persisted); err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Labels["power.aura.sh/notification-suppressed"] != "true" {
+		t.Fatalf("suppressed audit lacks durable evidence label: %+v", persisted.Labels)
+	}
+	if persisted.Spec.Action != string(event.Action) || persisted.Spec.Target.UID != event.Target.UID {
+		t.Fatalf("suppression changed audit semantics: %+v", persisted.Spec)
+	}
+
+	// A retry after discovery changes must honor the already persisted decision.
+	event.SuppressNotification = false
+	if err := recorder.Record(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+	if len(enqueuer.events) != 0 {
+		t.Fatalf("suppressed audit retry enqueued %d external notification(s)", len(enqueuer.events))
+	}
+
+	event.ID = "ordinary-action"
+	if err := recorder.Record(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+	if len(enqueuer.events) != 1 || enqueuer.events[0].Target.UID != event.Target.UID {
+		t.Fatalf("ordinary audit was not enqueued exactly once: %+v", enqueuer.events)
+	}
+}
+
 func TestQualityCronJobRestorePreservesExactSuspendState(t *testing.T) {
 	ctx := context.Background()
 	for _, original := range []bool{false, true} {
