@@ -61,7 +61,10 @@ test('@mutation authenticated member changes password and must sign in again', a
   const create = await page.request.post('/api/v1/users', { data: { username, password: currentPassword, role: 'member' } });
   expect(create.status()).toBe(201);
   const created = await create.json();
-  const memberContext = await browser.newContext({ baseURL: testInfo.project.use.baseURL as string });
+  const memberContext = await browser.newContext({
+    baseURL: testInfo.project.use.baseURL as string,
+    storageState: { cookies: [], origins: [] },
+  });
   const memberPage = await memberContext.newPage();
   try {
     await memberPage.goto('/');
