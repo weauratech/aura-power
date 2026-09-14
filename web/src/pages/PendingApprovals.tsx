@@ -3,7 +3,6 @@ import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import Chip from '@mui/material/Chip';
-import Skeleton from '@mui/material/Skeleton';
 import Stack from '@mui/material/Stack';
 import Table from '@mui/material/Table';
 import TableBody from '@mui/material/TableBody';
@@ -14,6 +13,8 @@ import TableRow from '@mui/material/TableRow';
 import Typography from '@mui/material/Typography';
 import { useQueryClient } from '@tanstack/react-query';
 import { apiPost, usePendingApprovals } from '../hooks/useApi';
+import { LoadingState } from '../components/LoadingState';
+import { PageState } from '../components/PageState';
 
 export function PendingApprovals() {
   const { data, isLoading, error } = usePendingApprovals();
@@ -34,18 +35,18 @@ export function PendingApprovals() {
     }
   };
 
-  if (error) return <Alert severity="error">{(error as Error).message}</Alert>;
+  if (error) return <PageState title="Pending Approvals"><Alert severity="error">{(error as Error).message}</Alert></PageState>;
 
   return (
     <Box>
-      <Typography variant="h2" sx={{ mb: 1 }}>Pending Approvals</Typography>
+      <Typography component="h1" tabIndex={-1} variant="h2" sx={{ mb: 1 }}>Pending Approvals</Typography>
       <Typography color="text.secondary" sx={{ mb: 4 }}>
         Review the exact operation and payload before applying it to the cluster.
       </Typography>
       {actionError && <Alert severity="error" sx={{ mb: 2 }}>{actionError}</Alert>}
-      {isLoading ? <Skeleton variant="rounded" height={240} /> : data?.items?.length ? (
+      {isLoading ? <LoadingState label="Loading pending approvals" height={240} /> : data?.items?.length ? (
         <TableContainer>
-          <Table>
+          <Table aria-label="Pending approvals">
             <TableHead>
               <TableRow>
                 <TableCell>Request</TableCell>

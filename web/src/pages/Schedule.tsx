@@ -10,7 +10,6 @@ import TableHead from '@mui/material/TableHead';
 import TableRow from '@mui/material/TableRow';
 import Chip from '@mui/material/Chip';
 import Stack from '@mui/material/Stack';
-import Skeleton from '@mui/material/Skeleton';
 import Alert from '@mui/material/Alert';
 import IconButton from '@mui/material/IconButton';
 import Tooltip from '@mui/material/Tooltip';
@@ -24,6 +23,8 @@ import { ScheduleDrawer } from '../components/ScheduleDrawer';
 import { useNotify } from '../components/Notifications';
 import { EmptyState } from '../components/EmptyState';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { LoadingState } from '../components/LoadingState';
+import { PageState } from '../components/PageState';
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -79,7 +80,7 @@ export function Schedule() {
     setDeleteTarget(null);
   };
 
-  if (policiesError) return <Alert severity="error">{(policiesError as Error).message}</Alert>;
+  if (policiesError) return <PageState title="Schedules"><Alert severity="error">{(policiesError as Error).message}</Alert></PageState>;
 
   // Merge policies + active overrides into one list
   const activeOverrides = overridesData?.items?.filter(o => o.status?.phase !== 'Expired') ?? [];
@@ -88,7 +89,7 @@ export function Schedule() {
     <Box>
       <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 4 }}>
         <Box>
-          <Typography variant="h4">Schedules</Typography>
+          <Typography component="h1" tabIndex={-1} variant="h4">Schedules</Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
             Power policies and temporary overrides.
           </Typography>
@@ -99,10 +100,10 @@ export function Schedule() {
       </Stack>
 
       {policiesLoading ? (
-        <Skeleton variant="rounded" height={300} />
+        <LoadingState label="Loading schedules" height={300} />
       ) : (
         <TableContainer>
-          <Table size="small">
+          <Table size="small" aria-label="Schedules">
             <TableHead>
               <TableRow>
                 <TableCell>Name</TableCell>
@@ -260,7 +261,7 @@ export function Schedule() {
       {/* Namespace Defaults Info */}
       {policiesData?.items?.some(p => p.metadata.name.startsWith('ns-default-')) && (
         <Box sx={{ mt: 5 }}>
-          <Typography variant="h6" sx={{ mb: 2 }}>Namespace Defaults</Typography>
+          <Typography component="h2" variant="h6" sx={{ mb: 2 }}>Namespace Defaults</Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
             These policies are auto-generated from namespace annotations (<code>aura.sh/default-schedule</code>).
             Annotate a namespace to apply a built-in schedule:

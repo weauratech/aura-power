@@ -65,6 +65,7 @@ describe('HTTP contracts through MSW (no mocked hooks)', () => {
     ['invalid credentials', 'Username or password is incorrect. Please try again.'],
     ['INSUFFICIENT PERMISSIONS', 'You do not have permission to perform this action.'],
     ['request timeout', 'The request timed out. Please try again.'],
+    ['induced accessibility outage', 'Induced accessibility outage'],
   ])('maps %s into a useful message', (raw, expected) => {
     expect(friendlyError(raw)).toBe(expected);
   });

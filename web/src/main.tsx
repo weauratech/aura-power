@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ThemeContextProvider } from './ThemeContext';
 import { NotificationProvider } from './components/Notifications';
 import { App } from './App';
+import './design-system/tokens/tokens.css';
 
 const queryClient = new QueryClient({
   defaultOptions: {

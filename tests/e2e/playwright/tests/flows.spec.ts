@@ -6,6 +6,7 @@ test('administrator navigation keeps every primary destination reachable', async
   const destinations = [
     ['Targets', 'Targets'],
     ['Schedules', 'Schedules'],
+    ['Overrides', 'Overrides'],
     ['Savings', 'Savings'],
     ['Blocked', 'Blocked Targets'],
     ['Audit Log', 'Audit Log'],

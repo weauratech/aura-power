@@ -10,7 +10,6 @@ import TableRow from '@mui/material/TableRow';
 import Chip from '@mui/material/Chip';
 import Stack from '@mui/material/Stack';
 import Button from '@mui/material/Button';
-import Skeleton from '@mui/material/Skeleton';
 import Alert from '@mui/material/Alert';
 import Dialog from '@mui/material/Dialog';
 import DialogTitle from '@mui/material/DialogTitle';
@@ -27,6 +26,8 @@ import type { WorkloadState } from '../design-system/react/PowerRing';
 import { useOverrides, apiPost, apiDelete, type OverrideResponse } from '../hooks/useApi';
 import { useQueryClient } from '@tanstack/react-query';
 import type { TargetRef } from '../types';
+import { LoadingState } from '../components/LoadingState';
+import { PageState } from '../components/PageState';
 
 function parseTargetRefs(input: string): TargetRef[] {
   if (!input.trim()) return [];
@@ -115,7 +116,7 @@ export function Overrides() {
     setCreateError('');
   };
 
-  if (error) return <Alert severity="error">{(error as Error).message}</Alert>;
+  if (error) return <PageState title="Overrides"><Alert severity="error">{(error as Error).message}</Alert></PageState>;
 
   const active = data?.items?.filter(o => o.status?.phase !== 'Expired') ?? [];
   const expired = data?.items?.filter(o => o.status?.phase === 'Expired') ?? [];
@@ -124,7 +125,7 @@ export function Overrides() {
     <Box>
       <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 4 }}>
         <Box>
-          <Typography variant="h4">Overrides</Typography>
+          <Typography component="h1" tabIndex={-1} variant="h4">Overrides</Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
             Temporary exceptions to power policies.
           </Typography>
@@ -135,13 +136,13 @@ export function Overrides() {
       </Stack>
 
       {isLoading ? (
-        <Skeleton variant="rounded" height={300} />
+        <LoadingState label="Loading overrides" height={300} />
       ) : (
         <>
           {/* Active overrides */}
-          <Typography variant="h6" sx={{ mb: 2 }}>Active ({active.length})</Typography>
+          <Typography component="h2" variant="h6" sx={{ mb: 2 }}>Active ({active.length})</Typography>
           <TableContainer sx={{ mb: 4 }}>
-            <Table size="small">
+            <Table size="small" aria-label="Active overrides">
               <TableHead>
                 <TableRow>
                   <TableCell>Name</TableCell>
@@ -201,9 +202,9 @@ export function Overrides() {
           {/* Expired overrides */}
           {expired.length > 0 && (
             <>
-              <Typography variant="h6" color="text.secondary" sx={{ mb: 2 }}>Expired ({expired.length})</Typography>
+              <Typography component="h2" variant="h6" color="text.secondary" sx={{ mb: 2 }}>Expired ({expired.length})</Typography>
               <TableContainer>
-                <Table size="small">
+                <Table size="small" aria-label="Expired overrides">
                   <TableHead>
                     <TableRow>
                       <TableCell>Name</TableCell>

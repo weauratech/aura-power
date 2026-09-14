@@ -11,12 +11,13 @@ import Collapse from '@mui/material/Collapse';
 import IconButton from '@mui/material/IconButton';
 import Chip from '@mui/material/Chip';
 import Stack from '@mui/material/Stack';
-import Skeleton from '@mui/material/Skeleton';
 import Alert from '@mui/material/Alert';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
 import { useTargets } from '../hooks/useApi';
 import type { PowerTarget } from '../types';
+import { LoadingState } from '../components/LoadingState';
+import { PageState } from '../components/PageState';
 
 function BlockedRow({ target }: { target: PowerTarget }) {
   const [open, setOpen] = useState(false);
@@ -69,24 +70,24 @@ function BlockedRow({ target }: { target: PowerTarget }) {
 export function Blocked() {
   const { data, isLoading, error } = useTargets();
 
-  if (error) return <Alert severity="error">{(error as Error).message}</Alert>;
+  if (error) return <PageState title="Blocked Targets"><Alert severity="error">{(error as Error).message}</Alert></PageState>;
 
   const blocked = data?.targets?.filter((t) => t.status.blocked) ?? [];
 
   return (
     <Box>
-      <Typography variant="h4" sx={{ mb: 1 }}>Blocked Targets</Typography>
+      <Typography component="h1" tabIndex={-1} variant="h4" sx={{ mb: 1 }}>Blocked Targets</Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 4 }}>
         Workloads where guardrails prevent power actions.
       </Typography>
 
       {isLoading ? (
-        <Skeleton variant="rounded" height={300} />
+        <LoadingState label="Loading blocked targets" height={300} />
       ) : blocked.length === 0 ? (
         <Alert severity="success">No blocked targets. All workloads are operating normally.</Alert>
       ) : (
         <TableContainer>
-          <Table size="small">
+          <Table size="small" aria-label="Blocked targets">
             <TableHead>
               <TableRow>
                 <TableCell />

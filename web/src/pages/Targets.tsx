@@ -10,7 +10,6 @@ import TableCell from '@mui/material/TableCell';
 import TableContainer from '@mui/material/TableContainer';
 import TableHead from '@mui/material/TableHead';
 import TableRow from '@mui/material/TableRow';
-import Skeleton from '@mui/material/Skeleton';
 import Alert from '@mui/material/Alert';
 import MuiLink from '@mui/material/Link';
 import Stack from '@mui/material/Stack';
@@ -27,6 +26,8 @@ import { ScheduleDrawer } from '../components/ScheduleDrawer';
 import { useNotify } from '../components/Notifications';
 import { EmptyState } from '../components/EmptyState';
 import type { PowerTarget, TargetRef } from '../types';
+import { LoadingState } from '../components/LoadingState';
+import { PageState } from '../components/PageState';
 
 function mapState(t: PowerTarget): WorkloadState {
   if (t.status.blocked) return 'failed';
@@ -112,13 +113,13 @@ export function Targets() {
     setDrawerOpen(true);
   };
 
-  if (error) return <Alert severity="error">{(error as Error).message}</Alert>;
+  if (error) return <PageState title="Targets"><Alert severity="error">{(error as Error).message}</Alert></PageState>;
 
   return (
     <Box>
       <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 3 }}>
         <Box>
-          <Typography variant="h4">Targets</Typography>
+          <Typography component="h1" tabIndex={-1} variant="h4">Targets</Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
             {filtered.length} workloads {search || stateFilter !== 'all' ? '(filtered)' : ''}
           </Typography>
@@ -129,22 +130,28 @@ export function Targets() {
       </Stack>
 
       {/* Filters */}
-      <Stack direction="row" spacing={2} alignItems="center" sx={{ mb: 3 }}>
+      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems={{ xs: 'stretch', sm: 'center' }} sx={{ mb: 3 }}>
         <TextField
+          label="Search targets"
           size="small"
           placeholder="Search by name or namespace..."
           value={search}
           onChange={e => setSearch(e.target.value)}
-          sx={{ width: 300 }}
+          sx={{ width: { xs: '100%', sm: 300 } }}
           InputProps={{
             startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment>,
           }}
         />
         <ToggleButtonGroup
+          aria-label="Filter targets by state"
           size="small"
           value={stateFilter}
           exclusive
           onChange={(_, v) => v && setStateFilter(v)}
+          sx={{
+            width: { xs: '100%', sm: 'auto' },
+            '& .MuiToggleButton-root': { flex: { xs: 1, sm: 'initial' }, minWidth: 44, minHeight: 44 },
+          }}
         >
           <ToggleButton value="all">All</ToggleButton>
           <ToggleButton value="running">Running</ToggleButton>
@@ -156,12 +163,12 @@ export function Targets() {
           size="small"
           variant={groupByNs ? 'filled' : 'outlined'}
           onClick={() => setGroupByNs(!groupByNs)}
-          sx={{ cursor: 'pointer' }}
+          sx={{ cursor: 'pointer', minHeight: 44, alignSelf: { xs: 'stretch', sm: 'center' } }}
         />
       </Stack>
 
       {isLoading ? (
-        <Skeleton variant="rounded" height={400} />
+        <LoadingState label="Loading workload targets" height={400} />
       ) : (
         Object.entries(grouped).map(([ns, targets]) => (
           <Box key={ns} sx={{ mb: ns ? 4 : 0 }}>
@@ -183,7 +190,7 @@ export function Targets() {
               </Stack>
             )}
             <TableContainer>
-              <Table size="small">
+              <Table size="small" aria-label="Workload targets">
                 <TableHead>
                   <TableRow>
                     {!ns && <TableCell>Namespace</TableCell>}

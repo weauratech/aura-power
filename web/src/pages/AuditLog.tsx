@@ -5,7 +5,6 @@ import Card from '@mui/material/Card';
 import CardContent from '@mui/material/CardContent';
 import Stack from '@mui/material/Stack';
 import Button from '@mui/material/Button';
-import Skeleton from '@mui/material/Skeleton';
 import Alert from '@mui/material/Alert';
 import Chip from '@mui/material/Chip';
 import TextField from '@mui/material/TextField';
@@ -14,6 +13,8 @@ import Divider from '@mui/material/Divider';
 import SearchIcon from '@mui/icons-material/SearchOutlined';
 import { useAuditEvents } from '../hooks/useApi';
 import { EmptyState } from '../components/EmptyState';
+import { LoadingState } from '../components/LoadingState';
+import { PageState } from '../components/PageState';
 
 function formatTime(ts: string): string {
   const d = new Date(ts);
@@ -53,7 +54,7 @@ export function AuditLog() {
   const { data, isLoading, error } = useAuditEvents();
   const [search, setSearch] = useState('');
 
-  if (error) return <Alert severity="error">{(error as Error).message}</Alert>;
+  if (error) return <PageState title="Audit Log"><Alert severity="error">{(error as Error).message}</Alert></PageState>;
 
   const events = data?.events?.filter(e => {
     if (!search) return true;
@@ -69,7 +70,7 @@ export function AuditLog() {
     <Box>
       <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 4 }}>
         <Box>
-          <Typography variant="h4">Audit Log</Typography>
+          <Typography component="h1" tabIndex={-1} variant="h4">Audit Log</Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
             Power actions and state transitions
           </Typography>
@@ -85,8 +86,9 @@ export function AuditLog() {
       </Stack>
 
       <TextField
+        label="Filter audit events"
         size="small"
-        placeholder="Filter by target name, namespace, or action..."
+        placeholder="Target name, namespace, or action"
         value={search}
         onChange={e => setSearch(e.target.value)}
         sx={{ mb: 3, width: 400 }}
@@ -96,7 +98,7 @@ export function AuditLog() {
       />
 
       {isLoading ? (
-        <Skeleton variant="rounded" height={400} />
+        <LoadingState label="Loading audit events" height={400} />
       ) : events.length === 0 ? (
         <EmptyState
           title="No audit events"

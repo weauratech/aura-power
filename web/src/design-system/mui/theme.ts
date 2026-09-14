@@ -96,10 +96,10 @@ export function createAuraTheme(mode: Mode = 'light'): Theme {
         main: c.brand, dark: c.brandSolidBg, light: c.brandMark,
         contrastText: c.brandSolidFg,
       },
-      success: { main: c.successMark, light: c.successBg, dark: c.successFg, contrastText: '#FFFFFF' },
-      warning: { main: c.warningMark, light: c.warningBg, dark: c.warningFg, contrastText: ramp.ink['950'] },
-      error:   { main: c.dangerMark,  light: c.dangerBg,  dark: c.dangerFg,  contrastText: '#FFFFFF' },
-      info:    { main: c.infoMark,    light: c.infoBg,    dark: c.infoFg,    contrastText: '#FFFFFF' },
+      success: { main: c.successFg, light: c.successBg, dark: c.successFg, contrastText: isLight ? '#FFFFFF' : ramp.ink['950'] },
+      warning: { main: c.warningFg, light: c.warningBg, dark: c.warningFg, contrastText: ramp.ink['950'] },
+      error:   { main: c.dangerFg,  light: c.dangerBg,  dark: c.dangerFg,  contrastText: isLight ? '#FFFFFF' : ramp.ink['950'] },
+      info:    { main: c.infoFg,    light: c.infoBg,    dark: c.infoFg,    contrastText: isLight ? '#FFFFFF' : ramp.ink['950'] },
       text: {
         primary: c.textPrimary,
         secondary: c.textSecondary,
@@ -357,7 +357,7 @@ export function createAuraTheme(mode: Mode = 'light'): Theme {
             padding: `${space['3']}px ${space['4']}px`, fontSize: 13.5,
           },
           head: {
-            ...t('overline'), color: c.textSecondary,
+            ...t('overline'), color: c.textTertiary,
             backgroundColor: c.bgSurfaceSunken,
             borderBottom: `1px solid ${c.borderDefault}`,
             paddingTop: space['2'] + 2, paddingBottom: space['2'] + 2,

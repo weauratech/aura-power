@@ -195,8 +195,8 @@
   --ap-color-bg-scrim: rgb(2 6 23 / 0.44);
   --ap-color-text-primary: #0F172A;
   --ap-color-text-secondary: #64748B;
-  --ap-color-text-tertiary: #8392A8;
-  --ap-color-text-disabled: #94A3B8;
+  --ap-color-text-tertiary: #475569;
+  --ap-color-text-disabled: #475569;
   --ap-color-text-inverse: #FFFFFF;
   --ap-color-text-brand: #047857;
   --ap-color-text-link: #0F172A;
@@ -290,8 +290,8 @@
   --ap-color-bg-scrim: rgb(2 6 23 / 0.68);
   --ap-color-text-primary: #F1F5F9;
   --ap-color-text-secondary: #94A3B8;
-  --ap-color-text-tertiary: #7A8AA0;
-  --ap-color-text-disabled: #475569;
+  --ap-color-text-tertiary: #94A3B8;
+  --ap-color-text-disabled: #94A3B8;
   --ap-color-text-inverse: #020617;
   --ap-color-text-brand: #34D399;
   --ap-color-text-link: #F1F5F9;

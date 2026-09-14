@@ -19,6 +19,7 @@ import { PowerRing } from '../design-system/react';
 import { useQuery } from '@tanstack/react-query';
 import { useTargets } from '../hooks/useApi';
 import { useProviderStatus } from '../hooks/useProviderStatus';
+import { PageState } from '../components/PageState';
 
 interface DashboardData {
   summary: {
@@ -100,17 +101,19 @@ export function Dashboard() {
       .slice(0, 8);
   }, [targetsData]);
 
-  if (error) return <Alert severity="error">{(error as Error).message}</Alert>;
+  if (error) return <PageState title="Cluster Overview"><Alert severity="error">{(error as Error).message}</Alert></PageState>;
 
   if (isLoading || !data) {
     return (
-      <Grid container spacing={3}>
-        {Array.from({ length: 8 }).map((_, i) => (
-          <Grid item xs={12} sm={6} md={3} key={i}>
-            <Skeleton variant="rounded" height={100} />
-          </Grid>
-        ))}
-      </Grid>
+      <PageState title="Cluster Overview">
+        <Grid role="status" aria-label="Loading dashboard" aria-live="polite" container spacing={3}>
+          {Array.from({ length: 8 }).map((_, i) => (
+            <Grid item xs={12} sm={6} md={3} key={i}>
+              <Skeleton aria-hidden="true" variant="rounded" height={100} />
+            </Grid>
+          ))}
+        </Grid>
+      </PageState>
     );
   }
 
@@ -133,7 +136,7 @@ export function Dashboard() {
       <Stack direction="row" alignItems="center" spacing={3} sx={{ mb: 5 }}>
         <PowerRing value={onRatio} state="running" size={52} label={`${Math.round(onRatio * 100)}% powered on`} />
         <Box>
-          <Typography variant="h4">Cluster Overview</Typography>
+          <Typography component="h1" tabIndex={-1} variant="h4">Cluster Overview</Typography>
           <Typography variant="body2" color="text.secondary">
             {summary.totalTargets} targets · {summary.governed} governed · {summary.activePolicies} policies active
           </Typography>
@@ -164,7 +167,7 @@ export function Dashboard() {
           <CardContent sx={{ py: 3 }}>
             <Stack direction="row" alignItems="center" justifyContent="space-between">
               <Box>
-                <Typography variant="h5" sx={{ mb: 0.5 }}>Welcome to Aura Power</Typography>
+                <Typography component="h2" variant="h5" sx={{ mb: 0.5 }}>Welcome to Aura Power</Typography>
                 <Typography variant="body2" color="text.secondary">
                   {summary.totalTargets} workloads discovered across your cluster.
                   {summary.governed === 0 && ' Create your first schedule to start saving.'}
@@ -189,8 +192,8 @@ export function Dashboard() {
           <Card sx={{ height: '100%' }}>
             <CardContent>
               <Typography variant="overline" color="text.secondary" sx={{ display: 'block', mb: 1 }}>Coverage</Typography>
-              <Typography variant="h4" sx={{ fontFamily: "'Geist Mono', monospace" }}>{Math.round(efficiency)}%</Typography>
-              <LinearProgress variant="determinate" value={efficiency} sx={{ mt: 1.5, height: 4, borderRadius: 2 }} />
+              <Typography component="p" variant="h4" sx={{ fontFamily: "'Geist Mono', monospace" }}>{Math.round(efficiency)}%</Typography>
+              <LinearProgress aria-label="Governance coverage" variant="determinate" value={efficiency} sx={{ mt: 1.5, height: 4, borderRadius: 2 }} />
             </CardContent>
           </Card>
         </Grid>
@@ -198,7 +201,7 @@ export function Dashboard() {
           <Card sx={{ height: '100%' }}>
             <CardContent>
               <Typography variant="overline" color="text.secondary" sx={{ display: 'block', mb: 1 }}>Savings</Typography>
-              <Typography variant="h4" sx={{ fontFamily: "'Geist Mono', monospace", color: 'success.main' }}>
+              <Typography component="p" variant="h4" sx={{ fontFamily: "'Geist Mono', monospace", color: 'success.main' }}>
                 ${savings.estimatedCost.toFixed(2)}
               </Typography>
               <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
@@ -211,7 +214,7 @@ export function Dashboard() {
           <Card sx={{ height: '100%' }}>
             <CardContent>
               <Typography variant="overline" color="text.secondary" sx={{ display: 'block', mb: 1 }}>Powered On</Typography>
-              <Typography variant="h4" sx={{ fontFamily: "'Geist Mono', monospace" }}>{summary.poweredOn}</Typography>
+              <Typography component="p" variant="h4" sx={{ fontFamily: "'Geist Mono', monospace" }}>{summary.poweredOn}</Typography>
             </CardContent>
           </Card>
         </Grid>
@@ -219,7 +222,7 @@ export function Dashboard() {
           <Card sx={{ height: '100%' }}>
             <CardContent>
               <Typography variant="overline" color="text.secondary" sx={{ display: 'block', mb: 1 }}>Powered Off</Typography>
-              <Typography variant="h4" sx={{ fontFamily: "'Geist Mono', monospace" }}>{summary.poweredOff}</Typography>
+              <Typography component="p" variant="h4" sx={{ fontFamily: "'Geist Mono', monospace" }}>{summary.poweredOff}</Typography>
             </CardContent>
           </Card>
         </Grid>
@@ -227,7 +230,7 @@ export function Dashboard() {
           <Card sx={{ height: '100%' }}>
             <CardContent>
               <Typography variant="overline" color="text.secondary" sx={{ display: 'block', mb: 1 }}>Blocked</Typography>
-              <Typography variant="h4" sx={{ fontFamily: "'Geist Mono', monospace", color: summary.blocked > 0 ? 'error.main' : undefined }}>{summary.blocked}</Typography>
+              <Typography component="p" variant="h4" sx={{ fontFamily: "'Geist Mono', monospace", color: summary.blocked > 0 ? 'error.main' : undefined }}>{summary.blocked}</Typography>
             </CardContent>
           </Card>
         </Grid>
@@ -235,7 +238,7 @@ export function Dashboard() {
           <Card sx={{ height: '100%' }}>
             <CardContent>
               <Typography variant="overline" color="text.secondary" sx={{ display: 'block', mb: 1 }}>Divergent</Typography>
-              <Typography variant="h4" sx={{ fontFamily: "'Geist Mono', monospace", color: summary.divergent > 0 ? 'warning.main' : undefined }}>{summary.divergent}</Typography>
+              <Typography component="p" variant="h4" sx={{ fontFamily: "'Geist Mono', monospace", color: summary.divergent > 0 ? 'warning.main' : undefined }}>{summary.divergent}</Typography>
             </CardContent>
           </Card>
         </Grid>
@@ -247,7 +250,7 @@ export function Dashboard() {
         <Grid item xs={12} md={3}>
           <Card sx={{ height: '100%' }}>
             <CardContent>
-              <Typography variant="h6" sx={{ mb: 2 }}>State Distribution</Typography>
+              <Typography component="h2" variant="h6" sx={{ mb: 2 }}>State Distribution</Typography>
               <ResponsiveContainer width="100%" height={180}>
                 <PieChart>
                   <Pie data={pieData} cx="50%" cy="50%" innerRadius={45} outerRadius={70} dataKey="value" strokeWidth={0}>
@@ -272,7 +275,7 @@ export function Dashboard() {
         <Grid item xs={12} md={5}>
           <Card sx={{ height: '100%' }}>
             <CardContent>
-              <Typography variant="h6" sx={{ mb: 2 }}>Targets by Namespace</Typography>
+              <Typography component="h2" variant="h6" sx={{ mb: 2 }}>Targets by Namespace</Typography>
               {barData.length > 0 ? (
                 <ResponsiveContainer width="100%" height={200}>
                   <BarChart data={barData} layout="vertical" margin={{ left: 0, right: 16 }}>
@@ -295,7 +298,7 @@ export function Dashboard() {
         <Grid item xs={12} md={4}>
           <Card sx={{ height: '100%' }}>
             <CardContent>
-              <Typography variant="h6" sx={{ mb: 2 }}>Recent Activity</Typography>
+              <Typography component="h2" variant="h6" sx={{ mb: 2 }}>Recent Activity</Typography>
               {safeRecentEvents.length === 0 ? (
                 <Typography variant="body2" color="text.secondary">No recent events</Typography>
               ) : (
@@ -329,7 +332,7 @@ export function Dashboard() {
           <Grid item xs={12} md={4}>
             <Card>
               <CardContent>
-                <Typography variant="h6" sx={{ mb: 2 }}>Upcoming Transitions</Typography>
+                <Typography component="h2" variant="h6" sx={{ mb: 2 }}>Upcoming Transitions</Typography>
                 <Stack spacing={1.5}>
                   {safeNextTransitions.map((t, i) => (
                     <Stack key={i} direction="row" alignItems="center" justifyContent="space-between">

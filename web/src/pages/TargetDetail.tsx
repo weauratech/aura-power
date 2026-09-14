@@ -6,7 +6,6 @@ import Card from '@mui/material/Card';
 import CardContent from '@mui/material/CardContent';
 import Grid from '@mui/material/Grid';
 import Stack from '@mui/material/Stack';
-import Skeleton from '@mui/material/Skeleton';
 import Alert from '@mui/material/Alert';
 import Chip from '@mui/material/Chip';
 import Button from '@mui/material/Button';
@@ -20,6 +19,8 @@ import { PowerRing } from '../design-system/react';
 import type { WorkloadState } from '../design-system/react/PowerRing';
 import { useTargets, useExplainTarget } from '../hooks/useApi';
 import { ScheduleDrawer } from '../components/ScheduleDrawer';
+import { LoadingState } from '../components/LoadingState';
+import { PageState } from '../components/PageState';
 
 function mapState(status: { observedState: { powerState: string }; blocked: boolean; divergent: boolean }): WorkloadState {
   if (status.blocked) return 'failed';
@@ -32,8 +33,8 @@ export function TargetDetail() {
   const [searchParams] = useSearchParams();
   const kind = searchParams.get('kind') || undefined;
   const uid = searchParams.get('uid') || undefined;
-  const { data: targetsData } = useTargets(namespace);
-  const { isLoading } = useExplainTarget(namespace, name, kind, uid);
+  const { data: targetsData, error: targetsError } = useTargets(namespace);
+  const { isLoading, error: explainError } = useExplainTarget(namespace, name, kind, uid);
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   const target = targetsData?.targets?.find(
@@ -41,10 +42,15 @@ export function TargetDetail() {
       (!kind || t.spec.targetRef.kind === kind) && (!uid || t.spec.targetRef.uid === uid)
   );
 
-  if (isLoading) return <Skeleton variant="rounded" height={400} />;
+  if (isLoading) return <PageState title={name || 'Workload details'}><LoadingState label="Loading workload details" height={400} /></PageState>;
+
+  const requestError = targetsError || explainError;
+  if (requestError) {
+    return <PageState title={name || 'Workload details'}><Alert severity="error">{(requestError as Error).message}</Alert></PageState>;
+  }
 
   if (!target) {
-    return <Alert severity="warning">Target not found: {namespace}/{name}</Alert>;
+    return <PageState title={name || 'Workload details'}><Alert severity="warning">Target not found: {namespace}/{name}</Alert></PageState>;
   }
 
   const state = mapState(target.status);
@@ -57,7 +63,7 @@ export function TargetDetail() {
           <Box>
             <Typography variant="overline" color="text.secondary">{namespace} / {target.spec.targetRef.kind}</Typography>
             <Stack direction="row" alignItems="center" spacing={2}>
-              <Typography variant="h4">{name}</Typography>
+              <Typography component="h1" tabIndex={-1} variant="h4">{name}</Typography>
               <StatusChip state={state} />
             </Stack>
           </Box>
@@ -71,8 +77,8 @@ export function TargetDetail() {
         <Grid item xs={12} md={6}>
           <Card>
             <CardContent>
-              <Typography variant="h5" sx={{ mb: 3 }}>Status</Typography>
-              <Table size="small">
+              <Typography component="h2" variant="h5" sx={{ mb: 3 }}>Status</Typography>
+              <Table size="small" aria-label="Workload status">
                 <TableBody>
                   <TableRow>
                     <TableCell><Typography variant="body2" color="text.secondary">Observed State</Typography></TableCell>
@@ -113,9 +119,9 @@ export function TargetDetail() {
         <Grid item xs={12} md={6}>
           <Card>
             <CardContent>
-              <Typography variant="h5" sx={{ mb: 3 }}>Decision</Typography>
+              <Typography component="h2" variant="h5" sx={{ mb: 3 }}>Decision</Typography>
               {target.status.winningRule ? (
-                <Table size="small">
+                <Table size="small" aria-label="Workload decision">
                   <TableBody>
                     <TableRow>
                       <TableCell><Typography variant="body2" color="text.secondary">Winning Rule</Typography></TableCell>
@@ -142,7 +148,7 @@ export function TargetDetail() {
           <Grid item xs={12} md={6}>
             <Card>
               <CardContent>
-                <Typography variant="h5" sx={{ mb: 3 }}>Savings</Typography>
+                <Typography component="h2" variant="h5" sx={{ mb: 3 }}>Savings</Typography>
                 <Stack direction="row" spacing={6}>
                   <Box>
                     <Typography variant="overline" color="text.secondary" sx={{ display: 'block' }}>CPU Hours</Typography>
@@ -166,8 +172,8 @@ export function TargetDetail() {
           <Grid item xs={12} md={6}>
             <Card>
               <CardContent>
-                <Typography variant="h5" sx={{ mb: 3 }}>Snapshot</Typography>
-                <Table size="small">
+                <Typography component="h2" variant="h5" sx={{ mb: 3 }}>Snapshot</Typography>
+                <Table size="small" aria-label="Workload snapshot">
                   <TableBody>
                     <TableRow>
                       <TableCell><Typography variant="body2" color="text.secondary">Replicas</Typography></TableCell>

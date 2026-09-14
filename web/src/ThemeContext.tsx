@@ -23,6 +23,7 @@ export function ThemeContextProvider({ children }: { children: React.ReactNode }
 
   useEffect(() => {
     localStorage.setItem('aura-power-theme', mode);
+    document.documentElement.dataset.theme = mode;
   }, [mode]);
 
   const toggleMode = () => setMode(prev => (prev === 'light' ? 'dark' : 'light'));
