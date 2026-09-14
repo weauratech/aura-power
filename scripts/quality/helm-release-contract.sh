@@ -90,6 +90,36 @@ perl -0ne 'exit(!/Verify staged signatures and attestations.*Verify exact releas
 grep -Fq 'cosign sign --yes "${IMAGE_SERVER}@${SERVER_DIGEST}"' .github/workflows/release.yaml
 grep -Fq 'cosign sign --yes "${IMAGE_CONTROLLER}@${CONTROLLER_DIGEST}"' .github/workflows/release.yaml
 
+# Production examples preserve environment-specific values, clear mutable tags,
+# and prove the rendered upgrade against the live API before mutation.
+assert_safe_upgrade_docs() {
+  local release_doc="$1"
+  local upgrade_block
+  upgrade_block="$(awk '/^helm upgrade --install aura-power / { capture=1 } capture && /^```$/ { exit } capture { print }' "$release_doc")"
+  grep -Fq 'Existing-release upgrades in this example require Helm 3.14 or later' "$release_doc" || return 1
+  grep -Eq '^  --reset-then-reuse-values \\$' <<<"$upgrade_block" || return 1
+  grep -Eq '^  --set-string server\.image\.tag= \\$' <<<"$upgrade_block" || return 1
+  grep -Eq '^  --set-string controller\.image\.tag= \\$' <<<"$upgrade_block" || return 1
+  grep -Eq '^  --set-string server\.image\.digest=.* \\$' <<<"$upgrade_block" || return 1
+  grep -Eq '^  --set-string controller\.image\.digest=.* \\$' <<<"$upgrade_block" || return 1
+  grep -Eq '^  --dry-run=server$' <<<"$upgrade_block" || return 1
+  perl -0ne 'exit(!/kubectl apply --server-side --dry-run=server --field-manager=aura-power-release.*kubectl apply --server-side --field-manager=aura-power-release/s)' "$release_doc" || return 1
+}
+assert_safe_upgrade_docs docs/release-security.md
+upgrade_doc_mutation="$(mktemp)"
+sed '/--dry-run=server$/d' docs/release-security.md >"$upgrade_doc_mutation"
+if assert_safe_upgrade_docs "$upgrade_doc_mutation"; then
+  echo "production upgrade documentation contract accepted a missing Helm dry run" >&2
+  exit 1
+fi
+rm -f "$upgrade_doc_mutation"
+grep -Fq -- 'EXPECTED_CONTEXT=aura-power-quality-eks-operations' docs/upgrade-v2.md
+grep -Fq -- '--expected-context "$EXPECTED_CONTEXT"' docs/upgrade-v2.md
+if grep -Fq -- '--expected-context "$(kubectl config current-context)"' docs/upgrade-v2.md; then
+  echo "downgrade documentation derives expected context from the active context" >&2
+  exit 1
+fi
+
 # Runtime identity and build inputs are immutable and traceable to the tag.
 grep -Eq '^FROM node:22-alpine@sha256:[a-f0-9]{64} AS frontend$' Dockerfile.server
 grep -Eq '^FROM golang:1.26-alpine@sha256:[a-f0-9]{64} AS backend$' Dockerfile.server
