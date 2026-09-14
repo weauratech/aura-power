@@ -49,7 +49,19 @@ Aura Power has been installed.
 == Controller (Reconciler) ==
 
   The controller is paused with controller.replicas=0. Workload reconciliation
-  is stopped and admission requests fail closed until it is restored.
+  is stopped.
+  {{- if and .Values.webhook.enabled (eq .Values.webhook.failurePolicy "Fail") }}
+  CREATE and UPDATE admission for PowerPolicy and PowerOverride fail closed
+  until the controller is restored. DELETE is not intercepted; keep a change
+  freeze and verify the decision-resource inventory during maintenance.
+  {{- else if .Values.webhook.enabled }}
+  The admission webhook uses failurePolicy={{ .Values.webhook.failurePolicy }},
+  so it is not a fail-closed maintenance guard. Freeze and inventory all
+  decision-resource mutations until the controller is restored.
+  {{- else }}
+  The admission webhook is disabled. Freeze and inventory all decision-resource
+  mutations until the controller is restored.
+  {{- end }}
 
 {{- end }}
 

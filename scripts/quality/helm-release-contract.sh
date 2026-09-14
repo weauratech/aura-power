@@ -217,6 +217,48 @@ grep -q '^  replicas: 0$' <<<"$maintenance_render"
 [[ "$(grep -c '^  replicas: 0$' <<<"$maintenance_render")" -eq 2 ]]
 grep -Fq 'server is paused with server.replicas=0' charts/aura-power/templates/NOTES.txt
 grep -Fq 'controller is paused with controller.replicas=0' charts/aura-power/templates/NOTES.txt
+grep -Fq 'DELETE is not intercepted' charts/aura-power/templates/NOTES.txt
+grep -Fq 'failurePolicy={{ .Values.webhook.failurePolicy }}' charts/aura-power/templates/NOTES.txt
+grep -Fq 'The admission webhook is disabled' charts/aura-power/templates/NOTES.txt
+fail_closed_render="$(helm template aura-power charts/aura-power --set webhook.enabled=true --set webhook.failurePolicy=Fail)"
+[[ "$(grep -c '^    failurePolicy: Fail$' <<<"$fail_closed_render")" -eq 2 ]]
+ignore_render="$(helm template aura-power charts/aura-power --set webhook.enabled=true --set webhook.failurePolicy=Ignore)"
+[[ "$(grep -c '^    failurePolicy: Ignore$' <<<"$ignore_render")" -eq 2 ]]
+disabled_webhook_render="$(helm template aura-power charts/aura-power --set webhook.enabled=false)"
+if grep -q '^kind: ValidatingWebhookConfiguration$' <<<"$disabled_webhook_render"; then
+  echo "disabled admission unexpectedly rendered a webhook configuration" >&2
+  exit 1
+fi
+current_server_digest="sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+current_controller_digest="sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+quiescence_render="$(helm template aura-power charts/aura-power -f <(cat <<YAML
+server:
+  replicas: 1
+  image:
+    repository: registry.example/current-server
+    tag: ""
+    digest: ${current_server_digest}
+controller:
+  replicas: 0
+  image:
+    repository: registry.example/current-controller
+    tag: ""
+    digest: ${current_controller_digest}
+YAML
+))"
+grep -q "image: \"registry.example/current-server@${current_server_digest}\"" <<<"$quiescence_render"
+grep -q "image: \"registry.example/current-controller@${current_controller_digest}\"" <<<"$quiescence_render"
+if grep -Eq 'image: .*:2\.2\.2' <<<"$quiescence_render"; then
+  echo "maintenance quiescence unexpectedly selected candidate application images" >&2
+  exit 1
+fi
+grep -Fq 'CURRENT_SERVER_DIGEST' charts/aura-power/README.md
+grep -Fq 'CURRENT_CONTROLLER_DIGEST' charts/aura-power/README.md
+grep -Fq 'At this point no candidate binary has run' charts/aura-power/README.md
+grep -Fq '.webhook.enabled == true and .webhook.failurePolicy == "Fail"' charts/aura-power/README.md
+grep -Fq 'DELETE' charts/aura-power/README.md
+grep -Fq 'holderIdentity' charts/aura-power/README.md
+grep -Fq 'complete configured discovery and reconciliation intervals' charts/aura-power/README.md
 if helm template aura-power charts/aura-power --set server.replicas=-1 >/dev/null 2>&1; then
   echo "negative server replicas must be rejected" >&2
   exit 1

@@ -71,29 +71,157 @@ helm install aura-power oci://ghcr.io/weauratech/charts/aura-power \
 
 The chart accepts `server.replicas=0` and `controller.replicas=0` so an upgrade
 can quiesce SQLite and stop reconciliation without making out-of-band scaling
-changes that the next Helm upgrade would undo. Stop the controller first, then
-the server. Restore the server and wait for it to become Ready before restoring
-the controller:
+changes that the next Helm upgrade would undo. A candidate chart defaults to
+its candidate `appVersion`; `--reuse-values` does not pin an image whose saved
+tag is empty. Therefore, create a mode `0600` effective-values file and set the
+currently running, verified image repositories and digests explicitly before
+the first maintenance upgrade:
 
 ```bash
-helm upgrade aura-power <chart> --namespace aura-system --reuse-values \
-  --set controller.replicas=0 --set server.replicas=1 --wait
+umask 077
+maintenance_values="$(mktemp)"
+decision_inventory="$(mktemp)"
+cleanup_maintenance_values() {
+  for file in "$maintenance_values" "$decision_inventory"; do
+    if [ -f "$file" ]; then
+      : >"$file"
+      unlink "$file"
+    fi
+  done
+}
+trap cleanup_maintenance_values EXIT
 
-helm upgrade aura-power <chart> --namespace aura-system --reuse-values \
-  --set controller.replicas=0 --set server.replicas=0 --wait
+# Set these from verified release metadata. They must identify the images that
+# are already running, not the candidate images.
+: "${CURRENT_SERVER_REPOSITORY:?set the current server repository}"
+: "${CURRENT_SERVER_DIGEST:?set the current server sha256 digest}"
+: "${CURRENT_CONTROLLER_REPOSITORY:?set the current controller repository}"
+: "${CURRENT_CONTROLLER_DIGEST:?set the current controller sha256 digest}"
+: "${CANDIDATE_CHART:?set the path to the verified candidate chart}"
+export CURRENT_SERVER_REPOSITORY CURRENT_SERVER_DIGEST
+export CURRENT_CONTROLLER_REPOSITORY CURRENT_CONTROLLER_DIGEST
 
-helm upgrade aura-power <chart> --namespace aura-system --reuse-values \
-  --set server.replicas=1 --set controller.replicas=0 --wait
+inventory_decisions() {
+  kubectl get \
+    powerpolicies,poweroverrides,powerschedules,powernamespacegroups \
+    --all-namespaces -o json | jq '
+      [.items[] | {
+        apiVersion, kind,
+        namespace: .metadata.namespace,
+        name: .metadata.name,
+        uid: .metadata.uid,
+        generation: .metadata.generation
+      }] | sort_by(.apiVersion, .kind, .namespace, .name)
+    '
+}
 
-helm upgrade aura-power <chart> --namespace aura-system --reuse-values \
-  --set server.replicas=1 --set controller.replicas=1 --wait
+helm get values aura-power --namespace aura-system --all --output yaml \
+  >"$maintenance_values"
+chmod 0600 "$maintenance_values"
+yq -e '
+  .webhook.enabled == true and .webhook.failurePolicy == "Fail"
+' "$maintenance_values" >/dev/null
+leader_election_id="$(yq -r '.controller.leaderElection.id' \
+  "$maintenance_values")"
+old_holder="$(kubectl get lease "$leader_election_id" \
+  --namespace aura-system -o jsonpath='{.spec.holderIdentity}')"
+[[ -n "$old_holder" ]]
+yq -i '
+  .server.image.repository = strenv(CURRENT_SERVER_REPOSITORY) |
+  .server.image.tag = "" |
+  .server.image.digest = strenv(CURRENT_SERVER_DIGEST) |
+  .controller.image.repository = strenv(CURRENT_CONTROLLER_REPOSITORY) |
+  .controller.image.tag = "" |
+  .controller.image.digest = strenv(CURRENT_CONTROLLER_DIGEST) |
+  .controller.replicas = 0 |
+  .server.replicas = 1
+' "$maintenance_values"
+
+helm upgrade aura-power "$CANDIDATE_CHART" --namespace aura-system \
+  --reset-values -f "$maintenance_values" --dry-run=server --hide-secret
+helm upgrade aura-power "$CANDIDATE_CHART" --namespace aura-system \
+  --reset-values -f "$maintenance_values" --wait
+
+kubectl get deployment aura-power-controller --namespace aura-system -o json \
+  | jq -e '(.status.replicas // 0) == 0' >/dev/null
+inventory_decisions >"$decision_inventory"
+
+yq -i '.server.replicas = 0' "$maintenance_values"
+helm upgrade aura-power "$CANDIDATE_CHART" --namespace aura-system \
+  --reset-values -f "$maintenance_values" --dry-run=server --hide-secret
+helm upgrade aura-power "$CANDIDATE_CHART" --namespace aura-system \
+  --reset-values -f "$maintenance_values" --wait
 ```
 
-While the controller is paused, the fail-closed admission webhook has no
-endpoint, so policy and override mutations are expected to be rejected. Do not
-leave either component at zero after the maintenance window. The server remains
-limited to one replica. Controllers above one are accepted only when leader
-election is enabled.
+At this point no candidate binary has run: the controller stopped first and the
+server then stopped while both workloads still referenced their previous
+digests. Perform the consistent SQLite backup and other maintenance checks now.
+Maintain an external change freeze for policies, overrides, schedules and
+namespace groups. Even with the required fail-closed webhook, only `CREATE` and
+`UPDATE` of `PowerPolicy` and `PowerOverride` are covered; `DELETE` and the other
+decision resources are not intercepted. Abort if a fresh inventory differs
+from `decision_inventory`.
+Only after they succeed, replace the two digest values in the restricted file
+with verified candidate digests while both replica counts remain zero. Review
+and apply that quiesced revision, then restore the server before the controller:
+
+```bash
+: "${CANDIDATE_SERVER_DIGEST:?set the verified candidate server digest}"
+: "${CANDIDATE_CONTROLLER_DIGEST:?set the verified candidate controller digest}"
+export CANDIDATE_SERVER_DIGEST CANDIDATE_CONTROLLER_DIGEST
+yq -i '
+  .server.image.digest = strenv(CANDIDATE_SERVER_DIGEST) |
+  .controller.image.digest = strenv(CANDIDATE_CONTROLLER_DIGEST)
+' "$maintenance_values"
+
+helm upgrade aura-power "$CANDIDATE_CHART" --namespace aura-system \
+  --reset-values -f "$maintenance_values" --dry-run=server --hide-secret
+helm upgrade aura-power "$CANDIDATE_CHART" --namespace aura-system \
+  --reset-values -f "$maintenance_values" --wait
+
+yq -i '.server.replicas = 1' "$maintenance_values"
+helm upgrade aura-power "$CANDIDATE_CHART" --namespace aura-system \
+  --reset-values -f "$maintenance_values" --wait
+kubectl rollout status statefulset/aura-power-server \
+  --namespace aura-system --timeout=5m
+
+yq -i '.controller.replicas = 1' "$maintenance_values"
+helm upgrade aura-power "$CANDIDATE_CHART" --namespace aura-system \
+  --reset-values -f "$maintenance_values" --wait
+kubectl rollout status deployment/aura-power-controller \
+  --namespace aura-system --timeout=5m
+
+deadline=$((SECONDS + 120))
+new_holder=""
+while (( SECONDS < deadline )); do
+  new_holder="$(kubectl get lease "$leader_election_id" \
+    --namespace aura-system -o jsonpath='{.spec.holderIdentity}')"
+  [[ -n "$new_holder" && "$new_holder" != "$old_holder" ]] && break
+  sleep 2
+done
+[[ -n "$new_holder" && "$new_holder" != "$old_holder" ]]
+cmp --silent "$decision_inventory" <(inventory_decisions)
+
+: "${POST_START_OBSERVATION_SECONDS:?set at least two times the larger configured interval}"
+[[ "$POST_START_OBSERVATION_SECONDS" =~ ^[1-9][0-9]*$ ]]
+sleep "$POST_START_OBSERVATION_SECONDS"
+cmp --silent "$decision_inventory" <(inventory_decisions)
+```
+
+`--wait` proves Pod readiness, not controller leadership or successful
+reconciliation. Before lifting the change freeze, require a non-empty Lease
+`holderIdentity` that differs from the pre-maintenance holder, compare a fresh
+decision-resource inventory with the saved inventory, and observe at least two
+complete configured discovery and reconciliation intervals. During that gate,
+verify the expected PowerTarget UID set and cardinality, require no unexpected
+pending, failed, or contended actions, and compare each admitted workload's UID
+and replica or CronJob suspension state with the pre-maintenance baseline and
+current policy decision. An unrelated workload mutation, missing target, stale
+Lease, or unexplained state transition fails the maintenance acceptance.
+
+Do not leave either component at zero after the maintenance window. The server
+remains limited to one replica. Controllers above one are accepted only when
+leader election is enabled.
 
 ### Admission validation
 
