@@ -3,6 +3,8 @@ set -Eeuo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 watchdog="${repo_root}/scripts/quality/eks-fixture-watchdog.sh"
+# shellcheck disable=SC1091
+source "${repo_root}/scripts/quality/process-guard.sh"
 test_root="$(mktemp -d)"
 trap 'rm -rf "$test_root"' EXIT
 
@@ -13,6 +15,7 @@ cat >"${fake_bin}/kubectl" <<'FAKE_KUBECTL'
 set -euo pipefail
 state_dir="${WATCHDOG_TEST_STATE:?}"
 printf '%s\n' "$*" >>"${state_dir}/commands.log"
+[[ "${1:-}" != --request-timeout=* ]] || shift
 
 has_arg() {
   local expected="$1" arg
@@ -51,6 +54,10 @@ case "${1:-} ${2:-}" in
       /apis/power.aura.sh/v1alpha1/namespaces/*/powerpolicies/*) prefix=policy ;;
       *) echo "unexpected raw delete path: $path" >&2; exit 97 ;;
     esac
+    if [[ -f "${state_dir}/${prefix}.delete-error" ]]; then
+      echo 'simulated delete transport failure' >&2
+      exit 1
+    fi
     if [[ -f "${state_dir}/${prefix}.replace-on-delete" ]]; then
       cat "${state_dir}/${prefix}.replacement-uid" >"${state_dir}/${prefix}.uid"
       rm -f "${state_dir}/${prefix}.replace-on-delete"
@@ -60,13 +67,26 @@ case "${1:-} ${2:-}" in
     [[ "$uid" == "$actual_uid" ]] || { echo 'Conflict: UID precondition failed' >&2; exit 1; }
     if [[ -f "${state_dir}/raw-delete-delay" ]]; then sleep 0.5; fi
     rm -f "${state_dir}/${prefix}.exists"
+    if [[ -f "${state_dir}/${prefix}.error-after-delete" ]]; then
+      : >"${state_dir}/${prefix}.post-delete-error"
+    fi
     printf '{}\n'
     exit 0
     ;;
   *) echo "unexpected fake kubectl invocation: $*" >&2; exit 97 ;;
  esac
 
-[[ -f "${state_dir}/${prefix}.exists" ]] || exit 1
+if [[ -f "${state_dir}/${prefix}.get-error" || -f "${state_dir}/${prefix}.post-delete-error" ]]; then
+  echo 'simulated API unavailable' >&2
+  exit 1
+fi
+if [[ -f "${state_dir}/${prefix}.hang-get" ]]; then
+  sleep 30
+fi
+if [[ ! -f "${state_dir}/${prefix}.exists" ]]; then
+  has_arg "--ignore-not-found" "$@" && exit 0
+  exit 1
+fi
 if has_arg "jsonpath={.spec.replicas}" "$@"; then
   cat "${state_dir}/workload.replicas"
 elif has_arg "json" "$@"; then
@@ -124,7 +144,9 @@ invoke_watchdog() {
     EXPECTED_CLUSTER=eks-aura-prd AWS_REGION=us-east-2 \
     RUN_ID=quality-run RECOVERY_NONCE=0123456789abcdef0123456789abcdef \
     FIXTURE_NAMESPACE=quality-namespace WORKLOAD_NAME=restore-two POLICY_NAME=quality-policy \
-    RECOVERY_DIR="$RECOVERY_DIR_PATH" PARENT_PID=99999999 HARD_DEADLINE_EPOCH=0 \
+    RECOVERY_DIR="$RECOVERY_DIR_PATH" \
+    PARENT_PID="${INVOKE_PARENT_PID:-99999999}" PARENT_IDENTITY="${INVOKE_PARENT_IDENTITY:-missing-process}" \
+    HARD_DEADLINE_EPOCH="${INVOKE_DEADLINE_EPOCH:-0}" WATCHDOG_COMMAND_TIMEOUT_SECONDS="${INVOKE_COMMAND_TIMEOUT_SECONDS:-5}" \
     "$watchdog" "$mode" >/dev/null 2>"$stderr_path"
 }
 
@@ -133,7 +155,7 @@ assert_success_cleanup() {
   [[ ! -f "${CASE_DIR}/namespace.exists" && ! -f "${CASE_DIR}/workload.exists" && ! -f "${CASE_DIR}/policy.exists" ]] || {
     echo "${case_name}: owned fixture resources remain" >&2; return 1;
   }
-  [[ ! -f "$KUBECONFIG_PATH" && ! -f "${RECOVERY_DIR_PATH}/state.json" && -d "${RECOVERY_DIR_PATH}/cleanup-complete" ]] || {
+  [[ ! -f "$KUBECONFIG_PATH" && ! -f "${RECOVERY_DIR_PATH}/state.json" && -d "${RECOVERY_DIR_PATH}/supervisor-ready" && -d "${RECOVERY_DIR_PATH}/cleanup-complete" ]] || {
     echo "${case_name}: successful recovery artifacts are inconsistent" >&2; return 1;
   }
 }
@@ -164,12 +186,11 @@ for precondition in policy-uid workload-uid namespace-uid; do
   grep -Fq "precondition=${precondition}" "${CASE_DIR}/commands.log"
 done
 
-prepare_case stale-mutation-lock-after-parent-death true true false
+prepare_case abandoned-mutation-marker-after-parent-death true true false
 write_state namespace-uid workload-uid ""
-mkdir "${RECOVERY_DIR_PATH}/lock"
-printf '99999999\n' >"${RECOVERY_DIR_PATH}/lock/owner"
+mkdir "${RECOVERY_DIR_PATH}/mutation-in-progress"
 invoke_watchdog watch "${CASE_DIR}/stderr.log"
-assert_success_cleanup stale-mutation-lock-after-parent-death
+assert_success_cleanup abandoned-mutation-marker-after-parent-death
 
 prepare_case namespace-replacement-race true false false
 write_state namespace-uid "" ""
@@ -194,20 +215,92 @@ invoke_watchdog cleanup "${CASE_DIR}/stderr.log" || invalid_status=$?
 prepare_case concurrent-deadline-and-trap true true true
 write_state namespace-uid workload-uid policy-uid
 : >"${CASE_DIR}/raw-delete-delay"
+INVOKE_PARENT_PID="$$"
+INVOKE_PARENT_IDENTITY="$(process_identity "$$")"
+INVOKE_DEADLINE_EPOCH="$(( $(date +%s) + 1 ))"
 invoke_watchdog watch "${CASE_DIR}/watch.stderr" &
 watch_pid=$!
-invoke_watchdog cleanup "${CASE_DIR}/cleanup.stderr" &
-cleanup_pid=$!
+ready_attempts=0
+while [[ ! -d "${RECOVERY_DIR_PATH}/supervisor-ready" ]]; do
+  ready_attempts=$((ready_attempts + 1))
+  (( ready_attempts < 40 )) || { echo 'supervisor did not become ready' >&2; exit 1; }
+  sleep 0.05
+done
+sleep 0.8
+mkdir "${RECOVERY_DIR_PATH}/cleanup-requested" 2>/dev/null || true
 watch_status=0
-cleanup_status=0
 wait "$watch_pid" || watch_status=$?
-wait "$cleanup_pid" || cleanup_status=$?
-[[ "$watch_status" -eq 0 && "$cleanup_status" -eq 0 ]] || {
-  echo "concurrent recovery failed: watch=${watch_status} cleanup=${cleanup_status}" >&2; exit 1;
+[[ "$watch_status" -eq 0 ]] || {
+  echo "concurrent deadline/trap recovery failed: watch=${watch_status}" >&2; exit 1;
 }
 assert_success_cleanup concurrent-deadline-and-trap
 [[ "$(grep -c '^raw-delete ' "${CASE_DIR}/commands.log")" -eq 3 ]] || {
   echo 'concurrent recovery issued duplicate deletes' >&2; exit 1;
 }
 
-echo "eks_fixture_watchdog_contract=passed pre_mutation=true nonce_capture=true preconditions=true replacement_race=true concurrent_cleanup=true stale_lock=true invalid_state=true"
+unset INVOKE_PARENT_PID INVOKE_PARENT_IDENTITY INVOKE_DEADLINE_EPOCH
+
+prepare_case signal-trap-releases-mutation-marker true true false
+write_state namespace-uid workload-uid ""
+INVOKE_PARENT_PID="$$"
+INVOKE_PARENT_IDENTITY="$(process_identity "$$")"
+INVOKE_DEADLINE_EPOCH="$(( $(date +%s) + 30 ))"
+invoke_watchdog watch "${CASE_DIR}/watch.stderr" &
+watch_pid=$!
+ready_attempts=0
+while [[ ! -d "${RECOVERY_DIR_PATH}/supervisor-ready" ]]; do
+  ready_attempts=$((ready_attempts + 1)); (( ready_attempts < 40 )) || exit 1; sleep 0.05
+done
+mkdir "${RECOVERY_DIR_PATH}/mutation-in-progress"
+# This is the cleanup trap protocol: relinquish the mutation marker first,
+# then request the already-ready supervisor.
+rmdir "${RECOVERY_DIR_PATH}/mutation-in-progress"
+mkdir "${RECOVERY_DIR_PATH}/cleanup-requested"
+watch_status=0
+wait "$watch_pid" || watch_status=$?
+[[ "$watch_status" -eq 0 ]] || { echo "signal trap recovery failed: ${watch_status}" >&2; exit 1; }
+assert_success_cleanup signal-trap-releases-mutation-marker
+unset INVOKE_PARENT_PID INVOKE_PARENT_IDENTITY INVOKE_DEADLINE_EPOCH
+
+prepare_case reused-parent-pid-identity true false false
+write_state namespace-uid "" ""
+INVOKE_PARENT_PID="$$"
+INVOKE_PARENT_IDENTITY="identity-from-an-earlier-process"
+INVOKE_DEADLINE_EPOCH="$(( $(date +%s) + 30 ))"
+invoke_watchdog watch "${CASE_DIR}/stderr.log"
+assert_success_cleanup reused-parent-pid-identity
+unset INVOKE_PARENT_PID INVOKE_PARENT_IDENTITY INVOKE_DEADLINE_EPOCH
+
+prepare_case api-unavailable-before-delete true false false
+write_state namespace-uid "" ""
+: >"${CASE_DIR}/namespace.get-error"
+api_status=0
+invoke_watchdog cleanup "${CASE_DIR}/stderr.log" || api_status=$?
+[[ "$api_status" -ne 0 && -f "${CASE_DIR}/namespace.exists" && -f "$KUBECONFIG_PATH" && -f "${RECOVERY_DIR_PATH}/state.json" ]] || { echo 'API failure before delete did not fail closed' >&2; exit 1; }
+
+prepare_case api-unavailable-during-delete true false false
+write_state namespace-uid "" ""
+: >"${CASE_DIR}/namespace.delete-error"
+api_status=0
+invoke_watchdog cleanup "${CASE_DIR}/stderr.log" || api_status=$?
+[[ "$api_status" -ne 0 && -f "${CASE_DIR}/namespace.exists" && -f "$KUBECONFIG_PATH" && -f "${RECOVERY_DIR_PATH}/state.json" ]] || { echo 'API failure during delete did not fail closed' >&2; exit 1; }
+
+prepare_case api-unavailable-after-delete true false false
+write_state namespace-uid "" ""
+: >"${CASE_DIR}/namespace.error-after-delete"
+api_status=0
+invoke_watchdog cleanup "${CASE_DIR}/stderr.log" || api_status=$?
+[[ "$api_status" -ne 0 && ! -f "${CASE_DIR}/namespace.exists" && -f "$KUBECONFIG_PATH" && -f "${RECOVERY_DIR_PATH}/state.json" ]] || { echo 'inconclusive post-delete verification discarded recovery artifacts' >&2; exit 1; }
+
+prepare_case api-timeout-before-delete true false false
+write_state namespace-uid "" ""
+: >"${CASE_DIR}/namespace.hang-get"
+INVOKE_COMMAND_TIMEOUT_SECONDS=1
+started="$(date +%s)"
+api_status=0
+invoke_watchdog cleanup "${CASE_DIR}/stderr.log" || api_status=$?
+elapsed=$(( $(date +%s) - started ))
+[[ "$api_status" -ne 0 && "$elapsed" -lt 8 && -f "${CASE_DIR}/namespace.exists" && -f "$KUBECONFIG_PATH" && -f "${RECOVERY_DIR_PATH}/state.json" ]] || { echo "API timeout did not fail closed promptly: status=${api_status} elapsed=${elapsed}" >&2; exit 1; }
+unset INVOKE_COMMAND_TIMEOUT_SECONDS
+
+echo "eks_fixture_watchdog_contract=passed pre_mutation=true nonce_capture=true preconditions=true replacement_race=true deadline_trap=true signal_trap=true abandoned_marker=true parent_identity=true api_fail_closed=true external_timeout=true invalid_state=true"

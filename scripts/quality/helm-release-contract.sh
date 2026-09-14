@@ -19,7 +19,7 @@ if grep -R --line-number -- '--token=' scripts/quality/eks-*.sh; then
   echo "EKS quality scripts must not expose bearer tokens in process arguments" >&2
   exit 1
 fi
-grep -q 'aws eks update-kubeconfig' scripts/quality/eks-core-journey.sh
+grep -q 'aws_cmd eks update-kubeconfig' scripts/quality/eks-core-journey.sh
 grep -q 'AURA_POWER_RUNTIME_KUBECONFIG' scripts/quality/eks-fixture-watchdog.sh
 grep -Fq 'create -f - -o json' scripts/quality/eks-core-journey.sh
 grep -Fq 'write_recovery_state' scripts/quality/eks-core-journey.sh
@@ -33,8 +33,13 @@ grep -Fq '"create powerpolicies.power.aura.sh ${CONTROL_NAMESPACE}"' scripts/qua
 grep -Fq 'POLICY_UID=' scripts/quality/eks-core-journey.sh
 grep -Fq 'preconditions:{uid:$uid}' scripts/quality/eks-fixture-watchdog.sh
 grep -Fq 'kube delete --raw "$api_path" -f -' scripts/quality/eks-fixture-watchdog.sh
-perl -0ne 'exit(!/nohup "\$WATCHDOG" watch.*kill -0 "\$WATCHDOG_PID".*namespace_json="\$\(kube create/s)' scripts/quality/eks-core-journey.sh
+grep -Fq 'RUNTIME_KUBECONFIG="${RECOVERY_DIR}/kubeconfig"' scripts/quality/eks-core-journey.sh
+grep -Fq 'mkdir "$SUPERVISOR_READY"' scripts/quality/eks-fixture-watchdog.sh
+grep -Fq 'same_process_identity "$PARENT_PID" "$PARENT_IDENTITY"' scripts/quality/eks-fixture-watchdog.sh
+grep -Fq 'run_with_process_timeout "$WATCHDOG_COMMAND_TIMEOUT_SECONDS"' scripts/quality/eks-fixture-watchdog.sh
+perl -0ne 'exit(!/nohup "\$WATCHDOG" watch.*supervisor-ready.*namespace_json="\$\(kube create/s)' scripts/quality/eks-core-journey.sh
 perl -0ne 'exit(!/stat -c '\''%a'\''.*stat -f '\''%Lp'\''/s)' scripts/quality/eks-fixture-watchdog.sh
+scripts/quality/process-guard-test.sh
 scripts/quality/eks-fixture-watchdog-test.sh
 grep -Fq 'group: aura-power-release-promotion' .github/workflows/release.yaml
 perl -0ne 'exit(!/validate:.*Validate release identity.*scripts\/release\/preflight\.sh/s)' .github/workflows/release.yaml
@@ -179,7 +184,7 @@ grep -q 'name: LEADER_ELECTION_ENABLED' "$default_render"
 grep -q 'name: SYSTEM_NAMESPACES' "$default_render"
 grep -q 'path: /readyz/notification-suppression-v1' "$default_render"
 grep -Fq '.status.recentAttempts[]?.auditEventRefs[]? // empty' scripts/quality/eks-core-journey.sh
-grep -Fq 'kill -0 "$CHANNEL_WATCH_PID"' scripts/quality/eks-core-journey.sh
+grep -Fq 'same_process_identity "$CHANNEL_WATCH_PID" "$CHANNEL_WATCH_IDENTITY"' scripts/quality/eks-core-journey.sh
 grep -Fq 'any(.items[]; .spec.action == "workload.powered_down") and any(.items[]; .spec.action == "workload.restored")' scripts/quality/eks-core-journey.sh
 perl -0ne 'exit(!/name: data\n\s+emptyDir:/s)' "$ephemeral_render"
 if grep -q '# Source: aura-power/templates/server-secret.yaml' "$external_secret_render"; then

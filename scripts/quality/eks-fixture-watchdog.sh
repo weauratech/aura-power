@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+source "${script_dir}/process-guard.sh"
+
 : "${KUBECONFIG:?missing watchdog kubeconfig}"
 : "${EXPECTED_CLUSTER:?missing EKS cluster name}"
 : "${AWS_REGION:?missing AWS region}"
@@ -11,12 +15,21 @@ set -Eeuo pipefail
 : "${POLICY_NAME:?missing policy name}"
 : "${AURA_POWER_RUNTIME_KUBECONFIG:?missing private runtime kubeconfig}"
 : "${RECOVERY_DIR:?missing private recovery directory}"
+: "${PARENT_PID:?missing parent PID}"
+: "${PARENT_IDENTITY:?missing parent process identity}"
+: "${HARD_DEADLINE_EPOCH:?missing cleanup deadline}"
 
 RECOVERY_STATE="${RECOVERY_DIR}/state.json"
-RECOVERY_LOCK="${RECOVERY_DIR}/lock"
 CLEANUP_REQUESTED="${RECOVERY_DIR}/cleanup-requested"
 CLEANUP_STARTED="${RECOVERY_DIR}/cleanup-started"
 CLEANUP_COMPLETE="${RECOVERY_DIR}/cleanup-complete"
+MUTATION_IN_PROGRESS="${RECOVERY_DIR}/mutation-in-progress"
+SUPERVISOR_READY="${RECOVERY_DIR}/supervisor-ready"
+WATCHDOG_COMMAND_TIMEOUT_SECONDS="${WATCHDOG_COMMAND_TIMEOUT_SECONDS:-30}"
+[[ "$WATCHDOG_COMMAND_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ && "$WATCHDOG_COMMAND_TIMEOUT_SECONDS" -le 60 ]] || {
+  echo "refusing cleanup: watchdog command timeout must be between 1 and 60 seconds" >&2
+  exit 2
+}
 
 file_mode() {
   local mode
@@ -42,7 +55,7 @@ file_mode() {
 }
 
 kube() {
-  kubectl "$@"
+  run_with_process_timeout "$WATCHDOG_COMMAND_TIMEOUT_SECONDS" kubectl --request-timeout=15s "$@"
 }
 
 remove_runtime_kubeconfig() {
@@ -55,41 +68,6 @@ remove_recovery_state() {
   for pending_state in "${RECOVERY_DIR}"/state.pending.*; do
     [[ ! -f "$pending_state" ]] || unlink "$pending_state"
   done
-}
-
-acquire_recovery_lock() {
-  local attempts=0 owner=""
-  while ! mkdir "$RECOVERY_LOCK" 2>/dev/null; do
-    if [[ -d "$CLEANUP_COMPLETE" ]]; then
-      return 2
-    fi
-    owner="$(cat "${RECOVERY_LOCK}/owner" 2>/dev/null || true)"
-    if [[ "$owner" =~ ^[0-9]+$ ]] && ! kill -0 "$owner" 2>/dev/null; then
-      if mkdir "${RECOVERY_DIR}/lock-reclaim" 2>/dev/null; then
-        if [[ "$(cat "${RECOVERY_LOCK}/owner" 2>/dev/null || true)" == "$owner" ]] && ! kill -0 "$owner" 2>/dev/null; then
-          unlink "${RECOVERY_LOCK}/owner" 2>/dev/null || true
-          rmdir "$RECOVERY_LOCK" 2>/dev/null || true
-        fi
-        rmdir "${RECOVERY_DIR}/lock-reclaim" 2>/dev/null || true
-      fi
-    fi
-    attempts=$((attempts + 1))
-    (( attempts < 120 )) || {
-      echo "recovery lock acquisition timed out" >&2
-      return 1
-    }
-    sleep 0.25
-  done
-  printf '%s\n' "$$" >"${RECOVERY_LOCK}/owner"
-}
-
-release_recovery_lock() {
-  [[ "$(cat "${RECOVERY_LOCK}/owner" 2>/dev/null || true)" == "$$" ]] || {
-    echo "refusing to release a recovery lock owned by another process" >&2
-    return 1
-  }
-  unlink "${RECOVERY_LOCK}/owner"
-  rmdir "$RECOVERY_LOCK" 2>/dev/null || true
 }
 
 load_recovery_state() {
@@ -132,7 +110,11 @@ capture_owned_uid() {
   local -a get_args
   get_args=(get "$resource" "$name")
   [[ "$namespace" == "-" ]] || get_args+=(-n "$namespace")
-  object="$(kube "${get_args[@]}" -o json 2>/dev/null)" || return 3
+  # --ignore-not-found is the only absence path: transport, auth, timeout and
+  # server errors remain non-zero and therefore inconclusive/fail-closed.
+  object="$(kube "${get_args[@]}" --ignore-not-found -o json)" || return 4
+  [[ -n "$object" ]] || return 3
+  jq -e 'type == "object" and (.metadata | type == "object")' <<<"$object" >/dev/null || return 4
   actual_run="$(jq -r '.metadata.labels["aura-power-quality/run"] // empty' <<<"$object")"
   actual_nonce="$(jq -r '.metadata.labels["aura-power-quality/nonce"] // empty' <<<"$object")"
   actual_uid="$(jq -r '.metadata.uid // empty' <<<"$object")"
@@ -151,9 +133,11 @@ delete_owned() {
     powerpolicy) api_path="/apis/power.aura.sh/v1alpha1/namespaces/${namespace}/powerpolicies/${name}" ;;
     *) echo "refusing cleanup: unsupported delete resource ${resource}" >&2; return 1 ;;
   esac
-  jq -nc --arg uid "$actual_uid" \
-    '{apiVersion:"v1",kind:"DeleteOptions",preconditions:{uid:$uid},propagationPolicy:"Background"}' |
-    kube delete --raw "$api_path" -f - >/dev/null
+  if ! jq -nc --arg uid "$actual_uid" \
+      '{apiVersion:"v1",kind:"DeleteOptions",preconditions:{uid:$uid},propagationPolicy:"Background"}' |
+      kube delete --raw "$api_path" -f - >/dev/null; then
+    return 1
+  fi
   deadline=$((SECONDS + ${timeout%s}))
   while (( SECONDS < deadline )); do
     get_status=0
@@ -167,14 +151,14 @@ delete_owned() {
 }
 
 cleanup_fixture_locked() {
-  local failed=0 captured_uid capture_status=0 workload_capture_status=0
+  local failed=0 captured_uid capture_status=0 workload_capture_status=0 final_policy_status=0 final_namespace_status=0
   load_recovery_state || return 1
 
   captured_uid="$(capture_owned_uid powerpolicy "$POLICY_NAME" aura-system "$POLICY_UID")" || capture_status=$?
   if [[ "$capture_status" -eq 0 ]]; then
     delete_owned powerpolicy "$POLICY_NAME" aura-system "$captured_uid" 60s || failed=1
   elif [[ "$capture_status" -ne 3 ]]; then
-    echo "refusing cleanup: policy ownership or UID mismatch" >&2
+    echo "refusing cleanup: policy lookup was inconclusive or identity mismatched" >&2
     failed=1
   fi
 
@@ -192,37 +176,57 @@ cleanup_fixture_locked() {
         delete_owned deployment "$WORKLOAD_NAME" "$FIXTURE_NAMESPACE" "$WORKLOAD_UID" 60s || failed=1
       fi
     elif [[ "$workload_capture_status" -ne 3 ]]; then
-      echo "refusing restore: workload ownership or UID mismatch" >&2
+      echo "refusing restore: workload lookup was inconclusive or identity mismatched" >&2
       failed=1
     fi
     if [[ "$failed" -eq 0 ]]; then
       delete_owned namespace "$FIXTURE_NAMESPACE" - "$NAMESPACE_UID" 180s || failed=1
     fi
   elif [[ "$capture_status" -ne 3 ]]; then
-    echo "refusing cleanup: namespace ownership or UID mismatch" >&2
+    echo "refusing cleanup: namespace lookup was inconclusive or identity mismatched" >&2
     failed=1
   fi
 
-  if kube get powerpolicy "$POLICY_NAME" -n aura-system >/dev/null 2>&1 ||
-     kube get namespace "$FIXTURE_NAMESPACE" >/dev/null 2>&1; then
-    echo "cleanup verification failed: campaign resources remain" >&2
+  capture_owned_uid powerpolicy "$POLICY_NAME" aura-system "$POLICY_UID" >/dev/null || final_policy_status=$?
+  capture_owned_uid namespace "$FIXTURE_NAMESPACE" - "$NAMESPACE_UID" >/dev/null || final_namespace_status=$?
+  if [[ "$final_policy_status" -ne 3 || "$final_namespace_status" -ne 3 ]]; then
+    echo "cleanup verification failed: resources remain or absence is inconclusive" >&2
     failed=1
   fi
   return "$failed"
 }
 
 cleanup_transaction() {
-  local lock_status=0 cleanup_status=0
-  acquire_recovery_lock || lock_status=$?
-  if [[ "$lock_status" -eq 2 && -d "$CLEANUP_COMPLETE" ]]; then
-    return 0
+  local cleanup_status=0 wait_attempts=0 parent_identity
+  [[ ! -d "$CLEANUP_COMPLETE" ]] || return 0
+  if ! mkdir "$CLEANUP_STARTED" 2>/dev/null; then
+    [[ -d "$CLEANUP_COMPLETE" ]] && return 0
+    echo "refusing cleanup: another cleanup executor is active" >&2
+    return 75
   fi
-  [[ "$lock_status" -eq 0 ]] || return "$lock_status"
-  if [[ -d "$CLEANUP_COMPLETE" ]]; then
-    release_recovery_lock
-    return 0
-  fi
-  mkdir "$CLEANUP_STARTED" 2>/dev/null || true
+  while [[ -d "$MUTATION_IN_PROGRESS" ]]; do
+    parent_identity="$(process_identity "$PARENT_PID" 2>/dev/null || true)"
+    if [[ "$parent_identity" != "$PARENT_IDENTITY" ]]; then
+      rmdir "$MUTATION_IN_PROGRESS" 2>/dev/null || true
+      break
+    fi
+    if (( $(date +%s) >= HARD_DEADLINE_EPOCH )); then
+      signal_process_identity "$PARENT_PID" "$PARENT_IDENTITY" TERM
+    fi
+    wait_attempts=$((wait_attempts + 1))
+    (( wait_attempts < 40 )) || {
+      signal_process_identity "$PARENT_PID" "$PARENT_IDENTITY" KILL
+      sleep 1
+      if ! same_process_identity "$PARENT_PID" "$PARENT_IDENTITY"; then
+        rmdir "$MUTATION_IN_PROGRESS" 2>/dev/null || true
+        break
+      fi
+      echo "recovery mutation marker did not quiesce" >&2
+      rmdir "$CLEANUP_STARTED" 2>/dev/null || true
+      return 1
+    }
+    sleep 0.25
+  done
   cleanup_fixture_locked || cleanup_status=$?
   if [[ "$cleanup_status" -eq 0 ]]; then
     remove_recovery_state
@@ -232,7 +236,6 @@ cleanup_transaction() {
     rmdir "$CLEANUP_STARTED" 2>/dev/null || true
     echo "recovery artifacts retained in $RECOVERY_DIR" >&2
   fi
-  release_recovery_lock
   return "$cleanup_status"
 }
 
@@ -241,9 +244,12 @@ case "${1:-}" in
     cleanup_transaction
     ;;
   watch)
-    : "${PARENT_PID:?missing parent PID}"
-    : "${HARD_DEADLINE_EPOCH:?missing cleanup deadline}"
-    while kill -0 "$PARENT_PID" 2>/dev/null &&
+    load_recovery_state >/dev/null
+    mkdir "$SUPERVISOR_READY" 2>/dev/null || {
+      echo "refusing cleanup: supervisor readiness marker already exists" >&2
+      exit 2
+    }
+    while process_is_running_identity "$PARENT_PID" "$PARENT_IDENTITY" &&
           [[ ! -d "$CLEANUP_REQUESTED" ]] &&
           (( $(date +%s) < HARD_DEADLINE_EPOCH )); do
       sleep 1
