@@ -24,6 +24,12 @@ type PowerPolicySpec struct {
 
 // PolicyScope defines targeting criteria for workloads.
 type PolicyScope struct {
+	// TargetRefs identifies exact workload objects. When set, a workload must
+	// match one entry in addition to every selector below. UID is optional so a
+	// policy may either follow a logical workload or bind to one incarnation.
+	// +optional
+	TargetRefs []TargetReference `json:"targetRefs,omitempty"`
+
 	// Namespaces to target (empty = all non-system namespaces).
 	// +optional
 	Namespaces []string `json:"namespaces,omitempty"`

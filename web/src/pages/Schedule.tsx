@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type KeyboardEvent } from 'react';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import Button from '@mui/material/Button';
@@ -26,6 +26,14 @@ import { EmptyState } from '../components/EmptyState';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+function activateRow(event: KeyboardEvent<HTMLTableRowElement>, action: () => void) {
+  if (event.target !== event.currentTarget) return;
+  if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault();
+    action();
+  }
+}
 
 function expiresCountdown(expiresAt: string): string {
   const diff = new Date(expiresAt).getTime() - Date.now();
@@ -85,7 +93,7 @@ export function Schedule() {
             Power policies and temporary overrides.
           </Typography>
         </Box>
-        <Button variant="contained" startIcon={<AddIcon />} onClick={() => { setEditingPolicy(null); setDrawerOpen(true); }}>
+        <Button aria-label="Create a new schedule" variant="contained" startIcon={<AddIcon />} onClick={() => { setEditingPolicy(null); setDrawerOpen(true); }}>
           New Schedule
         </Button>
       </Stack>
@@ -114,7 +122,15 @@ export function Schedule() {
                 const state: WorkloadState = p.spec.schedule.desiredState === 'on' ? 'running' : 'asleep';
                 const window = p.spec.schedule.windows?.[0];
                 return (
-                  <TableRow key={`policy-${p.metadata.namespace}/${p.metadata.name}`} hover sx={{ cursor: 'pointer' }} onClick={() => { setEditingPolicy(p); setDrawerOpen(true); }}>
+                  <TableRow
+                    key={`policy-${p.metadata.namespace}/${p.metadata.name}`}
+                    hover
+                    tabIndex={0}
+                    aria-label={`Edit schedule ${p.metadata.name}`}
+                    sx={{ cursor: 'pointer' }}
+                    onClick={() => { setEditingPolicy(p); setDrawerOpen(true); }}
+                    onKeyDown={(event) => activateRow(event, () => { setEditingPolicy(p); setDrawerOpen(true); })}
+                  >
                     <TableCell>
                       <Typography variant="subtitle2">{p.metadata.name}</Typography>
                       {p.spec.description && (
@@ -157,7 +173,11 @@ export function Schedule() {
                     </TableCell>
                     <TableCell align="right" sx={{ width: 40 }}>
                       <Tooltip title="Delete">
-                        <IconButton size="small" onClick={() => handleDeletePolicy(p)}>
+                        <IconButton
+                          size="small"
+                          onClick={(event) => { event.stopPropagation(); handleDeletePolicy(p); }}
+                          aria-label={`Delete schedule ${p.metadata.name}`}
+                        >
                           <DeleteIcon fontSize="small" />
                         </IconButton>
                       </Tooltip>
@@ -200,7 +220,7 @@ export function Schedule() {
                     </TableCell>
                     <TableCell align="right" sx={{ width: 40 }}>
                       <Tooltip title="Delete">
-                        <IconButton size="small" onClick={() => handleDeleteOverride(o)}>
+                        <IconButton size="small" onClick={() => handleDeleteOverride(o)} aria-label={`Delete override ${o.metadata.name}`}>
                           <DeleteIcon fontSize="small" />
                         </IconButton>
                       </Tooltip>

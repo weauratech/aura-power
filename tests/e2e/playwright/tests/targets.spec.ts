@@ -1,54 +1,156 @@
 import { test, expect } from '@playwright/test';
+import { execFileSync } from 'node:child_process';
+import { openPage, requireFixtureNamespace } from './support';
 
-test.describe('Targets', () => {
-  test.beforeEach(async ({ page }) => {
-    await page.goto('/');
-    const loginVisible = await page.locator('input[type="password"]').isVisible().catch(() => false);
-    if (loginVisible) {
-      await page.fill('input[autocomplete="username"], input:first-of-type', 'admin');
-      await page.fill('input[type="password"]', 'admin123');
-      await page.click('button[type="submit"]');
-    }
-    await page.waitForSelector('text=Cluster Overview', { timeout: 15000 });
-    await page.click('text=Targets');
-    await page.waitForSelector('table', { timeout: 10000 });
-  });
+test.describe('targets', () => {
+  test.beforeEach(async ({ page }) => openPage(page, 'Targets', 'Targets'));
 
-  test('B5: table renders with workloads', async ({ page }) => {
+  test('search narrows results to the dedicated fixture namespace', async ({ page }) => {
+    const namespace = requireFixtureNamespace();
+    await page.getByPlaceholder(/Search by name or namespace/).fill(namespace);
     const rows = page.locator('tbody tr');
     await expect(rows.first()).toBeVisible();
-    const count = await rows.count();
-    expect(count).toBeGreaterThan(0);
+    expect(await rows.count()).toBeGreaterThan(0);
+    for (const row of await rows.all()) await expect(row).toContainText(namespace);
   });
 
-  test('B6: search filters results', async ({ page }) => {
-    await page.fill('input[placeholder*="Search"]', 'argocd');
-    await page.waitForTimeout(500);
-    const rows = page.locator('tbody tr');
-    const count = await rows.count();
-    expect(count).toBeGreaterThan(0);
-    // All visible rows should contain argocd
-    const firstCell = await rows.first().locator('td').first().textContent();
-    expect(firstCell?.toLowerCase()).toContain('argocd');
+  test('state filter and target details have observable outcomes', async ({ page }) => {
+    await page.getByRole('button', { name: 'Running', exact: true }).click();
+    await expect(page.getByText(/workloads \(filtered\)/)).toBeVisible();
+    const target = page.locator('tbody tr').first().getByRole('link').last();
+    await expect(target).toBeVisible();
+    const targetName = (await target.textContent())?.trim();
+    expect(targetName).toBeTruthy();
+    await target.click();
+    await expect(page).toHaveURL(/\/targets\/[^/]+\/[^/]+$/);
+    await expect(page.getByText(targetName!, { exact: true }).first()).toBeVisible();
   });
 
-  test('B7: state filter works', async ({ page }) => {
-    await page.click('button:has-text("Running")');
-    await page.waitForTimeout(500);
-    // Should have Running chips visible
-    await expect(page.locator('text=Running').first()).toBeVisible();
+  test('opens the schedule drawer with required fields incomplete', async ({ page }) => {
+    await page.getByRole('main').getByRole('button', { name: 'Create Schedule', exact: true }).click();
+    const drawer = page.getByRole('dialog', { name: 'New Schedule' });
+    await expect(drawer).toBeVisible();
+    await expect(drawer.getByRole('button', { name: 'Create Schedule', exact: true })).toBeDisabled();
   });
 
-  test('B8: click namespace navigates', async ({ page }) => {
-    const nsLink = page.locator('a[href*="/targets/"]').first();
-    const href = await nsLink.getAttribute('href');
-    await nsLink.click();
-    await page.waitForURL(`**${href}`);
-    expect(page.url()).toContain('/targets/');
-  });
+  test('@mutation creates one exact workload reference when homonyms exist', async ({ page }) => {
+    test.setTimeout(180_000);
+    const namespace = requireFixtureNamespace();
+    const homonymNamespace = process.env.AURA_E2E_HOMONYM_NAMESPACE ?? `${namespace}-homonym`;
+    const name = `codex-exact-${Date.now()}`;
+    const buttonName = `Create schedule for ${namespace}/Deployment/browser-fixture`;
+    const kubeconfig = process.env.AURA_E2E_KUBECONFIG;
+    if (!kubeconfig) throw new Error('AURA_E2E_KUBECONFIG is required for this mutating journey.');
+    const kubectl = (...args: string[]) =>
+      execFileSync('kubectl', ['--kubeconfig', kubeconfig, ...args], { encoding: 'utf8' }).trim();
+    const fixtureUID = kubectl('get', 'deployment', 'browser-fixture', '--namespace', namespace, '--output', 'jsonpath={.metadata.uid}');
+    const homonymUID = kubectl('get', 'deployment', 'browser-fixture', '--namespace', homonymNamespace, '--output', 'jsonpath={.metadata.uid}');
+    const originalReplicas = Number(kubectl('get', 'deployment', 'browser-fixture', '--namespace', namespace, '--output', 'jsonpath={.spec.replicas}'));
+    const originalHomonymReplicas = Number(kubectl('get', 'deployment', 'browser-fixture', '--namespace', homonymNamespace, '--output', 'jsonpath={.spec.replicas}'));
+    let submittedPolicy:
+      | {
+          metadata: Record<string, string>;
+          spec: {
+            scope: { targetRefs: Array<Record<string, string>> };
+            schedule: { desiredState: string };
+          };
+        }
+      | undefined;
+    const replicas = async (targetNamespace: string) => {
+      const response = await page.request.get(`/api/v1/targets?namespace=${encodeURIComponent(targetNamespace)}`);
+      expect(response.status()).toBe(200);
+      const body = (await response.json()) as {
+        targets?: Array<{
+          spec: { targetRef: { name: string; kind: string } };
+          status: { observedState: { replicas: number } };
+        }>;
+      };
+      return body.targets?.find((target) => target.spec.targetRef.name === 'browser-fixture' && target.spec.targetRef.kind === 'Deployment')?.status.observedState.replicas;
+    };
+    const kubernetesReplicas = (targetNamespace: string) => {
+      return Number(kubectl('get', 'deployment', 'browser-fixture', '--namespace', targetNamespace, '--output', 'jsonpath={.spec.replicas}'));
+    };
+    // Establish the independent Kubernetes baseline before observing any UI
+    // request. A stale PowerTarget status cannot satisfy these assertions.
+    expect(kubernetesReplicas(namespace)).toBe(1);
+    expect(kubernetesReplicas(homonymNamespace)).toBe(1);
+    const responsePromise = page.waitForResponse((response) => response.request().method() === 'POST' && response.url().endsWith('/api/v1/policies'));
+    try {
+      await page.getByPlaceholder(/Search by name or namespace/).fill('browser-fixture');
+      const trigger = page.getByRole('button', {
+        name: buttonName,
+        exact: true,
+      });
+      await expect(trigger).toHaveCount(1);
+      await trigger.click();
+      const drawer = page.getByRole('dialog', { name: 'New Schedule' });
+      await drawer.getByRole('textbox', { name: /^Name/ }).fill(name);
+      await drawer.getByRole('textbox', { name: 'Start' }).fill('00:00');
+      await drawer.getByRole('textbox', { name: 'End' }).fill('23:59');
+      await drawer.getByText('Sun', { exact: true }).click();
+      await drawer.getByText('Sat', { exact: true }).click();
+      await drawer.getByRole('button', { name: 'Create Schedule', exact: true }).click();
+      const response = await responsePromise;
+      expect(response.status()).toBe(201);
+      submittedPolicy = response.request().postDataJSON() as typeof submittedPolicy;
+      expect(submittedPolicy?.spec.scope.targetRefs).toHaveLength(1);
+      expect(submittedPolicy?.spec.scope.targetRefs[0]).toMatchObject({
+        namespace,
+        name: 'browser-fixture',
+        kind: 'Deployment',
+        apiVersion: 'apps/v1',
+      });
+      expect(submittedPolicy?.spec.scope.targetRefs[0].uid).toBeTruthy();
+      await expect.poll(() => replicas(namespace), { timeout: 90_000 }).toBe(0);
+      await expect.poll(() => replicas(homonymNamespace), { timeout: 90_000 }).toBe(1);
+      await expect.poll(() => kubernetesReplicas(namespace), { timeout: 90_000 }).toBe(0);
+      await expect.poll(() => kubernetesReplicas(homonymNamespace), { timeout: 90_000 }).toBe(1);
+    } finally {
+      let recoveryError: unknown;
+      if (submittedPolicy) {
+        try {
+          submittedPolicy.spec.schedule.desiredState = 'on';
+          await page.request.put(`/api/v1/policies/aura-system/${name}`, { data: submittedPolicy });
+        } catch (error) {
+          recoveryError = error;
+        }
+      }
+      try {
+        await page.request.delete(`/api/v1/policies/aura-system/${name}`);
+      } catch (error) {
+        recoveryError ??= error;
+      }
 
-  test('B10: Create Schedule button opens drawer', async ({ page }) => {
-    await page.click('button:has-text("Create Schedule")');
-    await expect(page.locator('text=New Schedule')).toBeVisible();
+      // Recovery is independent of the server/API under test. Retry rule
+      // removal, verify both identities, and still attempt both replica
+      // restorations if one cleanup operation has a transient failure.
+      const cleanupErrors: unknown[] = [];
+      let policyDeleted = false;
+      for (let attempt = 0; attempt < 3 && !policyDeleted; attempt += 1) {
+        try {
+          kubectl('delete', 'powerpolicy', name, '--namespace', 'aura-system', '--ignore-not-found', '--wait=true', '--timeout=60s');
+          policyDeleted = true;
+        } catch (error) {
+          if (attempt === 2) cleanupErrors.push(error);
+        }
+      }
+      const restore = (targetNamespace: string, expectedUID: string, replicas: number) => {
+        try {
+          const actualUID = kubectl('get', 'deployment', 'browser-fixture', '--namespace', targetNamespace, '--output', 'jsonpath={.metadata.uid}');
+          if (actualUID !== expectedUID) throw new Error(`refusing recovery for ${targetNamespace}: fixture UID changed`);
+          kubectl('scale', 'deployment/browser-fixture', '--namespace', targetNamespace, `--replicas=${replicas}`);
+        } catch (error) {
+          cleanupErrors.push(error);
+        }
+      };
+      restore(namespace, fixtureUID, originalReplicas);
+      restore(homonymNamespace, homonymUID, originalHomonymReplicas);
+      if (cleanupErrors.length === 0) {
+        await expect.poll(() => kubernetesReplicas(namespace), { timeout: 90_000 }).toBe(originalReplicas);
+        await expect.poll(() => kubernetesReplicas(homonymNamespace), { timeout: 90_000 }).toBe(originalHomonymReplicas);
+      }
+      if (cleanupErrors.length > 0) throw new AggregateError(cleanupErrors, 'independent Kubernetes recovery failed');
+      if (recoveryError) throw recoveryError;
+    }
   });
 });

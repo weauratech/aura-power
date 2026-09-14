@@ -1,10 +1,7 @@
-# Aura Power v2.0 Helm Values
+# Aura Power v2.2 Helm Values
 # Architecture: Server (API+Panel) + Controller (Reconciler/Worker)
 
 # -- Global settings
-global:
-  namespace: ""  # defaults to release namespace
-
 nameOverride: ""
 fullnameOverride: ""
 imagePullSecrets: []
@@ -15,6 +12,8 @@ server:
   image:
     repository: ghcr.io/weauratech/aura-power-server
     tag: ""  # defaults to Chart.appVersion
+    # Pin an immutable image in production. When set, tag must stay empty.
+    digest: ""  # sha256:<64 lowercase hexadecimal characters>
     pullPolicy: IfNotPresent
   replicas: 1
   port: 8080
@@ -27,12 +26,15 @@ server:
       memory: 256Mi
   # Auth (mandatory in v2.0)
   auth:
-    jwtSecret: ""  # Required. Set via --set or Helm Secret
+    # Reuse a pre-created Secret in GitOps environments. It must contain the
+    # keys jwt-secret and admin-password.
+    existingSecret: ""
+    jwtSecret: ""  # generated once and retained when empty
     initialAdmin:
       username: "admin"
-      password: ""  # Required on first install
+      password: null  # generated once and retained when unset
     accessTokenTTL: "1h"
-    refreshTokenTTL: "7d"
+    refreshTokenTTL: "168h"
   # Persistence for SQLite
   persistence:
     enabled: true
@@ -78,6 +80,8 @@ controller:
   image:
     repository: ghcr.io/weauratech/aura-power-controller
     tag: ""  # defaults to Chart.appVersion
+    # Pin an immutable image in production. When set, tag must stay empty.
+    digest: ""  # sha256:<64 lowercase hexadecimal characters>
     pullPolicy: IfNotPresent
   replicas: 1  # singleton with leader election
   resources:
@@ -94,11 +98,20 @@ controller:
     reconciliationInterval: "30s"
     discoveryInterval: "60s"
     auditRetentionDays: 7
+    auditCleanupInterval: "6h"
+    # Keep the Go heap below the pod limit so the runtime can collect before
+    # Kubernetes terminates the process. Adjust together with resources.limits.memory.
+    goMemLimit: "192MiB"
+    # Optional Go profiler. The process rejects non-loopback bind addresses;
+    # access it with kubectl port-forward during an authorized diagnostic run.
+    pprofBindAddress: ""
     systemNamespaceBlocklist:
       - kube-system
       - kube-public
       - kube-node-lease
       - aura-system
+    # Additional label keys configured as Argo CD resource tracking IDs.
+    argoTrackingLabelKeys: []
   extraEnv: []
   podLabels: {}
   podAnnotations: {}
@@ -110,6 +123,30 @@ controller:
     name: ""
     annotations: {}
 
+# -- Kubernetes admission for invariants that cannot be expressed by the CRD
+# schema (for example IANA timezones and future override expiration).
+webhook:
+  enabled: true
+  port: 9443
+  failurePolicy: Fail
+  timeoutSeconds: 5
+  # For deterministic GitOps rendering, provide a TLS Secret containing
+  # tls.crt/tls.key and the matching base64-encoded CA certificate here.
+  existingSecret: ""
+  caBundle: ""
+  certificate:
+    # The chart creates and retains a release-scoped self-signed certificate
+    # across upgrades. Set certManager.enabled for managed rotation.
+    durationDays: 3650
+  certManager:
+    enabled: false
+    duration: 2160h
+    renewBefore: 360h
+    issuerRef:
+      name: ""
+      kind: ClusterIssuer
+      group: cert-manager.io
+
 # -- RBAC
 rbac:
   create: true
@@ -120,8 +157,20 @@ serviceMonitor:
   interval: 30s
   namespace: ""
 
+# -- Optional Prometheus alerts for controller memory pressure.
+prometheusRule:
+  enabled: false
+  labels: {}
+  heapLimitRatio: 0.85
+  workingSetLimitRatio: 0.85
+  for: 10m
+
 # -- NetworkPolicies
 networkPolicy:
   enabled: false
   # server allows ingress from anywhere on port 8080
   # controller allows ingress only from monitoring namespace on port 8080
+  # Add non-standard provider ports used by the server.
+  additionalServerEgressPorts: []
+  # Add non-standard notification webhook ports used by the controller.
+  additionalControllerEgressPorts: []

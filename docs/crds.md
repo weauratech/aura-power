@@ -21,6 +21,7 @@ Represents a workload under Aura Power management. Created automatically by the 
 | Field | Type | Description |
 |-------|------|-------------|
 | `status.observedState.replicas` | int32 | Current replica count |
+| `status.observedState.activeJobs` | int32 | Jobs already started by a CronJob; suspension does not stop them |
 | `status.observedState.powerState` | string | `on` or `off` |
 | `status.desiredState` | string | Effective desired state (`on`, `off`, or empty) |
 | `status.managed` | bool | At least one policy/override governs this target |

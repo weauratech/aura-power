@@ -1,15 +1,27 @@
 #!/usr/bin/env bash
 # Aura Power — API Smoke Tests
-# Usage: ./scripts/smoke-test.sh [BASE_URL] [ADMIN_USER] [ADMIN_PASS]
+# Usage: AURA_POWER_SMOKE_ALLOW_MUTATION=true ./scripts/smoke-test.sh BASE_URL ADMIN_USER ADMIN_PASS
 #
 # Runs 35 API endpoint tests against a live Aura Power instance.
 # All test resources use the "smoke-test-" prefix and are cleaned up.
 
 set -euo pipefail
 
-BASE_URL="${1:-https://power.int.weaura.tech}"
-ADMIN_USER="${2:-admin}"
-ADMIN_PASS="${3:-admin123}"
+: "${1:?BASE_URL is required; there is no production default}"
+: "${2:?ADMIN_USER is required}"
+: "${3:?ADMIN_PASS is required}"
+: "${AURA_POWER_SMOKE_ALLOW_MUTATION:?set AURA_POWER_SMOKE_ALLOW_MUTATION=true}"
+[[ "$AURA_POWER_SMOKE_ALLOW_MUTATION" == "true" ]] || {
+  echo "Refusing mutating smoke tests without explicit acknowledgement" >&2
+  exit 2
+}
+BASE_URL="$1"
+ADMIN_USER="$2"
+ADMIN_PASS="$3"
+case "$BASE_URL" in
+  http://127.0.0.1:*|http://localhost:*|http://\[::1\]:*) ;;
+  *) echo "Refusing legacy smoke suite: isolated loopback servers only" >&2; exit 2 ;;
+esac
 
 PASS=0
 FAIL=0
@@ -26,7 +38,7 @@ log_fail() { FAIL=$((FAIL + 1)); ERRORS="${ERRORS}\n  ✗ $1: $2"; echo -e "  ${
 
 # Helper: HTTP request with cookie jar
 COOKIE_JAR=$(mktemp)
-trap "rm -f $COOKIE_JAR" EXIT
+trap 'rm -f "$COOKIE_JAR"' EXIT
 
 request() {
   local method="$1" path="$2" body="${3:-}"
@@ -41,9 +53,6 @@ request() {
 
 get_status() { echo "$1" | tail -1; }
 get_body() { echo "$1" | sed '$d'; }
-
-# Small delay between requests to avoid gateway rate limits
-delay() { sleep 0.3; }
 
 echo ""
 echo -e "${YELLOW}═══════════════════════════════════════════════════${NC}"
@@ -76,7 +85,8 @@ fi
 echo ""
 echo -e "${YELLOW}▸ Authentication${NC}"
 
-resp=$(request POST /api/v1/auth/login "{\"username\":\"$ADMIN_USER\",\"password\":\"$ADMIN_PASS\"}")
+login_payload=$(jq -nc --arg username "$ADMIN_USER" --arg password "$ADMIN_PASS" '{username:$username,password:$password}')
+resp=$(request POST /api/v1/auth/login "$login_payload")
 status=$(get_status "$resp")
 if [ "$status" = "200" ]; then log_pass "A4 POST /auth/login (valid) → 200"; else log_fail "A4 POST /auth/login" "got $status"; fi
 
@@ -85,7 +95,7 @@ status=$(get_status "$resp")
 if [ "$status" = "401" ]; then log_pass "A5 POST /auth/login (invalid) → 401"; else log_fail "A5 POST /auth/login invalid" "got $status"; fi
 
 # Re-login to ensure cookie is set
-request POST /api/v1/auth/login "{\"username\":\"$ADMIN_USER\",\"password\":\"$ADMIN_PASS\"}" > /dev/null
+request POST /api/v1/auth/login "$login_payload" > /dev/null
 
 resp=$(request GET /api/v1/auth/me)
 status=$(get_status "$resp")

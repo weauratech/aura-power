@@ -18,8 +18,9 @@ spec:
         {{- with .Values.server.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-      {{- with .Values.server.podAnnotations }}
       annotations:
+        checksum/auth-values: {{ printf "%s|%s|%s" .Values.server.auth.existingSecret .Values.server.auth.jwtSecret (default "" .Values.server.auth.initialAdmin.password) | sha256sum }}
+      {{- with .Values.server.podAnnotations }}
         {{- toYaml . | nindent 8 }}
       {{- end }}
     spec:
@@ -36,7 +37,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: server
-          image: "{{ .Values.server.image.repository }}:{{ .Values.server.image.tag | default .Chart.AppVersion }}"
+          image: {{ include "aura-power.image" (dict "root" . "image" .Values.server.image) | quote }}
           imagePullPolicy: {{ .Values.server.image.pullPolicy }}
           securityContext:
             allowPrivilegeEscalation: false
@@ -54,19 +55,23 @@ spec:
             - name: JWT_SECRET
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "aura-power.server.fullname" . }}-secret
+                  name: {{ .Values.server.auth.existingSecret | default (printf "%s-secret" (include "aura-power.server.fullname" .)) }}
                   key: jwt-secret
             - name: AUTH_DB_PATH
               value: "/data/aura-power.db"
             - name: ADMIN_USERNAME
               value: {{ .Values.server.auth.initialAdmin.username | quote }}
-            {{- if .Values.server.auth.initialAdmin.password }}
             - name: ADMIN_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "aura-power.server.fullname" . }}-secret
+                  name: {{ .Values.server.auth.existingSecret | default (printf "%s-secret" (include "aura-power.server.fullname" .)) }}
                   key: admin-password
-            {{- end }}
+            - name: ACCESS_TOKEN_TTL
+              value: {{ .Values.server.auth.accessTokenTTL | quote }}
+            - name: REFRESH_TOKEN_TTL
+              value: {{ .Values.server.auth.refreshTokenTTL | quote }}
+            - name: CONTROL_NAMESPACE
+              value: {{ .Release.Namespace | quote }}
             {{- if .Values.server.prometheus.url }}
             - name: PROMETHEUS_URL
               value: {{ .Values.server.prometheus.url | quote }}
@@ -100,6 +105,10 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {}
+        {{- if not .Values.server.persistence.enabled }}
+        - name: data
+          emptyDir: {}
+        {{- end }}
       {{- with .Values.server.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

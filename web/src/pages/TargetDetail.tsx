@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import Card from '@mui/material/Card';
@@ -29,12 +29,16 @@ function mapState(status: { observedState: { powerState: string }; blocked: bool
 
 export function TargetDetail() {
   const { namespace = '', name = '' } = useParams();
+  const [searchParams] = useSearchParams();
+  const kind = searchParams.get('kind') || undefined;
+  const uid = searchParams.get('uid') || undefined;
   const { data: targetsData } = useTargets(namespace);
-  const { isLoading } = useExplainTarget(namespace, name);
+  const { isLoading } = useExplainTarget(namespace, name, kind, uid);
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   const target = targetsData?.targets?.find(
-    (t) => t.spec.targetRef.name === name && t.spec.targetRef.namespace === namespace
+    (t) => t.spec.targetRef.name === name && t.spec.targetRef.namespace === namespace &&
+      (!kind || t.spec.targetRef.kind === kind) && (!uid || t.spec.targetRef.uid === uid)
   );
 
   if (isLoading) return <Skeleton variant="rounded" height={400} />;
@@ -82,6 +86,12 @@ export function TargetDetail() {
                     <TableCell><Typography variant="body2" color="text.secondary">Replicas</Typography></TableCell>
                     <TableCell><Typography variant="code">{target.status.observedState.replicas}</Typography></TableCell>
                   </TableRow>
+                  {target.spec.targetRef.kind === 'CronJob' && (
+                    <TableRow>
+                      <TableCell><Typography variant="body2" color="text.secondary">Active Jobs</Typography></TableCell>
+                      <TableCell><Typography variant="code">{target.status.observedState.activeJobs ?? 0}</Typography></TableCell>
+                    </TableRow>
+                  )}
                   <TableRow>
                     <TableCell><Typography variant="body2" color="text.secondary">Managed</Typography></TableCell>
                     <TableCell>{target.status.managed ? <Chip label="Yes" size="small" color="success" /> : <Chip label="No" size="small" />}</TableCell>
@@ -182,7 +192,7 @@ export function TargetDetail() {
       <ScheduleDrawer
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
-        prefill={{ namespaces: [namespace], workloadNames: [`${namespace}/${name}`] }}
+        prefill={{ targetRefs: [target.spec.targetRef] }}
       />
     </Box>
   );

@@ -1,14 +1,20 @@
-FROM golang:1.26-alpine AS backend
+FROM golang:1.26-alpine@sha256:ce864e7223ac17b1775e6fd0b4c0db580c2eb50e7953a427916379e4b92a1628 AS backend
+ARG VERSION=dev
+ARG COMMIT=unknown
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /aura-power-controller ./cmd/controller/
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT}" -o /aura-power-controller ./cmd/controller/
 
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
+ARG VERSION=dev
+ARG COMMIT=unknown
 LABEL org.opencontainers.image.source="https://github.com/weauratech/aura-power"
 LABEL org.opencontainers.image.description="Aura Power Controller - Kubernetes workload reconciler and discovery engine"
 LABEL org.opencontainers.image.licenses="Apache-2.0"
+LABEL org.opencontainers.image.version="${VERSION}"
+LABEL org.opencontainers.image.revision="${COMMIT}"
 COPY --from=backend /aura-power-controller /aura-power-controller
 USER 65534:65534
 EXPOSE 8081

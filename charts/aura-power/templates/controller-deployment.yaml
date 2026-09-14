@@ -35,7 +35,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: controller
-          image: "{{ .Values.controller.image.repository }}:{{ .Values.controller.image.tag | default .Chart.AppVersion }}"
+          image: {{ include "aura-power.image" (dict "root" . "image" .Values.controller.image) | quote }}
           imagePullPolicy: {{ .Values.controller.image.pullPolicy }}
           securityContext:
             allowPrivilegeEscalation: false
@@ -50,13 +50,44 @@ spec:
             - name: metrics
               containerPort: 8080
               protocol: TCP
+            {{- if .Values.webhook.enabled }}
+            - name: webhook
+              containerPort: {{ .Values.webhook.port }}
+              protocol: TCP
+            {{- end }}
           env:
-            {{- if .Values.controller.leaderElection.enabled }}
+            - name: LEADER_ELECTION_ENABLED
+              value: {{ .Values.controller.leaderElection.enabled | quote }}
             - name: LEADER_ELECTION_ID
               value: {{ .Values.controller.leaderElection.id | quote }}
-            {{- end }}
+            - name: CONTROL_NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+            - name: SYSTEM_NAMESPACES
+              value: {{ append .Values.controller.config.systemNamespaceBlocklist .Release.Namespace | uniq | join "," | quote }}
+            - name: ARGO_TRACKING_LABEL_KEYS
+              value: {{ .Values.controller.config.argoTrackingLabelKeys | join "," | quote }}
             - name: AUDIT_RETENTION_DAYS
               value: {{ .Values.controller.config.auditRetentionDays | default 7 | quote }}
+            - name: WEBHOOK_ENABLED
+              value: {{ .Values.webhook.enabled | quote }}
+            {{- if .Values.webhook.enabled }}
+            - name: WEBHOOK_CERT_DIR
+              value: /var/run/aura-power/webhook-certs
+            - name: WEBHOOK_PORT
+              value: {{ .Values.webhook.port | quote }}
+            {{- end }}
+            - name: AUDIT_CLEANUP_INTERVAL
+              value: {{ .Values.controller.config.auditCleanupInterval | default "6h" | quote }}
+            - name: RECONCILIATION_INTERVAL
+              value: {{ .Values.controller.config.reconciliationInterval | default "30s" | quote }}
+            - name: DISCOVERY_INTERVAL
+              value: {{ .Values.controller.config.discoveryInterval | default "60s" | quote }}
+            - name: GOMEMLIMIT
+              value: {{ .Values.controller.config.goMemLimit | default "192MiB" | quote }}
+            {{- if .Values.controller.config.pprofBindAddress }}
+            - name: PPROF_BIND_ADDRESS
+              value: {{ .Values.controller.config.pprofBindAddress | quote }}
+            {{- end }}
             {{- with .Values.controller.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -68,7 +99,7 @@ spec:
             periodSeconds: 20
           readinessProbe:
             httpGet:
-              path: /readyz
+              path: /readyz/notification-suppression-v1
               port: health
             initialDelaySeconds: 5
             periodSeconds: 10
@@ -77,9 +108,19 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            {{- if .Values.webhook.enabled }}
+            - name: webhook-certs
+              mountPath: /var/run/aura-power/webhook-certs
+              readOnly: true
+            {{- end }}
       volumes:
         - name: tmp
           emptyDir: {}
+        {{- if .Values.webhook.enabled }}
+        - name: webhook-certs
+          secret:
+            secretName: {{ include "aura-power.webhook.secretName" . }}
+        {{- end }}
       {{- with .Values.controller.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

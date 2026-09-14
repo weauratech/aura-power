@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "server": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "replicas": { "type": "integer", "const": 1 },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "image": {
+          "type": "object",
+          "properties": {
+            "repository": { "type": "string", "minLength": 1 },
+            "tag": { "type": "string" },
+            "digest": { "type": "string", "pattern": "^$|^sha256:[a-f0-9]{64}$" },
+            "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+          },
+          "allOf": [
+            { "not": { "properties": { "tag": { "minLength": 1 }, "digest": { "minLength": 1 } }, "required": ["tag", "digest"] } }
+          ]
+        },
+        "auth": {
+          "type": "object",
+          "properties": {
+            "existingSecret": { "type": "string" },
+            "jwtSecret": { "type": "string" },
+            "initialAdmin": {
+              "type": "object",
+              "properties": {
+                "username": { "type": "string", "minLength": 1 },
+                "password": { "type": ["string", "null"] }
+              }
+            },
+            "accessTokenTTL": { "type": "string", "pattern": "^[1-9][0-9]*(ns|us|µs|ms|s|m|h)$" },
+            "refreshTokenTTL": { "type": "string", "pattern": "^[1-9][0-9]*(ns|us|µs|ms|s|m|h)$" }
+          }
+        }
+      }
+    },
+    "controller": {
+      "type": "object",
+      "properties": {
+        "replicas": { "type": "integer", "minimum": 1 },
+        "image": {
+          "type": "object",
+          "properties": {
+            "repository": { "type": "string", "minLength": 1 },
+            "tag": { "type": "string" },
+            "digest": { "type": "string", "pattern": "^$|^sha256:[a-f0-9]{64}$" },
+            "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+          },
+          "allOf": [
+            { "not": { "properties": { "tag": { "minLength": 1 }, "digest": { "minLength": 1 } }, "required": ["tag", "digest"] } }
+          ]
+        },
+        "leaderElection": {
+          "type": "object",
+          "properties": { "enabled": { "type": "boolean" }, "id": { "type": "string", "minLength": 1 } }
+        },
+        "config": {
+          "type": "object",
+          "properties": {
+            "argoTrackingLabelKeys": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+            "goMemLimit": { "type": "string", "minLength": 1 },
+            "pprofBindAddress": { "type": "string", "pattern": "^$|^(localhost|127\\.0\\.0\\.1|\\[::1\\]):[1-9][0-9]{0,4}$" }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "replicas": { "minimum": 2 } }, "required": ["replicas"] },
+          "then": {
+            "properties": {
+              "leaderElection": {
+                "properties": { "enabled": { "const": true } },
+                "required": ["enabled"]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "webhook": {
+      "type": "object",
+      "properties": {
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "failurePolicy": { "type": "string", "enum": ["Fail", "Ignore"] },
+        "timeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 30 },
+        "existingSecret": { "type": "string" },
+        "caBundle": { "type": "string" }
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "additionalServerEgressPorts": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 1, "maximum": 65535 },
+          "uniqueItems": true
+        },
+        "additionalControllerEgressPorts": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 1, "maximum": 65535 },
+          "uniqueItems": true
+        }
+      }
+    },
+    "prometheusRule": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "labels": { "type": "object", "additionalProperties": { "type": "string" } },
+        "heapLimitRatio": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+        "workingSetLimitRatio": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+        "for": { "type": "string", "pattern": "^[1-9][0-9]*(s|m|h|d|w)$" }
+      }
+    }
+  }
+}

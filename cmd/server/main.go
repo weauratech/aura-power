@@ -31,6 +31,11 @@ var panelAssets embed.FS
 
 var scheme = runtime.NewScheme()
 
+var (
+	version = "dev"
+	commit  = "unknown"
+)
+
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(v1alpha1.AddToScheme(scheme))
@@ -45,7 +50,7 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel}))
 	slog.SetDefault(logger)
 
-	slog.Info("starting aura-power-server", "version", "2.0.0")
+	slog.Info("starting aura-power-server", "version", version, "commit", commit)
 
 	// Context with graceful shutdown (must be created early for cache)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -67,6 +72,9 @@ func main() {
 	jwtSecret := getEnvOrDefault("JWT_SECRET", "")
 	adminUser := getEnvOrDefault("ADMIN_USERNAME", "admin")
 	adminPass := getEnvOrDefault("ADMIN_PASSWORD", "")
+	accessTokenTTL := durationEnv("ACCESS_TOKEN_TTL", time.Hour)
+	refreshTokenTTL := durationEnv("REFRESH_TOKEN_TTL", 7*24*time.Hour)
+	controlNamespace := getEnvOrDefault("CONTROL_NAMESPACE", "aura-system")
 
 	if jwtSecret == "" {
 		slog.Error("JWT_SECRET is required")
@@ -89,8 +97,9 @@ func main() {
 
 	// Create cached client (informer-based reads, direct writes)
 	cachedClient, err := kubernetes.NewCachedClient(ctx, kubernetes.CachedClientConfig{
-		RestConfig: config,
-		Scheme:     scheme,
+		RestConfig:       config,
+		Scheme:           scheme,
+		ControlNamespace: controlNamespace,
 	})
 	if err != nil {
 		slog.Error("failed to create cached k8s client", "error", err)
@@ -111,8 +120,8 @@ func main() {
 	// JWT service
 	jwtService := auth.NewJWTService(auth.JWTConfig{
 		SecretKey:       jwtSecret,
-		AccessTokenTTL:  time.Hour,
-		RefreshTokenTTL: 7 * 24 * time.Hour,
+		AccessTokenTTL:  accessTokenTTL,
+		RefreshTokenTTL: refreshTokenTTL,
 	})
 
 	// Create initial admin if configured (ensure role is always admin on startup)
@@ -137,10 +146,11 @@ func main() {
 
 	// Create API server
 	apiServer := api.NewServer(k8sClient, nil, api.ServerConfig{
-		Port:            port,
-		GuardrailConfig: guardrailConfig,
-		CostConfig:      costConfig,
-		PanelAssets:     panelAssets,
+		Port:             port,
+		GuardrailConfig:  guardrailConfig,
+		CostConfig:       costConfig,
+		PanelAssets:      panelAssets,
+		ControlNamespace: controlNamespace,
 	})
 
 	// Register auth (mandatory in v2.0)
@@ -185,4 +195,14 @@ func getEnvOrDefault(key, defaultVal string) string {
 		return v
 	}
 	return defaultVal
+}
+
+func durationEnv(key string, fallback time.Duration) time.Duration {
+	if value := os.Getenv(key); value != "" {
+		if parsed, err := time.ParseDuration(value); err == nil && parsed > 0 {
+			return parsed
+		}
+		slog.Warn("invalid duration; using default", "environmentVariable", key, "value", value, "default", fallback)
+	}
+	return fallback
 }

@@ -23,6 +23,10 @@ spec:
             properties:
               targetRef:
                 properties:
+                  apiVersion:
+                    type: string
+                  cluster:
+                    type: string
                   kind:
                     enum:
                     - Deployment
@@ -33,9 +37,69 @@ spec:
                     type: string
                   namespace:
                     type: string
+                  uid:
+                    type: string
                 type: object
             type: object
           status:
+            properties:
+              action:
+                description: Durable state of the current power transition.
+                properties:
+                  attemptedAt:
+                    format: date-time
+                    type: string
+                  auditAction:
+                    type: string
+                  auditEventID:
+                    type: string
+                  auditPhase:
+                    enum:
+                    - Pending
+                    - Recorded
+                    type: string
+                  auditRuleName:
+                    type: string
+                  notificationSuppressed:
+                    type: boolean
+                  notificationSuppressionSource:
+                    enum:
+                    - namespace-label
+                    type: string
+                  notificationSuppressionNamespaceUID:
+                    type: string
+                  completedAt:
+                    format: date-time
+                    type: string
+                  decisionKey:
+                    type: string
+                  desiredState:
+                    enum:
+                    - "on"
+                    - "off"
+                    type: string
+                  message:
+                    type: string
+                  phase:
+                    enum:
+                    - InProgress
+                    - Applied
+                    - Converged
+                    - Contended
+                    - Failed
+                    type: string
+                  retryToken:
+                    type: string
+                required:
+                - decisionKey
+                - desiredState
+                - phase
+                type: object
+                x-kubernetes-validations:
+                - message: suppressed notifications require a namespace-label source and namespace UID
+                  rule: '!has(self.notificationSuppressed) || !self.notificationSuppressed || (has(self.notificationSuppressionSource) && self.notificationSuppressionSource == ''namespace-label'' && has(self.notificationSuppressionNamespaceUID) && self.notificationSuppressionNamespaceUID != '''')'
+                - message: notification suppression source requires a suppressed decision
+                  rule: '!has(self.notificationSuppressionSource) || (has(self.notificationSuppressed) && self.notificationSuppressed)'
             type: object
             x-kubernetes-preserve-unknown-fields: true
         type: object

@@ -29,17 +29,19 @@ type User struct {
 
 // PendingChange represents a change awaiting approval.
 type PendingChange struct {
-	ID          string    `json:"id"`
-	UserID      string    `json:"userId"`
-	Username    string    `json:"username"`
-	Action      string    `json:"action"` // create, update, delete
-	ResourceKind string   `json:"resourceKind"` // PowerPolicy, PowerOverride
-	ResourceName string   `json:"resourceName"`
-	Payload     string    `json:"payload"` // JSON of the resource spec
-	Status      string    `json:"status"` // pending, approved, rejected
-	CreatedAt   time.Time `json:"createdAt"`
-	ReviewedBy  string    `json:"reviewedBy,omitempty"`
-	ReviewedAt  *time.Time `json:"reviewedAt,omitempty"`
+	ID                string     `json:"id"`
+	UserID            string     `json:"userId"`
+	Username          string     `json:"username"`
+	Action            string     `json:"action"`       // create, update, delete
+	ResourceKind      string     `json:"resourceKind"` // PowerPolicy, PowerOverride
+	ResourceNamespace string     `json:"resourceNamespace"`
+	ResourceName      string     `json:"resourceName"`
+	ResourceVersion   string     `json:"resourceVersion,omitempty"`
+	Payload           string     `json:"payload"` // JSON of the resource spec
+	Status            string     `json:"status"`  // pending, approving, rejecting, approved, rejected
+	CreatedAt         time.Time  `json:"createdAt"`
+	ReviewedBy        string     `json:"reviewedBy,omitempty"`
+	ReviewedAt        *time.Time `json:"reviewedAt,omitempty"`
 }
 
 // Store defines the interface for user/auth storage.
@@ -59,6 +61,9 @@ type Store interface {
 	// Pending Changes
 	CreatePendingChange(change PendingChange) (*PendingChange, error)
 	ListPendingChanges() ([]PendingChange, error)
+	BeginPendingDecision(id, reviewerID, decision string) (*PendingChange, error)
+	CancelPendingDecision(id, reviewerID string) error
+	FinalizePendingDecision(id, reviewerID, decision string) (*PendingChange, error)
 	ApprovePendingChange(id, reviewerID string) (*PendingChange, error)
 	RejectPendingChange(id, reviewerID string) (*PendingChange, error)
 	GetPendingChange(id string) (*PendingChange, error)
@@ -90,3 +95,11 @@ var ErrUserExists = errors.New("username already exists")
 
 // ErrPendingNotFound is returned when a pending change is not found.
 var ErrPendingNotFound = errors.New("pending change not found")
+
+// ErrInvalidPendingChange is returned when a requested operation cannot be
+// represented safely by the approval workflow.
+var ErrInvalidPendingChange = errors.New("invalid pending change")
+
+// ErrPendingDecisionConflict indicates that another or opposite durable
+// decision already owns the pending change.
+var ErrPendingDecisionConflict = errors.New("pending change decision conflict")

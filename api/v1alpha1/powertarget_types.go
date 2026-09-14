@@ -12,6 +12,14 @@ type PowerTargetSpec struct {
 
 // TargetReference uniquely identifies a workload in the cluster.
 type TargetReference struct {
+	// Cluster identifies the source cluster when targets are aggregated.
+	// +optional
+	Cluster string `json:"cluster,omitempty"`
+
+	// APIVersion identifies the Kubernetes API group and version.
+	// +optional
+	APIVersion string `json:"apiVersion,omitempty"`
+
 	// Namespace of the workload.
 	Namespace string `json:"namespace"`
 
@@ -21,10 +29,22 @@ type TargetReference struct {
 	// Kind of the workload (Deployment, StatefulSet, CronJob).
 	// +kubebuilder:validation:Enum=Deployment;StatefulSet;CronJob
 	Kind string `json:"kind"`
+
+	// UID binds the target to one concrete Kubernetes object incarnation.
+	// +optional
+	UID string `json:"uid,omitempty"`
 }
 
 // PowerTargetStatus defines the observed and computed state.
 type PowerTargetStatus struct {
+	// WorkloadLabels is the workload label snapshot used for policy selection.
+	// +optional
+	WorkloadLabels map[string]string `json:"workloadLabels,omitempty"`
+
+	// NamespaceLabels is the namespace label snapshot used for policy selection.
+	// +optional
+	NamespaceLabels map[string]string `json:"namespaceLabels,omitempty"`
+
 	// ObservedState is the current actual state of the workload.
 	ObservedState ObservedStateSpec `json:"observedState,omitempty"`
 
@@ -77,21 +97,98 @@ type PowerTargetStatus struct {
 	// +optional
 	ConsecutiveFailures int `json:"consecutiveFailures,omitempty"`
 
+	// Action records the durable state of the current power transition. The
+	// controller persists InProgress before touching the workload so a repeated
+	// reconcile never blindly reapplies a successful or uncertain mutation.
+	// +optional
+	Action *PowerActionStatus `json:"action,omitempty"`
+
 	// Conditions represent the latest available observations.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
+// PowerActionStatus records one desired-state transition.
+// +kubebuilder:validation:XValidation:rule="!has(self.notificationSuppressed) || !self.notificationSuppressed || (has(self.notificationSuppressionSource) && self.notificationSuppressionSource == 'namespace-label' && has(self.notificationSuppressionNamespaceUID) && self.notificationSuppressionNamespaceUID != '')",message="suppressed notifications require a namespace-label source and namespace UID"
+// +kubebuilder:validation:XValidation:rule="!has(self.notificationSuppressionSource) || (has(self.notificationSuppressed) && self.notificationSuppressed)",message="notification suppression source requires a suppressed decision"
+type PowerActionStatus struct {
+	// DesiredState is the state this operation is trying to establish.
+	// +kubebuilder:validation:Enum=on;off
+	DesiredState string `json:"desiredState"`
+
+	// DecisionKey identifies the winning rule revision that requested the state.
+	DecisionKey string `json:"decisionKey"`
+
+	// Phase is the latest durable operation phase.
+	// +kubebuilder:validation:Enum=InProgress;Applied;Converged;Contended;Failed
+	Phase string `json:"phase"`
+
+	// AttemptedAt is set before mutating the workload. It is absent when the
+	// desired state converged without an Aura write.
+	// +optional
+	AttemptedAt *metav1.Time `json:"attemptedAt,omitempty"`
+
+	// CompletedAt is set after a successful mutation or convergence observation.
+	// +optional
+	CompletedAt *metav1.Time `json:"completedAt,omitempty"`
+
+	// Message explains failures and external-controller contention.
+	// +optional
+	Message string `json:"message,omitempty"`
+
+	// RetryToken is the value of power.aura.sh/retry-action accepted for this attempt.
+	// Changing that annotation explicitly authorizes one new attempt.
+	// +optional
+	RetryToken string `json:"retryToken,omitempty"`
+
+	// AuditEventID is the deterministic PowerAuditEvent name for this mutation.
+	// +optional
+	AuditEventID string `json:"auditEventID,omitempty"`
+
+	// AuditPhase is empty while the mutation outcome is unresolved, Pending
+	// after acceptance, and Recorded once the audit event exists.
+	// +optional
+	// +kubebuilder:validation:Enum=Pending;Recorded
+	AuditPhase string `json:"auditPhase,omitempty"`
+
+	// AuditAction and AuditRuleName preserve the accepted decision semantics so
+	// a later reconciliation does not attribute it to a newer winning rule.
+	// +optional
+	AuditAction string `json:"auditAction,omitempty"`
+	// +optional
+	AuditRuleName string `json:"auditRuleName,omitempty"`
+
+	// NotificationSuppressed is captured from the live namespace before the
+	// workload mutation and remains fixed for every retry of this action.
+	// +optional
+	NotificationSuppressed *bool `json:"notificationSuppressed,omitempty"`
+
+	// NotificationSuppressionSource identifies the authority used for a true
+	// decision. The only supported authority is the live Namespace label.
+	// +optional
+	// +kubebuilder:validation:Enum=namespace-label
+	NotificationSuppressionSource string `json:"notificationSuppressionSource,omitempty"`
+
+	// NotificationSuppressionNamespaceUID binds the decision to the Namespace
+	// incarnation read directly from the Kubernetes API.
+	// +optional
+	NotificationSuppressionNamespaceUID string `json:"notificationSuppressionNamespaceUID,omitempty"`
+}
+
 // ObservedStateSpec captures the workload's current state.
 type ObservedStateSpec struct {
-	Replicas   int32  `json:"replicas"`
-	Suspended  bool   `json:"suspended,omitempty"`
+	Replicas  int32 `json:"replicas"`
+	Suspended bool  `json:"suspended,omitempty"`
+	// ActiveJobs reports Jobs already started by a CronJob. Suspending the
+	// CronJob prevents future scheduling but does not stop these Jobs.
+	// +optional
+	ActiveJobs int32  `json:"activeJobs,omitempty"`
 	PowerState string `json:"powerState,omitempty"` // "on" or "off"
 }
 
 // RuleReference identifies a rule that participated in a decision.
 type RuleReference struct {
-	Kind        string `json:"kind"`                  // PowerPolicy or PowerOverride
+	Kind        string `json:"kind"` // PowerPolicy or PowerOverride
 	Name        string `json:"name"`
 	Namespace   string `json:"namespace"`
 	Priority    int32  `json:"priority"`
@@ -112,6 +209,10 @@ type SnapshotSpec struct {
 	Suspended    *bool        `json:"suspended,omitempty"`
 	Resources    ResourceSpec `json:"resources,omitempty"`
 	CapturedAt   *metav1.Time `json:"capturedAt,omitempty"`
+	// ResourceVersion is the workload revision observed during capture.
+	// Power-down is conditional on this value to prevent stale restoration.
+	// +optional
+	ResourceVersion string `json:"resourceVersion,omitempty"`
 }
 
 // ResourceSpec captures resource requests for savings calculation.
@@ -122,15 +223,15 @@ type ResourceSpec struct {
 
 // OwnershipSpec describes external ownership of the workload.
 type OwnershipSpec struct {
-	Type    string `json:"type"`    // ArgoCD, Flux, Helm, HPA
+	Type    string `json:"type"` // ArgoCD, Flux, Helm, HPA
 	OptedIn bool   `json:"optedIn"`
 }
 
 // SavingsSpec holds accumulated savings metrics.
 type SavingsSpec struct {
-	CPUHoursSaved    float64 `json:"cpuHoursSaved,omitempty"`
-	MemoryGiBHours   float64 `json:"memoryGiBHoursSaved,omitempty"`
-	EstimatedCost    float64 `json:"estimatedCost,omitempty"`
+	CPUHoursSaved  float64 `json:"cpuHoursSaved,omitempty"`
+	MemoryGiBHours float64 `json:"memoryGiBHoursSaved,omitempty"`
+	EstimatedCost  float64 `json:"estimatedCost,omitempty"`
 }
 
 // +kubebuilder:object:root=true

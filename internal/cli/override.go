@@ -3,7 +3,6 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"strings"
 	"time"
 
@@ -27,6 +26,8 @@ func newOverrideCreateCmd() *cobra.Command {
 		reason   string
 		ref      string
 		priority int32
+		kind     string
+		uid      string
 	)
 
 	cmd := &cobra.Command{
@@ -34,7 +35,7 @@ func newOverrideCreateCmd() *cobra.Command {
 		Short: "Create a temporary power override",
 		Long:  "Create a temporary override to power on/off a workload with mandatory expiration.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runOverrideCreate(target, state, duration, reason, ref, priority)
+			return runOverrideCreate(target, kind, uid, state, duration, reason, ref, priority)
 		},
 	}
 
@@ -44,6 +45,8 @@ func newOverrideCreateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&reason, "reason", "", "Reason for the override")
 	cmd.Flags().StringVar(&ref, "reference", "", "External reference (ticket, incident)")
 	cmd.Flags().Int32Var(&priority, "priority", 100, "Override priority (default: 100)")
+	cmd.Flags().StringVar(&kind, "kind", "", "Workload kind when --target is namespace/name")
+	cmd.Flags().StringVar(&uid, "uid", "", "Optional Kubernetes UID for an exact object incarnation")
 
 	cmd.MarkFlagRequired("target")
 	cmd.MarkFlagRequired("state")
@@ -53,7 +56,7 @@ func newOverrideCreateCmd() *cobra.Command {
 	return cmd
 }
 
-func runOverrideCreate(target, state, durationStr, reason, ref string, priority int32) error {
+func runOverrideCreate(target, kind, uid, state, durationStr, reason, ref string, priority int32) error {
 	serverURL, err := getServerURL()
 	if err != nil {
 		return err
@@ -62,12 +65,20 @@ func runOverrideCreate(target, state, durationStr, reason, ref string, priority 
 	// Parse target
 	parts := strings.SplitN(target, "/", 2)
 	var namespaces []string
-	var workloadNames []string
+	var targetRefs []overrideTargetReference
 	if len(parts) == 2 {
-		namespaces = []string{parts[0]}
-		workloadNames = []string{parts[1]}
+		if kind == "" {
+			return fmt.Errorf("kind is required when target identifies a workload")
+		}
+		if !validWorkloadKind(kind) {
+			return fmt.Errorf("invalid workload kind %q", kind)
+		}
+		targetRefs = []overrideTargetReference{{Namespace: parts[0], Name: parts[1], Kind: kind, UID: uid}}
 	} else {
 		namespaces = []string{parts[0]}
+		if kind != "" || uid != "" {
+			return fmt.Errorf("kind and uid require a namespace/name target")
+		}
 	}
 
 	// Parse duration
@@ -82,47 +93,40 @@ func runOverrideCreate(target, state, durationStr, reason, ref string, priority 
 	}
 
 	expiresAt := time.Now().Add(dur).Format(time.RFC3339)
+	payload := overrideCreateRequest{}
+	payload.Metadata.GenerateName = "override-"
+	payload.Spec.Scope.Namespaces = namespaces
+	payload.Spec.Scope.TargetRefs = targetRefs
+	payload.Spec.State = state
+	payload.Spec.Priority = priority
+	payload.Spec.ExpiresAt = expiresAt
+	payload.Spec.Reason = reason
+	payload.Spec.Reference = ref
 
-	// Build JSON payload
-	payload := map[string]interface{}{
-		"metadata": map[string]interface{}{
-			"generateName": "override-",
-			"namespace":    "aura-system",
-		},
-		"spec": map[string]interface{}{
-			"scope": map[string]interface{}{
-				"namespaces":    namespaces,
-				"workloadNames": workloadNames,
-			},
-			"state":     state,
-			"priority":  priority,
-			"expiresAt": expiresAt,
-			"reason":    reason,
-			"reference": ref,
-		},
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("encode override: %w", err)
 	}
 
-	data, _ := json.Marshal(payload)
-
-	resp, err := authenticatedRequest("POST", serverURL+"/api/v1/overrides", strings.NewReader(string(data)))
+	resp, err := authenticatedRequestBytes("POST", serverURL+"/api/v1/overrides", data)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := requireStatus(resp, 201)
 	if err != nil {
-		return fmt.Errorf("failed to read response: %w", err)
+		return fmt.Errorf("failed to create override: %w", err)
 	}
 
-	if resp.StatusCode != 201 {
-		return fmt.Errorf("failed to create override (%d): %s", resp.StatusCode, string(body))
+	var result struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return fmt.Errorf("decode override response: %w", err)
 	}
 
-	var result map[string]interface{}
-	json.Unmarshal(body, &result)
-
-	fmt.Printf("Override created: %v\n", result["name"])
+	fmt.Printf("Override created: %s\n", result.Name)
 	fmt.Printf("  Target:    %s\n", target)
 	fmt.Printf("  State:     %s\n", state)
 	fmt.Printf("  Expires:   %s\n", expiresAt)
@@ -132,4 +136,33 @@ func runOverrideCreate(target, state, durationStr, reason, ref string, priority 
 	}
 
 	return nil
+}
+
+type overrideTargetReference struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	Kind      string `json:"kind"`
+	UID       string `json:"uid,omitempty"`
+}
+
+type overrideCreateRequest struct {
+	Metadata struct {
+		GenerateName string `json:"generateName"`
+		Namespace    string `json:"namespace,omitempty"`
+	} `json:"metadata"`
+	Spec struct {
+		Scope struct {
+			Namespaces []string                  `json:"namespaces,omitempty"`
+			TargetRefs []overrideTargetReference `json:"targetRefs,omitempty"`
+		} `json:"scope"`
+		State     string `json:"state"`
+		Priority  int32  `json:"priority"`
+		ExpiresAt string `json:"expiresAt"`
+		Reason    string `json:"reason"`
+		Reference string `json:"reference,omitempty"`
+	} `json:"spec"`
+}
+
+func validWorkloadKind(kind string) bool {
+	return kind == "Deployment" || kind == "StatefulSet" || kind == "CronJob"
 }

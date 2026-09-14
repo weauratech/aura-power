@@ -127,6 +127,9 @@ export function AuditLog() {
                           {ev.spec.target.namespace}/{ev.spec.target.name}
                         </Typography>
                         <Chip label={ev.spec.target.kind} size="small" variant="outlined" sx={{ height: 20, fontSize: 10 }} />
+                        {ev.spec.notificationSuppressed && (
+                          <Chip label="External notification suppressed" size="small" variant="outlined" color="warning" sx={{ height: 20, fontSize: 10 }} />
+                        )}
                       </Stack>
                       <Typography variant="body2" color="text.secondary">
                         {ev.spec.reason}

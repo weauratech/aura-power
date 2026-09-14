@@ -5,6 +5,51 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-09-14
+
+### Added
+- End-to-end acceptance layers for Go contracts, envtest, Kind, Helm upgrades,
+  browser journeys, CLI behavior, Argo CD coexistence, HPA ownership, failure
+  recovery, controller memory, and an isolated EKS fixture.
+- Durable two-phase approval decisions with resource-version preconditions and
+  audit correlation from request through execution.
+- Runtime version and commit identity in binaries, containers, and health data.
+- Namespace-owned notification suppression for controlled fixtures, with the
+  immutable decision exposed in action status, audit API, CSV, and the panel.
+- Signed multi-architecture images, reproducible Helm packages, per-platform
+  SPDX SBOMs, provenance attestations, and an immutable release manifest.
+
+### Changed
+- Controller discovery, reconciliation, API watches, admission, RBAC, and
+  notifications are scoped to the configured control namespace.
+- Workload identity includes namespace, kind, name, and UID. Snapshots are
+  persisted before mutation and restored with optimistic concurrency checks.
+- Argo CD and autoscaler coexistence fail closed unless current namespace and
+  workload annotations explicitly authorize Aura Power ownership.
+- Audit pagination, discovery priority, authentication input, request bodies,
+  and external-provider calls now have explicit bounds and timeouts.
+- Release promotion is serialized, monotonic, digest-verified, and publishes the
+  GitHub Release only after every artifact and attestation has been verified.
+
+### Fixed
+- Exact target selection across namespaces and workload kinds, including
+  homonyms, stale UIDs, opt-in and opt-out changes, and resource recreation.
+- Restore behavior for zero replicas, suspended CronJobs, missing snapshots,
+  retries, process interruption, leadership changes, and concurrent edits.
+- Approval authorization, lease ownership, expired-session behavior, refresh
+  request replay, logout, and user removal or role changes.
+- Preview and execution drift, false-positive UI assertions, double submission,
+  notification delivery reporting, and incomplete CLI exit/error contracts.
+
+### Upgrade notes
+- Apply the `v2.2.0` CRDs before upgrading the Helm release.
+- Keep the existing server Secret and PVC; do not regenerate the admin password
+  or SQLite state during upgrade.
+- Configure one control namespace per installation. A second controller must
+  not share targets or policies with an existing installation.
+- Review explicit opt-in annotations before Aura Power takes ownership from HPA,
+  KEDA, Argo CD, or another reconciler. See `docs/gitops.md`.
+
 ## [2.0.14] - 2026-08-02
 
 ### Added

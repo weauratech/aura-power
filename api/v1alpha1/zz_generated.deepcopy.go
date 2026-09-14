@@ -5,8 +5,8 @@
 package v1alpha1
 
 import (
-	runtime "k8s.io/apimachinery/pkg/runtime"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	runtime "k8s.io/apimachinery/pkg/runtime"
 )
 
 // Ensure unused imports are referenced.
@@ -22,14 +22,18 @@ func (in *PowerPolicy) DeepCopyInto(out *PowerPolicy) {
 }
 
 func (in *PowerPolicy) DeepCopy() *PowerPolicy {
-	if in == nil { return nil }
+	if in == nil {
+		return nil
+	}
 	out := new(PowerPolicy)
 	in.DeepCopyInto(out)
 	return out
 }
 
 func (in *PowerPolicy) DeepCopyObject() runtime.Object {
-	if c := in.DeepCopy(); c != nil { return c }
+	if c := in.DeepCopy(); c != nil {
+		return c
+	}
 	return nil
 }
 
@@ -40,19 +44,25 @@ func (in *PowerPolicyList) DeepCopyInto(out *PowerPolicyList) {
 	if in.Items != nil {
 		in, out := &in.Items, &out.Items
 		*out = make([]PowerPolicy, len(*in))
-		for i := range *in { (*in)[i].DeepCopyInto(&(*out)[i]) }
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
 	}
 }
 
 func (in *PowerPolicyList) DeepCopy() *PowerPolicyList {
-	if in == nil { return nil }
+	if in == nil {
+		return nil
+	}
 	out := new(PowerPolicyList)
 	in.DeepCopyInto(out)
 	return out
 }
 
 func (in *PowerPolicyList) DeepCopyObject() runtime.Object {
-	if c := in.DeepCopy(); c != nil { return c }
+	if c := in.DeepCopy(); c != nil {
+		return c
+	}
 	return nil
 }
 
@@ -67,7 +77,9 @@ func (in *PowerPolicyStatus) DeepCopyInto(out *PowerPolicyStatus) {
 	if in.Conditions != nil {
 		in, out := &in.Conditions, &out.Conditions
 		*out = make([]metav1.Condition, len(*in))
-		for i := range *in { (*in)[i].DeepCopyInto(&(*out)[i]) }
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
 	}
 	if in.NextTransition != nil {
 		in, out := &in.NextTransition, &out.NextTransition
@@ -85,14 +97,18 @@ func (in *PowerOverride) DeepCopyInto(out *PowerOverride) {
 }
 
 func (in *PowerOverride) DeepCopy() *PowerOverride {
-	if in == nil { return nil }
+	if in == nil {
+		return nil
+	}
 	out := new(PowerOverride)
 	in.DeepCopyInto(out)
 	return out
 }
 
 func (in *PowerOverride) DeepCopyObject() runtime.Object {
-	if c := in.DeepCopy(); c != nil { return c }
+	if c := in.DeepCopy(); c != nil {
+		return c
+	}
 	return nil
 }
 
@@ -103,19 +119,25 @@ func (in *PowerOverrideList) DeepCopyInto(out *PowerOverrideList) {
 	if in.Items != nil {
 		in, out := &in.Items, &out.Items
 		*out = make([]PowerOverride, len(*in))
-		for i := range *in { (*in)[i].DeepCopyInto(&(*out)[i]) }
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
 	}
 }
 
 func (in *PowerOverrideList) DeepCopy() *PowerOverrideList {
-	if in == nil { return nil }
+	if in == nil {
+		return nil
+	}
 	out := new(PowerOverrideList)
 	in.DeepCopyInto(out)
 	return out
 }
 
 func (in *PowerOverrideList) DeepCopyObject() runtime.Object {
-	if c := in.DeepCopy(); c != nil { return c }
+	if c := in.DeepCopy(); c != nil {
+		return c
+	}
 	return nil
 }
 
@@ -130,7 +152,9 @@ func (in *PowerOverrideStatus) DeepCopyInto(out *PowerOverrideStatus) {
 	if in.Conditions != nil {
 		in, out := &in.Conditions, &out.Conditions
 		*out = make([]metav1.Condition, len(*in))
-		for i := range *in { (*in)[i].DeepCopyInto(&(*out)[i]) }
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
 	}
 }
 
@@ -144,14 +168,18 @@ func (in *PowerTarget) DeepCopyInto(out *PowerTarget) {
 }
 
 func (in *PowerTarget) DeepCopy() *PowerTarget {
-	if in == nil { return nil }
+	if in == nil {
+		return nil
+	}
 	out := new(PowerTarget)
 	in.DeepCopyInto(out)
 	return out
 }
 
 func (in *PowerTarget) DeepCopyObject() runtime.Object {
-	if c := in.DeepCopy(); c != nil { return c }
+	if c := in.DeepCopy(); c != nil {
+		return c
+	}
 	return nil
 }
 
@@ -162,24 +190,44 @@ func (in *PowerTargetList) DeepCopyInto(out *PowerTargetList) {
 	if in.Items != nil {
 		in, out := &in.Items, &out.Items
 		*out = make([]PowerTarget, len(*in))
-		for i := range *in { (*in)[i].DeepCopyInto(&(*out)[i]) }
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
 	}
 }
 
 func (in *PowerTargetList) DeepCopy() *PowerTargetList {
-	if in == nil { return nil }
+	if in == nil {
+		return nil
+	}
 	out := new(PowerTargetList)
 	in.DeepCopyInto(out)
 	return out
 }
 
 func (in *PowerTargetList) DeepCopyObject() runtime.Object {
-	if c := in.DeepCopy(); c != nil { return c }
+	if c := in.DeepCopy(); c != nil {
+		return c
+	}
 	return nil
 }
 
 func (in *PowerTargetStatus) DeepCopyInto(out *PowerTargetStatus) {
 	*out = *in
+	if in.WorkloadLabels != nil {
+		in, out := &in.WorkloadLabels, &out.WorkloadLabels
+		*out = make(map[string]string, len(*in))
+		for key, val := range *in {
+			(*out)[key] = val
+		}
+	}
+	if in.NamespaceLabels != nil {
+		in, out := &in.NamespaceLabels, &out.NamespaceLabels
+		*out = make(map[string]string, len(*in))
+		for key, val := range *in {
+			(*out)[key] = val
+		}
+	}
 	if in.WinningRule != nil {
 		in, out := &in.WinningRule, &out.WinningRule
 		*out = new(RuleReference)
@@ -198,6 +246,11 @@ func (in *PowerTargetStatus) DeepCopyInto(out *PowerTargetStatus) {
 	if in.Snapshot != nil {
 		in, out := &in.Snapshot, &out.Snapshot
 		*out = new(SnapshotSpec)
+		(*in).DeepCopyInto(*out)
+	}
+	if in.Action != nil {
+		in, out := &in.Action, &out.Action
+		*out = new(PowerActionStatus)
 		(*in).DeepCopyInto(*out)
 	}
 	if in.Ownership != nil {
@@ -221,8 +274,36 @@ func (in *PowerTargetStatus) DeepCopyInto(out *PowerTargetStatus) {
 	if in.Conditions != nil {
 		in, out := &in.Conditions, &out.Conditions
 		*out = make([]metav1.Condition, len(*in))
-		for i := range *in { (*in)[i].DeepCopyInto(&(*out)[i]) }
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
 	}
+}
+
+func (in *PowerActionStatus) DeepCopyInto(out *PowerActionStatus) {
+	*out = *in
+	if in.AttemptedAt != nil {
+		in, out := &in.AttemptedAt, &out.AttemptedAt
+		*out = (*in).DeepCopy()
+	}
+	if in.CompletedAt != nil {
+		in, out := &in.CompletedAt, &out.CompletedAt
+		*out = (*in).DeepCopy()
+	}
+	if in.NotificationSuppressed != nil {
+		in, out := &in.NotificationSuppressed, &out.NotificationSuppressed
+		*out = new(bool)
+		**out = **in
+	}
+}
+
+func (in *PowerActionStatus) DeepCopy() *PowerActionStatus {
+	if in == nil {
+		return nil
+	}
+	out := new(PowerActionStatus)
+	in.DeepCopyInto(out)
+	return out
 }
 
 func (in *SnapshotSpec) DeepCopyInto(out *SnapshotSpec) {
@@ -252,14 +333,18 @@ func (in *PowerAuditEvent) DeepCopyInto(out *PowerAuditEvent) {
 }
 
 func (in *PowerAuditEvent) DeepCopy() *PowerAuditEvent {
-	if in == nil { return nil }
+	if in == nil {
+		return nil
+	}
 	out := new(PowerAuditEvent)
 	in.DeepCopyInto(out)
 	return out
 }
 
 func (in *PowerAuditEvent) DeepCopyObject() runtime.Object {
-	if c := in.DeepCopy(); c != nil { return c }
+	if c := in.DeepCopy(); c != nil {
+		return c
+	}
 	return nil
 }
 
@@ -270,19 +355,25 @@ func (in *PowerAuditEventList) DeepCopyInto(out *PowerAuditEventList) {
 	if in.Items != nil {
 		in, out := &in.Items, &out.Items
 		*out = make([]PowerAuditEvent, len(*in))
-		for i := range *in { (*in)[i].DeepCopyInto(&(*out)[i]) }
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
 	}
 }
 
 func (in *PowerAuditEventList) DeepCopy() *PowerAuditEventList {
-	if in == nil { return nil }
+	if in == nil {
+		return nil
+	}
 	out := new(PowerAuditEventList)
 	in.DeepCopyInto(out)
 	return out
 }
 
 func (in *PowerAuditEventList) DeepCopyObject() runtime.Object {
-	if c := in.DeepCopy(); c != nil { return c }
+	if c := in.DeepCopy(); c != nil {
+		return c
+	}
 	return nil
 }
 
@@ -295,14 +386,18 @@ func (in *PowerSchedule) DeepCopyInto(out *PowerSchedule) {
 }
 
 func (in *PowerSchedule) DeepCopy() *PowerSchedule {
-	if in == nil { return nil }
+	if in == nil {
+		return nil
+	}
 	out := new(PowerSchedule)
 	in.DeepCopyInto(out)
 	return out
 }
 
 func (in *PowerSchedule) DeepCopyObject() runtime.Object {
-	if c := in.DeepCopy(); c != nil { return c }
+	if c := in.DeepCopy(); c != nil {
+		return c
+	}
 	return nil
 }
 
@@ -313,34 +408,52 @@ func (in *PowerScheduleList) DeepCopyInto(out *PowerScheduleList) {
 	if in.Items != nil {
 		in, out := &in.Items, &out.Items
 		*out = make([]PowerSchedule, len(*in))
-		for i := range *in { (*in)[i].DeepCopyInto(&(*out)[i]) }
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
 	}
 }
 
 func (in *PowerScheduleList) DeepCopy() *PowerScheduleList {
-	if in == nil { return nil }
+	if in == nil {
+		return nil
+	}
 	out := new(PowerScheduleList)
 	in.DeepCopyInto(out)
 	return out
 }
 
 func (in *PowerScheduleList) DeepCopyObject() runtime.Object {
-	if c := in.DeepCopy(); c != nil { return c }
+	if c := in.DeepCopy(); c != nil {
+		return c
+	}
 	return nil
 }
 
 // Shared deep copy helpers
 func (in *PolicyScope) DeepCopyInto(out *PolicyScope) {
 	*out = *in
+	if in.TargetRefs != nil {
+		in, out := &in.TargetRefs, &out.TargetRefs
+		*out = make([]TargetReference, len(*in))
+		copy(*out, *in)
+	}
 	if in.Namespaces != nil {
 		in, out := &in.Namespaces, &out.Namespaces
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
+	if in.NamespaceGroups != nil {
+		in, out := &in.NamespaceGroups, &out.NamespaceGroups
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}
 	if in.NamespaceLabels != nil {
 		in, out := &in.NamespaceLabels, &out.NamespaceLabels
 		*out = make(map[string]string, len(*in))
-		for key, val := range *in { (*out)[key] = val }
+		for key, val := range *in {
+			(*out)[key] = val
+		}
 	}
 	if in.WorkloadNames != nil {
 		in, out := &in.WorkloadNames, &out.WorkloadNames
@@ -350,7 +463,9 @@ func (in *PolicyScope) DeepCopyInto(out *PolicyScope) {
 	if in.WorkloadLabels != nil {
 		in, out := &in.WorkloadLabels, &out.WorkloadLabels
 		*out = make(map[string]string, len(*in))
-		for key, val := range *in { (*out)[key] = val }
+		for key, val := range *in {
+			(*out)[key] = val
+		}
 	}
 }
 
@@ -359,7 +474,9 @@ func (in *PolicySchedule) DeepCopyInto(out *PolicySchedule) {
 	if in.Windows != nil {
 		in, out := &in.Windows, &out.Windows
 		*out = make([]TimeWindowSpec, len(*in))
-		for i := range *in { (*in)[i].DeepCopyInto(&(*out)[i]) }
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
 	}
 }
 
@@ -377,7 +494,9 @@ func (in *PowerScheduleSpec) DeepCopyInto(out *PowerScheduleSpec) {
 	if in.Windows != nil {
 		in, out := &in.Windows, &out.Windows
 		*out = make([]TimeWindowSpec, len(*in))
-		for i := range *in { (*in)[i].DeepCopyInto(&(*out)[i]) }
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
 	}
 }
 
@@ -390,14 +509,18 @@ func (in *PowerNamespaceGroup) DeepCopyInto(out *PowerNamespaceGroup) {
 }
 
 func (in *PowerNamespaceGroup) DeepCopy() *PowerNamespaceGroup {
-	if in == nil { return nil }
+	if in == nil {
+		return nil
+	}
 	out := new(PowerNamespaceGroup)
 	in.DeepCopyInto(out)
 	return out
 }
 
 func (in *PowerNamespaceGroup) DeepCopyObject() runtime.Object {
-	if c := in.DeepCopy(); c != nil { return c }
+	if c := in.DeepCopy(); c != nil {
+		return c
+	}
 	return nil
 }
 
@@ -408,19 +531,25 @@ func (in *PowerNamespaceGroupList) DeepCopyInto(out *PowerNamespaceGroupList) {
 	if in.Items != nil {
 		in, out := &in.Items, &out.Items
 		*out = make([]PowerNamespaceGroup, len(*in))
-		for i := range *in { (*in)[i].DeepCopyInto(&(*out)[i]) }
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
 	}
 }
 
 func (in *PowerNamespaceGroupList) DeepCopy() *PowerNamespaceGroupList {
-	if in == nil { return nil }
+	if in == nil {
+		return nil
+	}
 	out := new(PowerNamespaceGroupList)
 	in.DeepCopyInto(out)
 	return out
 }
 
 func (in *PowerNamespaceGroupList) DeepCopyObject() runtime.Object {
-	if c := in.DeepCopy(); c != nil { return c }
+	if c := in.DeepCopy(); c != nil {
+		return c
+	}
 	return nil
 }
 
@@ -432,7 +561,6 @@ func (in *PowerNamespaceGroupSpec) DeepCopyInto(out *PowerNamespaceGroupSpec) {
 		copy(*out, *in)
 	}
 }
-
 
 // DeepCopyInto is an autogenerated deepcopy function.
 func (in *PowerNotificationChannel) DeepCopyInto(out *PowerNotificationChannel) {
@@ -530,6 +658,18 @@ func (in *PowerNotificationChannelStatus) DeepCopyInto(out *PowerNotificationCha
 		in, out := &in.LastNotification, &out.LastNotification
 		*out = (*in).DeepCopy()
 	}
+	if in.LastAttempt != nil {
+		in, out := &in.LastAttempt, &out.LastAttempt
+		*out = new(NotificationAttemptStatus)
+		(*in).DeepCopyInto(*out)
+	}
+	if in.RecentAttempts != nil {
+		in, out := &in.RecentAttempts, &out.RecentAttempts
+		*out = make([]NotificationAttemptStatus, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
 }
 
 // DeepCopy is an autogenerated deepcopy function.
@@ -538,6 +678,35 @@ func (in *PowerNotificationChannelStatus) DeepCopy() *PowerNotificationChannelSt
 		return nil
 	}
 	out := new(PowerNotificationChannelStatus)
+	in.DeepCopyInto(out)
+	return out
+}
+
+// DeepCopyInto is an autogenerated deepcopy function.
+func (in *NotificationAttemptStatus) DeepCopyInto(out *NotificationAttemptStatus) {
+	*out = *in
+	if in.EventIDs != nil {
+		in, out := &in.EventIDs, &out.EventIDs
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
+	if in.AuditEventRefs != nil {
+		in, out := &in.AuditEventRefs, &out.AuditEventRefs
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
+	if in.CompletedAt != nil {
+		in, out := &in.CompletedAt, &out.CompletedAt
+		*out = (*in).DeepCopy()
+	}
+}
+
+// DeepCopy is an autogenerated deepcopy function.
+func (in *NotificationAttemptStatus) DeepCopy() *NotificationAttemptStatus {
+	if in == nil {
+		return nil
+	}
+	out := new(NotificationAttemptStatus)
 	in.DeepCopyInto(out)
 	return out
 }

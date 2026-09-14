@@ -120,7 +120,7 @@ export function Users() {
                   <TableCell align="right">
                     {u.username !== 'admin' && (
                       <Tooltip title="Delete user">
-                        <IconButton size="small" onClick={() => handleDelete(u)}>
+                        <IconButton size="small" onClick={() => handleDelete(u)} aria-label={`Delete user ${u.username}`}>
                           <DeleteIcon fontSize="small" />
                         </IconButton>
                       </Tooltip>

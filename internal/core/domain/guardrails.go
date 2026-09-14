@@ -120,6 +120,12 @@ func checkOwnership(target Target, config GuardrailConfig) []BlockReason {
 // DetectOwnership detects external ownership signals from annotations and labels.
 // nsAnnotations optionally provides the namespace annotations for inheriting opt-in.
 func DetectOwnership(annotations, labels map[string]string, optInAnnotation string, nsAnnotations ...map[string]string) []OwnershipSignal {
+	return DetectOwnershipWithArgoTracking(annotations, labels, optInAnnotation, nil, nsAnnotations...)
+}
+
+// DetectOwnershipWithArgoTracking additionally recognizes installations that
+// configure Argo CD with custom label keys for resource tracking.
+func DetectOwnershipWithArgoTracking(annotations, labels map[string]string, optInAnnotation string, argoTrackingLabelKeys []string, nsAnnotations ...map[string]string) []OwnershipSignal {
 	var signals []OwnershipSignal
 	// Opt-in: check workload annotation first, then namespace annotation
 	optedIn := annotations[optInAnnotation] == "true"
@@ -128,7 +134,7 @@ func DetectOwnership(annotations, labels map[string]string, optInAnnotation stri
 	}
 
 	// Argo CD detection
-	if hasArgoCDSignals(annotations, labels) {
+	if hasArgoCDSignals(annotations, labels, argoTrackingLabelKeys) {
 		signals = append(signals, OwnershipSignal{Type: OwnershipArgoCD, OptedIn: optedIn})
 	}
 
@@ -145,7 +151,7 @@ func DetectOwnership(annotations, labels map[string]string, optInAnnotation stri
 	return signals
 }
 
-func hasArgoCDSignals(annotations, labels map[string]string) bool {
+func hasArgoCDSignals(annotations, labels map[string]string, customLabelKeys []string) bool {
 	for key := range annotations {
 		if strings.HasPrefix(key, "argocd.argoproj.io/") {
 			return true
@@ -153,6 +159,17 @@ func hasArgoCDSignals(annotations, labels map[string]string) bool {
 	}
 	for key := range labels {
 		if strings.HasPrefix(key, "argocd.argoproj.io/") {
+			return true
+		}
+	}
+	// Argo CD's default label-based resource tracking method uses this key.
+	// Treating it as an ownership signal is deliberately conservative: users
+	// must opt in before Aura Power writes a field potentially reconciled by GitOps.
+	if labels["app.kubernetes.io/instance"] != "" {
+		return true
+	}
+	for _, key := range customLabelKeys {
+		if key != "" && labels[key] != "" {
 			return true
 		}
 	}

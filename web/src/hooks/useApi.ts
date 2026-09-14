@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import type { StatusSummary, DiscoverySummary, SavingsSummary, PowerTarget, AuditEvent } from '../types';
+import type { StatusSummary, DiscoverySummary, SavingsSummary, PowerTarget, AuditEvent, PowerState } from '../types';
 import { friendlyError } from '../utils/errors';
 
 const API_BASE = '/api/v1';
@@ -112,10 +112,14 @@ export function useTargets(namespace?: string, state?: string) {
   });
 }
 
-export function useExplainTarget(namespace: string, name: string) {
+export function useExplainTarget(namespace: string, name: string, kind?: string, uid?: string) {
+  const params = new URLSearchParams();
+  if (kind) params.set('kind', kind);
+  if (uid) params.set('uid', uid);
+  const query = params.toString() ? `?${params.toString()}` : '';
   return useQuery({
-    queryKey: ['explain', namespace, name],
-    queryFn: () => fetchJSON(`/targets/${namespace}/${name}/explain`),
+    queryKey: ['explain', namespace, name, kind, uid],
+    queryFn: () => fetchJSON(`/targets/${namespace}/${name}/explain${query}`),
     enabled: !!namespace && !!name,
   });
 }
@@ -165,11 +169,35 @@ export function useOverrides() {
   });
 }
 
+export interface PendingChange {
+  id: string;
+  userId: string;
+  username: string;
+  action: 'create' | 'update' | 'delete';
+  resourceKind: 'PowerPolicy' | 'PowerOverride';
+  resourceNamespace: string;
+  resourceName: string;
+  resourceVersion?: string;
+  payload: string;
+  status: 'pending' | 'approving' | 'rejecting' | 'approved' | 'rejected';
+  createdAt: string;
+  reviewedBy?: string;
+  reviewedAt?: string;
+}
+
+export function usePendingApprovals() {
+  return useQuery<{ items: PendingChange[]; count: number }>({
+    queryKey: ['pending'],
+    queryFn: () => fetchJSON('/pending'),
+    refetchInterval: 10000,
+  });
+}
+
 export interface PolicyResponse {
   metadata: { name: string; namespace: string; creationTimestamp: string };
   spec: {
     scope: { namespaces?: string[] };
-    schedule: { desiredState: string; windows?: Array<{ start: string; end: string; timezone: string; days?: number[] }> };
+    schedule: { desiredState: PowerState; windows?: Array<{ start: string; end: string; timezone: string; days?: number[] }> };
     priority: number;
     description?: string;
   };
@@ -180,7 +208,7 @@ export interface OverrideResponse {
   metadata: { name: string; namespace: string; creationTimestamp: string };
   spec: {
     scope: { namespaces?: string[]; workloadNames?: string[] };
-    state: string;
+    state: PowerState;
     priority: number;
     expiresAt: string;
     reason: string;

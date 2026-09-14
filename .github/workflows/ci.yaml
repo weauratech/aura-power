@@ -13,13 +13,15 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
       - name: Create panelassets placeholder
         run: mkdir -p cmd/server/panelassets && echo '<html></html>' > cmd/server/panelassets/index.html
-      - uses: golangci/golangci-lint-action@v7
+      - uses: golangci/golangci-lint-action@9fae48acfc02a90574d7c304a1758ef9895495fa # v7
         with:
           version: v2.1
           install-mode: goinstall
@@ -27,16 +29,21 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
-      - name: Create panelassets placeholder
-        run: mkdir -p cmd/server/panelassets && echo '<html><body>placeholder</body></html>' > cmd/server/panelassets/index.html
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build embedded panel
+        run: cd web && npm ci && npm run build && cp -R dist ../cmd/server/panelassets
       - name: Run tests
         run: go test ./... -race -coverprofile=coverage.out -count=1
       - name: Upload coverage
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: coverage
           path: coverage.out
@@ -44,12 +51,17 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
-      - name: Create panelassets placeholder
-        run: mkdir -p cmd/server/panelassets && echo '<html><body>placeholder</body></html>' > cmd/server/panelassets/index.html
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build embedded panel
+        run: cd web && npm ci && npm run build && cp -R dist ../cmd/server/panelassets
       - name: Build server
         run: CGO_ENABLED=0 go build -ldflags="-s -w" -o bin/aura-power-server ./cmd/server/
       - name: Build controller
@@ -60,17 +72,182 @@ jobs:
   helm-lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: azure/setup-helm@v4
-      - run: helm lint charts/aura-power
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: azure/setup-helm@bf6a7d304bc2fdb57e0331155b7ebf2c504acf0a # v4
+      - run: |
+          helm lint charts/aura-power
+          ./scripts/quality/helm-webhook-contract.sh
+          ./scripts/quality/helm-release-contract.sh
 
   frontend:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          node-version: 20
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - run: cd web && npm ci && npm run build
+      - run: cd web && npm ci && npm test && npm run build
+
+  acceptance-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+      - name: Install envtest assets
+        run: |
+          go install sigs.k8s.io/controller-runtime/tools/setup-envtest@v0.0.0-20250308055145-5fe7bb3edc86
+          setup_envtest="$(go env GOPATH)/bin/setup-envtest"
+          echo "KUBEBUILDER_ASSETS=$("$setup_envtest" use -p path 1.31.x!)" >> "$GITHUB_ENV"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Create panelassets placeholder
+        run: mkdir -p cmd/server/panelassets && echo '<html></html>' > cmd/server/panelassets/index.html
+      - name: Run violated Go contracts
+        id: go-acceptance
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          go test -tags=acceptance ./... -race -count=1 | tee acceptance-go.txt
+      - name: Run real API-server webhook contracts
+        run: make quality-envtest
+      - name: Run violated frontend contracts
+        id: web-acceptance
+        continue-on-error: true
+        if: always()
+        run: |
+          set -o pipefail
+          cd web
+          npm ci
+          npm run test:acceptance | tee ../acceptance-web.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: acceptance-contracts
+          path: acceptance-*.txt
+      - name: Enforce acceptance contracts
+        if: always()
+        env:
+          GO_OUTCOME: ${{ steps.go-acceptance.outcome }}
+          WEB_OUTCOME: ${{ steps.web-acceptance.outcome }}
+        run: |
+          [[ "$GO_OUTCOME" == success ]]
+          [[ "$WEB_OUTCOME" == success ]]
+
+  kind-acceptance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tests/e2e/playwright/package-lock.json
+      - uses: helm/kind-action@0b5c88445f37b7e12a2ce1ecca7805b9046a74db # v1
+        with:
+          cluster_name: aura-power-quality
+          node_image: kindest/node:v1.35.0
+          version: v0.32.0
+      - uses: azure/setup-helm@bf6a7d304bc2fdb57e0331155b7ebf2c504acf0a # v4
+      - name: Build and load candidate images
+        run: |
+          docker build -f Dockerfile.server -t aura-power-server:ci .
+          docker build -f Dockerfile.controller -t aura-power-controller:ci .
+          kind load docker-image --name aura-power-quality aura-power-server:ci aura-power-controller:ci
+          CGO_ENABLED=0 go build -ldflags="-s -w" -o bin/aura-power ./cmd/aura-power/
+      - name: Prove v2.1.7 full release upgrade
+        run: ./scripts/quality/kind-release-upgrade-journey.sh
+      - name: Install candidate and run native journey
+        run: |
+          export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config}"
+          helm upgrade --install aura-power charts/aura-power \
+            --namespace aura-system --create-namespace --wait --timeout 5m \
+            --set server.image.repository=aura-power-server \
+            --set server.image.tag=ci \
+            --set server.image.pullPolicy=Never \
+            --set server.persistence.enabled=false \
+            --set controller.image.repository=aura-power-controller \
+            --set controller.image.tag=ci \
+            --set controller.image.pullPolicy=Never
+          ./scripts/quality/kind-helm-upgrade-admission.sh
+          ./scripts/quality/kind-legacy-upgrade-journey.sh
+          ./scripts/quality/kind-core-journey.sh
+          ./scripts/quality/kind-hpa-journey.sh
+          ./scripts/quality/kind-control-namespace-journey.sh
+          ./scripts/quality/kind-approval-journey.sh
+          ./scripts/quality/kind-notification-journey.sh
+          ./scripts/quality/kind-argocd-journey.sh
+          ./scripts/quality/kind-cli-journey.sh
+      - name: Run controller cardinality, memory and leader failover soak
+        run: |
+          export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config}"
+          ./scripts/quality/kind-memory-soak.sh
+      - name: Upload controller memory diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: controller-memory-kind
+          path: artifacts/quality/memory-*
+      - name: Install browser test dependencies
+        run: |
+          cd tests/e2e/playwright
+          npm ci
+          npx playwright install --with-deps chromium firefox webkit
+      - name: Run real multi-browser journey
+        run: |
+          kubectl create namespace aura-power-e2e-browser
+          kubectl annotate namespace aura-power-e2e-browser aura.sh/power-eligible=true
+          kubectl create deployment browser-fixture -n aura-power-e2e-browser --image=registry.k8s.io/pause:3.10 --replicas=1
+          kubectl create namespace aura-power-e2e-browser-homonym
+          kubectl annotate namespace aura-power-e2e-browser-homonym aura.sh/power-eligible=true
+          kubectl create deployment browser-fixture -n aura-power-e2e-browser-homonym --image=registry.k8s.io/pause:3.10 --replicas=1
+          for _ in $(seq 1 40); do
+            if kubectl get powertarget -n aura-system -l power.aura.sh/target-namespace=aura-power-e2e-browser -o name | grep -q .; then break; fi
+            sleep 5
+          done
+          kubectl get powertarget -n aura-system -l power.aura.sh/target-namespace=aura-power-e2e-browser -o name | grep -q .
+          kubectl port-forward -n aura-system statefulset/aura-power-server 19091:8080 >/tmp/aura-power-port-forward.log 2>&1 &
+          forward_pid=$!
+          trap 'kill "$forward_pid" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:19091/api/v1/health >/dev/null; then break; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:19091/api/v1/health >/dev/null
+          admin_password="$(kubectl get secret aura-power-server-secret -n aura-system -o jsonpath='{.data.admin-password}' | base64 -d)"
+          cd tests/e2e/playwright
+          CI=true AURA_E2E_BASE_URL=http://127.0.0.1:19091 AURA_E2E_ADMIN_USER=admin \
+            AURA_E2E_ADMIN_PASSWORD="$admin_password" AURA_E2E_FIXTURE_NAMESPACE=aura-power-e2e-browser \
+            AURA_E2E_KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config}" \
+            AURA_E2E_ALLOW_MUTATION=true AURA_E2E_BROWSERS=all npx playwright test
+      - name: Upload browser diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: playwright-kind
+          path: |
+            tests/e2e/playwright/playwright-report
+            tests/e2e/playwright/test-results
+
+  load-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+      - run: make quality-load

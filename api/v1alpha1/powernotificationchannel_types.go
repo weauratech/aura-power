@@ -7,6 +7,8 @@ import (
 // PowerNotificationChannelSpec defines a webhook notification destination.
 type PowerNotificationChannelSpec struct {
 	// Type determines the payload format.
+	// Discord is retained for backward-compatible CRD upgrades. New UI flows do
+	// not advertise it until a Discord-specific payload adapter is implemented.
 	// +kubebuilder:validation:Enum=google-chat;slack;discord;generic
 	Type string `json:"type"`
 
@@ -56,6 +58,50 @@ type PowerNotificationChannelStatus struct {
 
 	// TotalErrors is the total number of send failures.
 	TotalErrors int64 `json:"totalErrors,omitempty"`
+
+	// LastAttempt is the durable correlation record for the latest delivery.
+	// It intentionally contains identifiers and provider metadata, never the
+	// destination URL, response body, credentials, or Secret contents.
+	// +optional
+	LastAttempt *NotificationAttemptStatus `json:"lastAttempt,omitempty"`
+
+	// RecentAttempts retains a bounded history for operational correlation.
+	// +optional
+	// +kubebuilder:validation:MaxItems=20
+	RecentAttempts []NotificationAttemptStatus `json:"recentAttempts,omitempty"`
+}
+
+// NotificationAttemptStatus correlates source audit events with one provider
+// delivery attempt and its sanitized outcome.
+type NotificationAttemptStatus struct {
+	ID string `json:"id"`
+
+	// EventIDs are stable hashes for every event included in the delivery.
+	EventIDs []string `json:"eventIDs"`
+
+	// AuditEventRefs are namespace/name references to the source audit records.
+	// +optional
+	AuditEventRefs []string `json:"auditEventRefs,omitempty"`
+
+	// Phase is InProgress, Succeeded, or Failed.
+	// +kubebuilder:validation:Enum=InProgress;Succeeded;Failed
+	Phase string `json:"phase"`
+
+	StartedAt metav1.Time `json:"startedAt"`
+
+	// CompletedAt is set after the provider responds or delivery fails.
+	// +optional
+	CompletedAt *metav1.Time `json:"completedAt,omitempty"`
+
+	// ProviderStatusCode is the HTTP response status when available.
+	// +optional
+	ProviderStatusCode int32 `json:"providerStatusCode,omitempty"`
+
+	// AttemptCount is the number of HTTP attempts made by the sender.
+	AttemptCount int32 `json:"attemptCount"`
+
+	// Response records only a sanitized outcome (for example "accepted").
+	Response string `json:"response,omitempty"`
 }
 
 // +kubebuilder:object:root=true

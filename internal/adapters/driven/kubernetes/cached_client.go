@@ -13,6 +13,8 @@ import (
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	v1alpha1 "github.com/weauratech/aura-power/api/v1alpha1"
 )
 
 // CachedClientConfig holds configuration for the cached client.
@@ -23,6 +25,9 @@ type CachedClientConfig struct {
 	Scheme *runtime.Scheme
 	// SyncTimeout is how long to wait for initial cache sync.
 	SyncTimeout time.Duration
+	// ControlNamespace bounds every namespaced informer used by the API server.
+	// Cluster-scoped types such as Namespace remain visible.
+	ControlNamespace string
 }
 
 // CachedClient implements sigs.k8s.io/controller-runtime/pkg/client.Client
@@ -43,9 +48,11 @@ func NewCachedClient(ctx context.Context, cfg CachedClientConfig) (*CachedClient
 	}
 
 	// Create the informer cache (watches all registered types)
-	informerCache, err := cache.New(cfg.RestConfig, cache.Options{
-		Scheme: cfg.Scheme,
-	})
+	cacheOptions := cache.Options{Scheme: cfg.Scheme}
+	if cfg.ControlNamespace != "" {
+		cacheOptions.DefaultNamespaces = map[string]cache.Config{cfg.ControlNamespace: {}}
+	}
+	informerCache, err := cache.New(cfg.RestConfig, cacheOptions)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create informer cache: %w", err)
 	}
@@ -99,6 +106,12 @@ func (c *CachedClient) Get(ctx context.Context, key types.NamespacedName, obj cl
 }
 
 func (c *CachedClient) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	// Audit history is append-only and retention-bounded, but can still be much
+	// larger than operational state. Reading it directly prevents the API server
+	// process from starting an informer that retains the complete history.
+	if _, ok := list.(*v1alpha1.PowerAuditEventList); ok {
+		return c.writeClient.List(ctx, list, opts...)
+	}
 	return c.cache.List(ctx, list, opts...)
 }
 

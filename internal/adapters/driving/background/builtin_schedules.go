@@ -2,7 +2,10 @@ package background
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -16,7 +19,8 @@ import (
 var DefaultTimezone = "America/Sao_Paulo"
 
 // SeedBuiltInSchedules creates the built-in PowerSchedule resources if they don't exist.
-func SeedBuiltInSchedules(ctx context.Context, c client.Client, namespace string) {
+// Existing schedules are never overwritten, so operators can customize them safely.
+func SeedBuiltInSchedules(ctx context.Context, c client.Client, namespace string) error {
 	log := ctrl.Log.WithName("builtin-schedules")
 
 	schedules := []v1alpha1.PowerSchedule{
@@ -27,7 +31,7 @@ func SeedBuiltInSchedules(ctx context.Context, c client.Client, namespace string
 				Labels:    map[string]string{"power.aura.sh/built-in": "true"},
 			},
 			Spec: v1alpha1.PowerScheduleSpec{
-				DesiredState: "on",
+				DesiredState: v1alpha1.PowerScheduleStateOn,
 				Windows: []v1alpha1.TimeWindowSpec{
 					{Start: "08:00", End: "18:00", Days: []int{1, 2, 3, 4, 5}, Timezone: DefaultTimezone},
 				},
@@ -41,7 +45,7 @@ func SeedBuiltInSchedules(ctx context.Context, c client.Client, namespace string
 				Labels:    map[string]string{"power.aura.sh/built-in": "true"},
 			},
 			Spec: v1alpha1.PowerScheduleSpec{
-				DesiredState: "off",
+				DesiredState: v1alpha1.PowerScheduleStateOff,
 				Description:  "Keep workloads off 24/7. Useful for deprecated namespaces.",
 			},
 		},
@@ -52,7 +56,7 @@ func SeedBuiltInSchedules(ctx context.Context, c client.Client, namespace string
 				Labels:    map[string]string{"power.aura.sh/built-in": "true"},
 			},
 			Spec: v1alpha1.PowerScheduleSpec{
-				DesiredState: "on",
+				DesiredState: v1alpha1.PowerScheduleStateOn,
 				Windows: []v1alpha1.TimeWindowSpec{
 					{Start: "00:00", End: "23:59", Days: []int{1, 2, 3, 4, 5}, Timezone: DefaultTimezone},
 				},
@@ -61,17 +65,29 @@ func SeedBuiltInSchedules(ctx context.Context, c client.Client, namespace string
 		},
 	}
 
+	var seedErrors []error
 	for _, s := range schedules {
 		key := types.NamespacedName{Namespace: s.Namespace, Name: s.Name}
 		var existing v1alpha1.PowerSchedule
-		if err := c.Get(ctx, key, &existing); err == nil {
+		err := c.Get(ctx, key, &existing)
+		if err == nil {
 			// Already exists, skip
 			continue
 		}
+		if !apierrors.IsNotFound(err) {
+			seedErrors = append(seedErrors, fmt.Errorf("read built-in schedule %s: %w", s.Name, err))
+			continue
+		}
 		if err := c.Create(ctx, &s); err != nil {
+			if apierrors.IsAlreadyExists(err) {
+				continue
+			}
 			log.Error(err, "failed to seed built-in schedule", "name", s.Name)
+			seedErrors = append(seedErrors, fmt.Errorf("create built-in schedule %s: %w", s.Name, err))
 		} else {
 			log.Info("seeded built-in schedule", "name", s.Name)
 		}
 	}
+
+	return errors.Join(seedErrors...)
 }

@@ -2,9 +2,7 @@ version: 2
 
 before:
   hooks:
-    - go mod tidy
-    - mkdir -p cmd/server/panelassets
-    - sh -c 'echo "<html></html>" > cmd/server/panelassets/index.html'
+    - go mod verify
 
 builds:
   - id: aura-power
@@ -33,6 +31,11 @@ archives:
 checksum:
   name_template: "checksums.txt"
 
+# Syft is installed at a pinned revision by the release workflow. GoReleaser
+# publishes one SPDX SBOM beside every platform archive.
+sboms:
+  - artifacts: archive
+
 changelog:
   sort: asc
   filters:
@@ -47,4 +50,9 @@ release:
     owner: weauratech
     name: aura-power
   prerelease: auto
+  draft: true
+  use_existing_draft: true
+  make_latest: false
+  preflight:
+    fail_on_error: true
   name_template: "{{.Tag}}"

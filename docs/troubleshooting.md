@@ -101,13 +101,18 @@ Common issues and resolution steps for Aura Power operators.
 
 **Symptom**: Controller OOMKilled or high memory consumption.
 
-1. Check number of targets:
-   ```bash
-   kubectl get pt --all-namespaces --no-headers | wc -l
-   ```
-   Each target adds ~2KB to controller memory. For 1000+ targets, increase memory limits.
+1. Check restarts, the last termination reason, and actual working set:
+	```bash
+	kubectl get pod -n aura-system -l app.kubernetes.io/component=controller \
+	  -o jsonpath='{range .items[*]}{.metadata.name}{" restarts="}{.status.containerStatuses[0].restartCount}{" reason="}{.status.containerStatuses[0].lastState.terminated.reason}{"\n"}{end}'
+	kubectl top pod -n aura-system -l app.kubernetes.io/component=controller
+	```
 
-2. Review reconcile interval. Default is 30s. If too aggressive for your cluster size, this can be tuned via `--reconcile-interval` flag.
+2. Check the scale of targets, namespaces, policies, overrides, and retained audit events. There is no reliable fixed number of bytes per target because informer and object size vary.
+
+3. Confirm `controller.config.goMemLimit` remains below `controller.resources.limits.memory`. Increase both only after observing sustained heap pressure; changing the reconciliation or discovery intervals reduces API activity but does not replace a memory limit.
+4. Enable the profiler only for a bounded diagnostic window with `controller.config.pprofBindAddress=127.0.0.1:6060`, then use `kubectl port-forward pod/<controller-pod> 6060:6060`. The process rejects non-loopback listeners. Disable the value after collecting `/debug/pprof/heap`.
+5. Enable `prometheusRule.enabled` when Prometheus Operator and kube-state-metrics are available. The supplied rules alert on heap pressure, container working-set pressure, and OOM restarts.
 
 ## Metrics not appearing in Prometheus
 

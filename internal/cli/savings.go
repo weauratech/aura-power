@@ -3,7 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
-	"io"
+	"net/url"
 
 	"github.com/spf13/cobra"
 )
@@ -30,24 +30,26 @@ func runSavings(period string) error {
 		return err
 	}
 
-	endpoint := fmt.Sprintf("%s/api/v1/savings?period=%s", serverURL, period)
-	if namespace != "" {
-		endpoint += "&namespace=" + namespace
+	endpoint, err := url.Parse(serverURL + "/api/v1/savings")
+	if err != nil {
+		return fmt.Errorf("invalid server URL: %w", err)
 	}
+	query := endpoint.Query()
+	query.Set("period", period)
+	if namespace != "" {
+		query.Set("namespace", namespace)
+	}
+	endpoint.RawQuery = query.Encode()
 
-	resp, err := authenticatedGet(endpoint)
+	resp, err := authenticatedGet(endpoint.String())
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := requireStatus(resp, 200)
 	if err != nil {
-		return fmt.Errorf("failed to read response: %w", err)
-	}
-
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("server error (%d): %s", resp.StatusCode, string(body))
+		return err
 	}
 
 	if outputFormat == "json" {

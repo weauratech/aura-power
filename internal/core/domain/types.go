@@ -84,7 +84,12 @@ type Schedule struct {
 // Scope defines which workloads a policy/override targets.
 // All non-empty selectors are intersected (AND logic).
 type Scope struct {
-	Namespaces      []string
+	TargetRefs []WorkloadRef
+	Namespaces []string
+	// NamespaceGroups contains unresolved group references. Adapters must resolve
+	// these references before evaluation; MatchesScope fails closed while any
+	// reference remains so a group-only rule can never become cluster-wide.
+	NamespaceGroups []string
 	NamespaceLabels map[string]string
 	WorkloadNames   []string
 	WorkloadLabels  map[string]string
@@ -110,9 +115,12 @@ const (
 
 // WorkloadRef uniquely identifies a workload in a cluster.
 type WorkloadRef struct {
-	Namespace string
-	Name      string
-	Kind      WorkloadKind
+	Cluster    string       `json:"cluster,omitempty"`
+	APIVersion string       `json:"apiVersion,omitempty"`
+	Namespace  string       `json:"namespace"`
+	Name       string       `json:"name"`
+	Kind       WorkloadKind `json:"kind"`
+	UID        string       `json:"uid,omitempty"`
 }
 
 // ResourceSummary captures CPU and memory resource requests.
@@ -127,6 +135,9 @@ type Snapshot struct {
 	Suspended    *bool
 	Resources    ResourceSummary
 	CapturedAt   time.Time
+	// ResourceVersion binds the snapshot to the exact Kubernetes revision that
+	// may be powered down. Restore remains UID-bound and uses the saved values.
+	ResourceVersion string
 }
 
 // ObservedState represents the current actual state of a workload.
@@ -206,7 +217,7 @@ type OverrideSpec struct {
 
 // IsExpired returns true if the override has passed its expiration time.
 func (o OverrideSpec) IsExpired(now time.Time) bool {
-	return now.After(o.ExpiresAt)
+	return !now.Before(o.ExpiresAt)
 }
 
 // RuleKind identifies whether a rule is a policy or override.
@@ -219,13 +230,13 @@ const (
 
 // RuleRef identifies a rule that participated in a decision.
 type RuleRef struct {
-	Kind        RuleKind
-	Name        string
-	Namespace   string
-	Priority    Priority
-	Specificity ScopeSpecificity
-	Description string
-	CreatedAt   time.Time
+	Kind        RuleKind         `json:"kind"`
+	Name        string           `json:"name"`
+	Namespace   string           `json:"namespace"`
+	Priority    Priority         `json:"priority"`
+	Specificity ScopeSpecificity `json:"specificity"`
+	Description string           `json:"description,omitempty"`
+	CreatedAt   time.Time        `json:"createdAt"`
 }
 
 // BlockType categorizes the reason a workload is blocked.
@@ -233,11 +244,11 @@ type BlockType string
 
 const (
 	BlockSystemNamespace  BlockType = "SystemNamespace"
-	BlockArgoCDManaged   BlockType = "ArgoCDManaged"
-	BlockFluxManaged     BlockType = "FluxManaged"
-	BlockHelmManaged     BlockType = "HelmManaged"
-	BlockHPAControlled   BlockType = "HPAControlled"
-	BlockSnapshotMissing BlockType = "SnapshotMissing"
+	BlockArgoCDManaged    BlockType = "ArgoCDManaged"
+	BlockFluxManaged      BlockType = "FluxManaged"
+	BlockHelmManaged      BlockType = "HelmManaged"
+	BlockHPAControlled    BlockType = "HPAControlled"
+	BlockSnapshotMissing  BlockType = "SnapshotMissing"
 	BlockInsufficientInfo BlockType = "InsufficientInfo"
 )
 
@@ -328,23 +339,23 @@ type SavingsSummary struct {
 
 // PreviewResult holds the impact preview of a proposed policy/override.
 type PreviewResult struct {
-	AffectedOn    []WorkloadRef
-	AffectedOff   []WorkloadRef
-	Blocked       []BlockedTarget
-	Unsupported   []WorkloadRef
-	Conflicts     []ConflictInfo
-	TotalAffected int
+	AffectedOn    []WorkloadRef   `json:"affectedOn"`
+	AffectedOff   []WorkloadRef   `json:"affectedOff"`
+	Blocked       []BlockedTarget `json:"blocked"`
+	Unsupported   []WorkloadRef   `json:"unsupported"`
+	Conflicts     []ConflictInfo  `json:"conflicts"`
+	TotalAffected int             `json:"totalAffected"`
 }
 
 // BlockedTarget represents a target blocked with its reasons.
 type BlockedTarget struct {
-	Ref     WorkloadRef
-	Reasons []BlockReason
+	Ref     WorkloadRef   `json:"ref"`
+	Reasons []BlockReason `json:"reasons"`
 }
 
 // ConflictInfo shows how competing rules were resolved for a target.
 type ConflictInfo struct {
-	Target     WorkloadRef
-	Winner     RuleRef
-	Suppressed []RuleRef
+	Target     WorkloadRef `json:"target"`
+	Winner     RuleRef     `json:"winner"`
+	Suppressed []RuleRef   `json:"suppressed"`
 }

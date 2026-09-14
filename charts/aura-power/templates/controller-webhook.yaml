@@ -1,0 +1,121 @@
+{{- if and .Values.controller.enabled .Values.webhook.enabled }}
+{{- $serviceName := include "aura-power.webhook.fullname" . -}}
+{{- $secretName := include "aura-power.webhook.secretName" . -}}
+{{- $caBundle := "" -}}
+{{- if and .Values.webhook.certManager.enabled .Values.webhook.existingSecret -}}
+{{- fail "webhook.existingSecret and webhook.certManager.enabled are mutually exclusive" -}}
+{{- end -}}
+{{- if not .Values.webhook.certManager.enabled -}}
+{{- if .Values.webhook.existingSecret -}}
+{{- $caBundle = required "webhook.caBundle is required with webhook.existingSecret" .Values.webhook.caBundle -}}
+{{- else -}}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $secretName -}}
+{{- $tlsCrt := "" -}}
+{{- $tlsKey := "" -}}
+{{- if and $existing (hasKey $existing.data "ca.crt") (hasKey $existing.data "tls.crt") (hasKey $existing.data "tls.key") -}}
+{{- $caBundle = index $existing.data "ca.crt" -}}
+{{- $tlsCrt = index $existing.data "tls.crt" -}}
+{{- $tlsKey = index $existing.data "tls.key" -}}
+{{- else -}}
+{{- $ca := genCA (printf "%s-ca" $serviceName) (int .Values.webhook.certificate.durationDays) -}}
+{{- $dnsNames := list $serviceName (printf "%s.%s" $serviceName .Release.Namespace) (printf "%s.%s.svc" $serviceName .Release.Namespace) (printf "%s.%s.svc.cluster.local" $serviceName .Release.Namespace) -}}
+{{- $cert := genSignedCert $serviceName nil $dnsNames (int .Values.webhook.certificate.durationDays) $ca -}}
+{{- $caBundle = $ca.Cert | b64enc -}}
+{{- $tlsCrt = $cert.Cert | b64enc -}}
+{{- $tlsKey = $cert.Key | b64enc -}}
+{{- end }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $secretName }}
+  labels:
+    {{- include "aura-power.controller.labels" . | nindent 4 }}
+type: kubernetes.io/tls
+data:
+  ca.crt: {{ $caBundle }}
+  tls.crt: {{ $tlsCrt }}
+  tls.key: {{ $tlsKey }}
+---
+{{- end }}
+{{- else }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $serviceName }}
+  labels:
+    {{- include "aura-power.controller.labels" . | nindent 4 }}
+spec:
+  secretName: {{ $secretName }}
+  duration: {{ .Values.webhook.certManager.duration | quote }}
+  renewBefore: {{ .Values.webhook.certManager.renewBefore | quote }}
+  dnsNames:
+    - {{ $serviceName }}
+    - {{ printf "%s.%s" $serviceName .Release.Namespace }}
+    - {{ printf "%s.%s.svc" $serviceName .Release.Namespace }}
+    - {{ printf "%s.%s.svc.cluster.local" $serviceName .Release.Namespace }}
+  issuerRef:
+    name: {{ required "webhook.certManager.issuerRef.name is required when cert-manager is enabled" .Values.webhook.certManager.issuerRef.name }}
+    kind: {{ .Values.webhook.certManager.issuerRef.kind }}
+    group: {{ .Values.webhook.certManager.issuerRef.group }}
+---
+{{- end }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: {{ $serviceName }}
+  labels:
+    {{- include "aura-power.controller.labels" . | nindent 4 }}
+  {{- if .Values.webhook.certManager.enabled }}
+  annotations:
+    cert-manager.io/inject-ca-from: {{ printf "%s/%s" .Release.Namespace $serviceName | quote }}
+  {{- end }}
+webhooks:
+  - name: validate-powerpolicy.power.aura.sh
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: {{ .Values.webhook.failurePolicy }}
+    matchPolicy: Equivalent
+    timeoutSeconds: {{ .Values.webhook.timeoutSeconds }}
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ .Release.Namespace | quote }}
+    clientConfig:
+      service:
+        name: {{ $serviceName }}
+        namespace: {{ .Release.Namespace }}
+        path: /validate-power-aura-sh-v1alpha1-powerpolicy
+        port: 443
+      {{- if not .Values.webhook.certManager.enabled }}
+      caBundle: {{ $caBundle }}
+      {{- end }}
+    rules:
+      - apiGroups: ["power.aura.sh"]
+        apiVersions: ["v1alpha1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["powerpolicies"]
+        scope: Namespaced
+  - name: validate-poweroverride.power.aura.sh
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: {{ .Values.webhook.failurePolicy }}
+    matchPolicy: Equivalent
+    timeoutSeconds: {{ .Values.webhook.timeoutSeconds }}
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ .Release.Namespace | quote }}
+    clientConfig:
+      service:
+        name: {{ $serviceName }}
+        namespace: {{ .Release.Namespace }}
+        path: /validate-power-aura-sh-v1alpha1-poweroverride
+        port: 443
+      {{- if not .Values.webhook.certManager.enabled }}
+      caBundle: {{ $caBundle }}
+      {{- end }}
+    rules:
+      - apiGroups: ["power.aura.sh"]
+        apiVersions: ["v1alpha1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["poweroverrides"]
+        scope: Namespaced
+{{- end }}

@@ -17,7 +17,7 @@ func PreviewPolicy(
 	hypotheticalPolicies = append(hypotheticalPolicies, existingPolicies...)
 	hypotheticalPolicies = append(hypotheticalPolicies, policy)
 
-	return computePreview(targets, existingPolicies, hypotheticalPolicies, existingOverrides, config, now)
+	return computePreview(targets, existingPolicies, hypotheticalPolicies, existingOverrides, existingOverrides, config, now)
 }
 
 // PreviewOverride simulates the impact of a new override without persistence.
@@ -34,14 +34,15 @@ func PreviewOverride(
 	hypotheticalOverrides = append(hypotheticalOverrides, existingOverrides...)
 	hypotheticalOverrides = append(hypotheticalOverrides, override)
 
-	return computePreview(targets, existingPolicies, existingPolicies, hypotheticalOverrides, config, now)
+	return computePreview(targets, existingPolicies, existingPolicies, existingOverrides, hypotheticalOverrides, config, now)
 }
 
 func computePreview(
 	targets []Target,
 	currentPolicies []PolicySpec,
 	newPolicies []PolicySpec,
-	overrides []OverrideSpec,
+	currentOverrides []OverrideSpec,
+	newOverrides []OverrideSpec,
 	config GuardrailConfig,
 	now time.Time,
 ) PreviewResult {
@@ -59,14 +60,14 @@ func computePreview(
 		}
 
 		// Compute decision with NEW rules
-		newDecision := ComputeDecision(target, newPolicies, overrides, config, now)
+		newDecision := ComputeDecision(target, newPolicies, newOverrides, config, now)
 
 		if !newDecision.IsManaged() {
 			continue
 		}
 
 		// Compute decision with CURRENT rules (for comparison)
-		currentDecision := ComputeDecision(target, currentPolicies, overrides, config, now)
+		currentDecision := ComputeDecision(target, currentPolicies, currentOverrides, config, now)
 
 		// Determine impact
 		if newDecision.IsBlocked() {

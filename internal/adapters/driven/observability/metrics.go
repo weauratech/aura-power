@@ -1,6 +1,8 @@
 package observability
 
 import (
+	"runtime"
+	"runtime/debug"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -58,6 +60,38 @@ var (
 		},
 		[]string{"namespace", "policy"},
 	)
+
+	processHeapAlloc = prometheus.NewGaugeFunc(
+		prometheus.GaugeOpts{
+			Name: "aura_power_process_heap_alloc_bytes",
+			Help: "Bytes of live heap objects allocated by the Aura Power controller process.",
+		},
+		func() float64 {
+			var stats runtime.MemStats
+			runtime.ReadMemStats(&stats)
+			return float64(stats.HeapAlloc)
+		},
+	)
+
+	processHeapInUse = prometheus.NewGaugeFunc(
+		prometheus.GaugeOpts{
+			Name: "aura_power_process_heap_inuse_bytes",
+			Help: "Bytes in in-use heap spans for the Aura Power controller process.",
+		},
+		func() float64 {
+			var stats runtime.MemStats
+			runtime.ReadMemStats(&stats)
+			return float64(stats.HeapInuse)
+		},
+	)
+
+	processMemoryLimit = prometheus.NewGaugeFunc(
+		prometheus.GaugeOpts{
+			Name: "aura_power_process_memory_limit_bytes",
+			Help: "Go runtime soft memory limit configured for the Aura Power controller process.",
+		},
+		func() float64 { return float64(debug.SetMemoryLimit(-1)) },
+	)
 )
 
 func init() {
@@ -68,6 +102,9 @@ func init() {
 		savingsCPUTotal,
 		savingsMemTotal,
 		savingsCostTotal,
+		processHeapAlloc,
+		processHeapInUse,
+		processMemoryLimit,
 	)
 }
 

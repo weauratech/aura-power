@@ -16,6 +16,11 @@ type GoogleChatSender struct{}
 func (s *GoogleChatSender) Type() string { return "google-chat" }
 
 func (s *GoogleChatSender) Send(ctx context.Context, url string, event Event) error {
+	_, err := s.SendWithResult(ctx, url, event)
+	return err
+}
+
+func (s *GoogleChatSender) SendWithResult(ctx context.Context, url string, event Event) (DeliveryResponse, error) {
 	payload := map[string]interface{}{
 		"cardsV2": []map[string]interface{}{
 			{
@@ -33,6 +38,7 @@ func (s *GoogleChatSender) Send(ctx context.Context, url string, event Event) er
 								{"decoratedText": map[string]string{"topLabel": "Rule", "text": event.RuleName}},
 								{"decoratedText": map[string]string{"topLabel": "Result", "text": event.Result}},
 								{"decoratedText": map[string]string{"topLabel": "Time", "text": event.Timestamp.Format(time.RFC3339)}},
+								{"decoratedText": map[string]string{"topLabel": "Correlation", "text": event.AttemptID}},
 							},
 						},
 					},
@@ -40,7 +46,7 @@ func (s *GoogleChatSender) Send(ctx context.Context, url string, event Event) er
 			},
 		},
 	}
-	return httpPost(ctx, url, payload)
+	return httpPostDetailed(ctx, url, payload)
 }
 
 // SlackSender sends messages to Slack via incoming webhook.
@@ -49,6 +55,11 @@ type SlackSender struct{}
 func (s *SlackSender) Type() string { return "slack" }
 
 func (s *SlackSender) Send(ctx context.Context, url string, event Event) error {
+	_, err := s.SendWithResult(ctx, url, event)
+	return err
+}
+
+func (s *SlackSender) SendWithResult(ctx context.Context, url string, event Event) (DeliveryResponse, error) {
 	payload := map[string]interface{}{
 		"blocks": []map[string]interface{}{
 			{
@@ -67,12 +78,12 @@ func (s *SlackSender) Send(ctx context.Context, url string, event Event) error {
 			{
 				"type": "context",
 				"elements": []map[string]string{
-					{"type": "mrkdwn", "text": event.Reason + " • " + event.Timestamp.Format("15:04 UTC")},
+					{"type": "mrkdwn", "text": event.Reason + " • " + event.Timestamp.Format("15:04 UTC") + " • " + event.AttemptID},
 				},
 			},
 		},
 	}
-	return httpPost(ctx, url, payload)
+	return httpPostDetailed(ctx, url, payload)
 }
 
 // GenericSender sends a raw JSON payload to any webhook endpoint.
@@ -81,14 +92,25 @@ type GenericSender struct{}
 func (s *GenericSender) Type() string { return "generic" }
 
 func (s *GenericSender) Send(ctx context.Context, url string, event Event) error {
+	_, err := s.SendWithResult(ctx, url, event)
+	return err
+}
+
+func (s *GenericSender) SendWithResult(ctx context.Context, url string, event Event) (DeliveryResponse, error) {
 	payload := map[string]interface{}{
 		"version":   "1",
 		"event":     event.Action,
 		"timestamp": event.Timestamp.Format(time.RFC3339),
+		"correlation": map[string]interface{}{
+			"attemptID":      event.AttemptID,
+			"eventIDs":       event.EventIDs,
+			"auditEventRefs": event.AuditEventRefs,
+		},
 		"target": map[string]string{
 			"namespace": event.Target.Namespace,
 			"name":      event.Target.Name,
 			"kind":      event.Target.Kind,
+			"uid":       event.Target.UID,
 		},
 		"action": map[string]string{
 			"type":     event.Action,
@@ -97,27 +119,54 @@ func (s *GenericSender) Send(ctx context.Context, url string, event Event) error
 			"ruleName": event.RuleName,
 		},
 	}
-	return httpPost(ctx, url, payload)
+	return httpPostDetailed(ctx, url, payload)
+}
+
+// DeliveryResponse is safe provider metadata. Response bodies and destination
+// URLs are deliberately excluded because they may contain secrets.
+type DeliveryResponse struct {
+	StatusCode int
+	Attempts   int
 }
 
 // httpPost sends a JSON POST request with retry (3 attempts, exponential backoff).
 func httpPost(ctx context.Context, url string, payload interface{}) error {
+	_, err := httpPostDetailed(ctx, url, payload)
+	return err
+}
+
+func httpPostDetailed(ctx context.Context, url string, payload interface{}) (DeliveryResponse, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("marshal payload: %w", err)
+		return DeliveryResponse{}, fmt.Errorf("marshal payload: %w", err)
 	}
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	var lastErr error
+	lastStatus := 0
 
 	for attempt := 0; attempt < 3; attempt++ {
 		if attempt > 0 {
-			time.Sleep(time.Duration(attempt*attempt) * time.Second)
+			backoff := time.NewTimer(time.Duration(attempt*attempt) * time.Second)
+			select {
+			case <-ctx.Done():
+				if !backoff.Stop() {
+					select {
+					case <-backoff.C:
+					default:
+					}
+				}
+				return DeliveryResponse{Attempts: attempt}, ctx.Err()
+			case <-backoff.C:
+			}
+		}
+		if err := ctx.Err(); err != nil {
+			return DeliveryResponse{Attempts: attempt}, err
 		}
 
 		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 		if err != nil {
-			return fmt.Errorf("create request: %w", err)
+			return DeliveryResponse{Attempts: attempt + 1}, fmt.Errorf("create request: %w", err)
 		}
 		req.Header.Set("Content-Type", "application/json")
 
@@ -128,21 +177,22 @@ func httpPost(ctx context.Context, url string, payload interface{}) error {
 		}
 		io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
+		lastStatus = resp.StatusCode
 
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-			return nil
+			return DeliveryResponse{StatusCode: resp.StatusCode, Attempts: attempt + 1}, nil
 		}
 		lastErr = fmt.Errorf("webhook returned %d", resp.StatusCode)
 	}
 
-	return lastErr
+	return DeliveryResponse{StatusCode: lastStatus, Attempts: 3}, lastErr
 }
 
 func formatActionLabel(action string) string {
 	labels := map[string]string{
 		"workload.powered_down": "Workload Powered Down",
 		"workload.restored":     "Workload Restored",
-		"workload.error":        "Execution Error",
+		"execution.error":       "Execution Error",
 		"override.created":      "Override Created",
 		"override.expired":      "Override Expired",
 	}

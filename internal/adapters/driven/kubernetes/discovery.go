@@ -4,6 +4,7 @@ import (
 	"context"
 
 	appsv1 "k8s.io/api/apps/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -13,54 +14,122 @@ import (
 )
 
 type Discoverer struct {
-	client client.Client
+	client client.Reader
 }
 
-func NewDiscoverer(c client.Client) *Discoverer {
+func NewDiscoverer(c client.Reader) *Discoverer {
 	return &Discoverer{client: c}
 }
 
 func (d *Discoverer) DiscoverAll(ctx context.Context, namespaces []string) ([]ports.DiscoveredWorkload, error) {
-	var result []ports.DiscoveredWorkload
-
-	// Fetch all namespaces with their annotations
+	// Fetch namespace metadata once, then list each supported workload kind once
+	// for the whole cluster. The previous implementation issued three LISTs per
+	// namespace, which amplified API traffic and temporary allocations linearly
+	// with the namespace count.
 	var nsList corev1.NamespaceList
 	if err := d.client.List(ctx, &nsList); err != nil {
 		return nil, err
 	}
 
-	nsAnnotations := make(map[string]map[string]string)
-	nsLabels := make(map[string]map[string]string)
-	if len(namespaces) == 0 {
-		for _, ns := range nsList.Items {
-			namespaces = append(namespaces, ns.Name)
-			nsAnnotations[ns.Name] = ns.Annotations
-			nsLabels[ns.Name] = ns.Labels
-		}
-	} else {
-		for _, ns := range nsList.Items {
-			nsAnnotations[ns.Name] = ns.Annotations
-			nsLabels[ns.Name] = ns.Labels
+	selected := make(map[string]struct{}, len(namespaces))
+	if len(namespaces) > 0 {
+		for _, namespace := range namespaces {
+			selected[namespace] = struct{}{}
 		}
 	}
+	nsAnnotations := make(map[string]map[string]string, len(nsList.Items))
+	nsLabels := make(map[string]map[string]string, len(nsList.Items))
+	for i := range nsList.Items {
+		ns := &nsList.Items[i]
+		if len(selected) > 0 {
+			if _, ok := selected[ns.Name]; !ok {
+				continue
+			}
+		}
+		nsAnnotations[ns.Name] = ns.Annotations
+		nsLabels[ns.Name] = ns.Labels
+	}
+	include := func(namespace string) bool {
+		if len(selected) == 0 {
+			return true
+		}
+		_, ok := selected[namespace]
+		return ok
+	}
 
-	for _, ns := range namespaces {
-		workloads, err := d.DiscoverByNamespace(ctx, ns)
-		if err != nil {
-			return nil, err
+	var deployments appsv1.DeploymentList
+	if err := d.client.List(ctx, &deployments); err != nil {
+		return nil, err
+	}
+	var statefulSets appsv1.StatefulSetList
+	if err := d.client.List(ctx, &statefulSets); err != nil {
+		return nil, err
+	}
+	var cronJobs batchv1.CronJobList
+	if err := d.client.List(ctx, &cronJobs); err != nil {
+		return nil, err
+	}
+	var horizontalPodAutoscalers autoscalingv2.HorizontalPodAutoscalerList
+	if err := d.client.List(ctx, &horizontalPodAutoscalers); err != nil {
+		return nil, err
+	}
+	hpaTargets := indexedHPATargets(horizontalPodAutoscalers.Items, include)
+
+	result := make([]ports.DiscoveredWorkload, 0, len(deployments.Items)+len(statefulSets.Items)+len(cronJobs.Items))
+	for i := range deployments.Items {
+		dep := &deployments.Items[i]
+		if !include(dep.Namespace) {
+			continue
 		}
-		// Enrich workloads with namespace metadata
-		for i := range workloads {
-			workloads[i].NamespaceAnnotations = nsAnnotations[ns]
-			workloads[i].NamespaceLabels = nsLabels[ns]
+		result = append(result, ports.DiscoveredWorkload{
+			Ref:      domain.WorkloadRef{APIVersion: "apps/v1", Namespace: dep.Namespace, Name: dep.Name, Kind: domain.WorkloadKindDeployment, UID: string(dep.UID)},
+			Replicas: depReplicas(dep), Annotations: dep.Annotations, Labels: dep.Labels,
+			NamespaceAnnotations: nsAnnotations[dep.Namespace], NamespaceLabels: nsLabels[dep.Namespace],
+			Resources:     computeDeploymentResources(dep),
+			HPAControlled: hpaTargets[workloadIdentity(dep.Namespace, "apps/v1", "Deployment", dep.Name)],
+		})
+	}
+	for i := range statefulSets.Items {
+		ss := &statefulSets.Items[i]
+		if !include(ss.Namespace) {
+			continue
 		}
-		result = append(result, workloads...)
+		result = append(result, ports.DiscoveredWorkload{
+			Ref:      domain.WorkloadRef{APIVersion: "apps/v1", Namespace: ss.Namespace, Name: ss.Name, Kind: domain.WorkloadKindStatefulSet, UID: string(ss.UID)},
+			Replicas: ptrInt32Val(ss.Spec.Replicas), Annotations: ss.Annotations, Labels: ss.Labels,
+			NamespaceAnnotations: nsAnnotations[ss.Namespace], NamespaceLabels: nsLabels[ss.Namespace],
+			Resources:     computeStatefulSetResources(ss),
+			HPAControlled: hpaTargets[workloadIdentity(ss.Namespace, "apps/v1", "StatefulSet", ss.Name)],
+		})
+	}
+	for i := range cronJobs.Items {
+		cj := &cronJobs.Items[i]
+		if !include(cj.Namespace) {
+			continue
+		}
+		result = append(result, ports.DiscoveredWorkload{
+			Ref:       domain.WorkloadRef{APIVersion: "batch/v1", Namespace: cj.Namespace, Name: cj.Name, Kind: domain.WorkloadKindCronJob, UID: string(cj.UID)},
+			Suspended: ptrBoolVal(cj.Spec.Suspend), ActiveJobs: int32(len(cj.Status.Active)), Annotations: cj.Annotations, Labels: cj.Labels,
+			NamespaceAnnotations: nsAnnotations[cj.Namespace], NamespaceLabels: nsLabels[cj.Namespace],
+			Resources: computeCronJobResources(cj),
+		})
 	}
 	return result, nil
 }
 
+func depReplicas(dep *appsv1.Deployment) int32 { return ptrInt32Val(dep.Spec.Replicas) }
+
 func (d *Discoverer) DiscoverByNamespace(ctx context.Context, namespace string) ([]ports.DiscoveredWorkload, error) {
 	var result []ports.DiscoveredWorkload
+	var ns corev1.Namespace
+	if err := d.client.Get(ctx, client.ObjectKey{Name: namespace}, &ns); err != nil {
+		return nil, err
+	}
+	var horizontalPodAutoscalers autoscalingv2.HorizontalPodAutoscalerList
+	if err := d.client.List(ctx, &horizontalPodAutoscalers, client.InNamespace(namespace)); err != nil {
+		return nil, err
+	}
+	hpaTargets := indexedHPATargets(horizontalPodAutoscalers.Items, func(string) bool { return true })
 
 	// Discover Deployments
 	var deployments appsv1.DeploymentList
@@ -69,12 +138,14 @@ func (d *Discoverer) DiscoverByNamespace(ctx context.Context, namespace string) 
 	}
 	for _, dep := range deployments.Items {
 		result = append(result, ports.DiscoveredWorkload{
-			Ref:             domain.WorkloadRef{Namespace: namespace, Name: dep.Name, Kind: domain.WorkloadKindDeployment},
-			Replicas:        ptrInt32Val(dep.Spec.Replicas),
-			Annotations:     dep.Annotations,
-			Labels:          dep.Labels,
-			NamespaceLabels: nil, // populated by caller if needed
-			Resources:       computeDeploymentResources(&dep),
+			Ref:                  domain.WorkloadRef{APIVersion: "apps/v1", Namespace: namespace, Name: dep.Name, Kind: domain.WorkloadKindDeployment, UID: string(dep.UID)},
+			Replicas:             ptrInt32Val(dep.Spec.Replicas),
+			Annotations:          dep.Annotations,
+			Labels:               dep.Labels,
+			NamespaceLabels:      ns.Labels,
+			NamespaceAnnotations: ns.Annotations,
+			Resources:            computeDeploymentResources(&dep),
+			HPAControlled:        hpaTargets[workloadIdentity(namespace, "apps/v1", "Deployment", dep.Name)],
 		})
 	}
 
@@ -85,11 +156,14 @@ func (d *Discoverer) DiscoverByNamespace(ctx context.Context, namespace string) 
 	}
 	for _, ss := range statefulSets.Items {
 		result = append(result, ports.DiscoveredWorkload{
-			Ref:         domain.WorkloadRef{Namespace: namespace, Name: ss.Name, Kind: domain.WorkloadKindStatefulSet},
-			Replicas:    ptrInt32Val(ss.Spec.Replicas),
-			Annotations: ss.Annotations,
-			Labels:      ss.Labels,
-			Resources:   computeStatefulSetResources(&ss),
+			Ref:                  domain.WorkloadRef{APIVersion: "apps/v1", Namespace: namespace, Name: ss.Name, Kind: domain.WorkloadKindStatefulSet, UID: string(ss.UID)},
+			Replicas:             ptrInt32Val(ss.Spec.Replicas),
+			Annotations:          ss.Annotations,
+			Labels:               ss.Labels,
+			Resources:            computeStatefulSetResources(&ss),
+			NamespaceLabels:      ns.Labels,
+			NamespaceAnnotations: ns.Annotations,
+			HPAControlled:        hpaTargets[workloadIdentity(namespace, "apps/v1", "StatefulSet", ss.Name)],
 		})
 	}
 
@@ -100,15 +174,41 @@ func (d *Discoverer) DiscoverByNamespace(ctx context.Context, namespace string) 
 	}
 	for _, cj := range cronJobs.Items {
 		result = append(result, ports.DiscoveredWorkload{
-			Ref:         domain.WorkloadRef{Namespace: namespace, Name: cj.Name, Kind: domain.WorkloadKindCronJob},
-			Suspended:   ptrBoolVal(cj.Spec.Suspend),
-			Annotations: cj.Annotations,
-			Labels:      cj.Labels,
-			Resources:   computeCronJobResources(&cj),
+			Ref:                  domain.WorkloadRef{APIVersion: "batch/v1", Namespace: namespace, Name: cj.Name, Kind: domain.WorkloadKindCronJob, UID: string(cj.UID)},
+			Suspended:            ptrBoolVal(cj.Spec.Suspend),
+			ActiveJobs:           int32(len(cj.Status.Active)),
+			Annotations:          cj.Annotations,
+			Labels:               cj.Labels,
+			Resources:            computeCronJobResources(&cj),
+			NamespaceLabels:      ns.Labels,
+			NamespaceAnnotations: ns.Annotations,
 		})
 	}
 
 	return result, nil
+}
+
+func indexedHPATargets(hpas []autoscalingv2.HorizontalPodAutoscaler, include func(string) bool) map[string]bool {
+	targets := make(map[string]bool, len(hpas))
+	for i := range hpas {
+		hpa := &hpas[i]
+		if !include(hpa.Namespace) {
+			continue
+		}
+		ref := hpa.Spec.ScaleTargetRef
+		// Aura Power only mutates these two scalable workload kinds. Requiring
+		// the full reference prevents a same-name custom resource from blocking
+		// an unrelated Deployment or StatefulSet.
+		if ref.APIVersion != "apps/v1" || (ref.Kind != "Deployment" && ref.Kind != "StatefulSet") || ref.Name == "" {
+			continue
+		}
+		targets[workloadIdentity(hpa.Namespace, ref.APIVersion, ref.Kind, ref.Name)] = true
+	}
+	return targets
+}
+
+func workloadIdentity(namespace, apiVersion, kind, name string) string {
+	return namespace + "\x00" + apiVersion + "\x00" + kind + "\x00" + name
 }
 
 func computeDeploymentResources(dep *appsv1.Deployment) domain.ResourceSummary {
@@ -128,13 +228,17 @@ func computeCronJobResources(cj *batchv1.CronJob) domain.ResourceSummary {
 func computePodResources(containers []corev1.Container, replicas int32) domain.ResourceSummary {
 	var cpuMillis, memMiB int64
 	for _, c := range containers {
-		// Prefer requests, fallback to limits
-		if req := c.Resources.Requests; req != nil {
-			cpuMillis += req.Cpu().MilliValue()
-			memMiB += req.Memory().Value() / (1024 * 1024)
-		} else if lim := c.Resources.Limits; lim != nil {
-			cpuMillis += lim.Cpu().MilliValue()
-			memMiB += lim.Memory().Value() / (1024 * 1024)
+		// Prefer requests and fall back to limits independently for each
+		// resource. Kubernetes ResourceList may contain only one of them.
+		if cpu, ok := c.Resources.Requests[corev1.ResourceCPU]; ok {
+			cpuMillis += cpu.MilliValue()
+		} else if cpu, ok := c.Resources.Limits[corev1.ResourceCPU]; ok {
+			cpuMillis += cpu.MilliValue()
+		}
+		if memory, ok := c.Resources.Requests[corev1.ResourceMemory]; ok {
+			memMiB += memory.Value() / (1024 * 1024)
+		} else if memory, ok := c.Resources.Limits[corev1.ResourceMemory]; ok {
+			memMiB += memory.Value() / (1024 * 1024)
 		}
 	}
 	return domain.ResourceSummary{

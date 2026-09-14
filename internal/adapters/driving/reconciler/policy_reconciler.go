@@ -8,6 +8,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	v1alpha1 "github.com/weauratech/aura-power/api/v1alpha1"
+	"github.com/weauratech/aura-power/internal/adapters/selection"
 	"github.com/weauratech/aura-power/internal/core/domain"
 	"github.com/weauratech/aura-power/internal/ports"
 )
@@ -16,10 +17,14 @@ import (
 // On policy create/update/delete, it enqueues affected targets for re-evaluation.
 type PolicyReconciler struct {
 	client.Client
-	Audit ports.AuditRecorder
+	Audit            ports.AuditRecorder
+	ControlNamespace string
 }
 
 func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	if !namespaceIsManaged(r.ControlNamespace, req.Namespace) {
+		return ctrl.Result{}, nil
+	}
 	logger := log.FromContext(ctx).WithValues("policy", req.NamespacedName)
 
 	var policy v1alpha1.PowerPolicy
@@ -36,8 +41,11 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	// Update affected target count
 	targets, err := r.countAffectedTargets(ctx, &policy)
 	if err == nil {
-		policy.Status.AffectedTargets = int32(targets)
-		_ = r.Status().Update(ctx, &policy)
+		count := int32(targets)
+		if policy.Status.AffectedTargets != count {
+			policy.Status.AffectedTargets = count
+			_ = r.Status().Update(ctx, &policy)
+		}
 	}
 
 	return ctrl.Result{}, nil
@@ -46,17 +54,23 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 func (r *PolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.PowerPolicy{}).
+		WithEventFilter(namespacePredicate(r.ControlNamespace)).
 		Complete(r)
 }
 
 func (r *PolicyReconciler) countAffectedTargets(ctx context.Context, policy *v1alpha1.PowerPolicy) (int, error) {
 	var targets v1alpha1.PowerTargetList
-	if err := r.List(ctx, &targets); err != nil {
+	if err := r.List(ctx, &targets, namespaceListOptions(r.ControlNamespace)...); err != nil {
 		return 0, err
 	}
 
 	count := 0
 	domainPolicy := toDomainPolicy(policy)
+	resolved, err := selection.ResolveScope(ctx, r.Client, policy.Namespace, policy.Spec.Scope)
+	if err != nil {
+		return 0, err
+	}
+	domainPolicy.Scope = resolved
 	for _, t := range targets.Items {
 		domainTarget := toDomainTarget(&t)
 		if matchesPolicyScope(domainTarget, domainPolicy) {

@@ -1,0 +1,43 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: aura-managed-examples
+  namespace: argocd
+spec:
+  generators:
+    - list:
+        elements:
+          - name: example
+            namespace: example
+  template:
+    metadata:
+      name: 'aura-managed-{{name}}'
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/example/platform-config.git
+        targetRevision: main
+        path: 'workloads/{{name}}'
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: '{{namespace}}'
+      ignoreDifferences:
+        - group: apps
+          kind: Deployment
+          jsonPointers:
+            - /spec/replicas
+        - group: apps
+          kind: StatefulSet
+          jsonPointers:
+            - /spec/replicas
+        - group: batch
+          kind: CronJob
+          jsonPointers:
+            - /spec/suspend
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true
+          - RespectIgnoreDifferences=true

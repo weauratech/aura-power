@@ -21,13 +21,6 @@ metadata:
   labels:
     {{- include "aura-power.controller.labels" . | nindent 4 }}
 rules:
-  # Full CRD management
-  - apiGroups: ["power.aura.sh"]
-    resources: ["powerpolicies", "poweroverrides", "powertargets", "powerauditevents", "powerschedules", "powernamespacegroups", "powernotificationchannels"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: ["power.aura.sh"]
-    resources: ["powerpolicies/status", "poweroverrides/status", "powertargets/status", "powernotificationchannels/status"]
-    verbs: ["get", "update", "patch"]
   # Workload execution (power-down / restore)
   - apiGroups: ["apps"]
     resources: ["deployments", "statefulsets", "deployments/scale", "statefulsets/scale"]
@@ -35,6 +28,10 @@ rules:
   - apiGroups: ["batch"]
     resources: ["cronjobs"]
     verbs: ["get", "list", "watch", "patch", "update"]
+  # Capability readiness checks the installed CRD schema before mutation.
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get"]
   # Discovery
   - apiGroups: [""]
     resources: ["namespaces"]
@@ -46,10 +43,6 @@ rules:
   - apiGroups: [""]
     resources: ["events"]
     verbs: ["create", "patch"]
-  # Leader election
-  - apiGroups: ["coordination.k8s.io"]
-    resources: ["leases"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -61,6 +54,88 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: {{ include "aura-power.controller.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "aura-power.controller.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+---
+# Aura decision state and leader election are restricted to the release
+# namespace even though workload discovery and execution are cluster-wide.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "aura-power.controller.fullname" . }}-control
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aura-power.controller.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["power.aura.sh"]
+    resources: ["poweroverrides", "powernamespacegroups"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["power.aura.sh"]
+    resources: ["powerpolicies"]
+    verbs: ["get", "list", "watch", "create", "update"]
+  - apiGroups: ["power.aura.sh"]
+    resources: ["powerschedules"]
+    verbs: ["get", "list", "watch", "create"]
+  - apiGroups: ["power.aura.sh"]
+    resources: ["powertargets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["power.aura.sh"]
+    resources: ["powerauditevents"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: ["power.aura.sh"]
+    resources: ["powernotificationchannels"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["power.aura.sh"]
+    resources: ["powerpolicies/status", "poweroverrides/status", "powertargets/status", "powernotificationchannels/status"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "aura-power.controller.fullname" . }}-control
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aura-power.controller.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "aura-power.controller.fullname" . }}-control
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "aura-power.controller.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+---
+# Webhook credentials stay namespace-scoped. A channel can only reference a
+# Secret in its own namespace, and the standard installation stores channels
+# in the release namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "aura-power.controller.fullname" . }}-notification-secrets
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aura-power.controller.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "aura-power.controller.fullname" . }}-notification-secrets
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aura-power.controller.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "aura-power.controller.fullname" . }}-notification-secrets
 subjects:
   - kind: ServiceAccount
     name: {{ include "aura-power.controller.serviceAccountName" . }}

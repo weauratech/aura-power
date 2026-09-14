@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState, type KeyboardEvent } from 'react';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import Button from '@mui/material/Button';
@@ -40,8 +40,14 @@ function useNotificationChannels() {
     queryFn: async () => {
       const res = await fetch('/api/v1/notification-channels', { credentials: 'same-origin' });
       if (!res.ok) {
-        if (res.status === 504) return { items: [], count: 0 };
-        throw new Error('Failed to load channels');
+        let detail = '';
+        try {
+          const payload = await res.json();
+          detail = typeof payload?.error === 'string' ? payload.error : '';
+        } catch {
+          // The status code still gives operators an actionable failure signal.
+        }
+        throw new Error(detail ? `Failed to load channels: ${detail}` : `Failed to load channels (HTTP ${res.status})`);
       }
       const data = await res.json();
       return { items: data.items || [], count: data.count || 0 };
@@ -54,12 +60,21 @@ function useNotificationChannels() {
 const EVENT_OPTIONS = [
   'workload.powered_down',
   'workload.restored',
-  'workload.execution_error',
+  'execution.error',
   'override.created',
   'override.expired',
 ];
 
+function activateRow(event: KeyboardEvent<HTMLTableRowElement>, action: () => void) {
+  if (event.target !== event.currentTarget) return;
+  if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault();
+    action();
+  }
+}
+
 export function Notifications() {
+  const drawerTitleId = useId();
   const { data, isLoading, error } = useNotificationChannels();
   const queryClient = useQueryClient();
   const notify = useNotify();
@@ -98,7 +113,7 @@ export function Notifications() {
       } else {
         // Create new
         await apiPost('/notification-channels', {
-          metadata: { name, namespace: 'aura-system' },
+          metadata: { name },
           spec,
         });
         notify(`Channel "${name}" created`);
@@ -164,13 +179,15 @@ export function Notifications() {
             Webhook channels for power event alerts.
           </Typography>
         </Box>
-        <Button variant="contained" startIcon={<AddIcon />} onClick={openCreate}>
+        <Button aria-label="Create a new notification channel" variant="contained" startIcon={<AddIcon />} onClick={openCreate}>
           New Channel
         </Button>
       </Stack>
 
       {isLoading ? (
-        <Skeleton variant="rounded" height={200} />
+        <Box role="status" aria-label="Loading notification channels">
+          <Skeleton variant="rounded" height={200} />
+        </Box>
       ) : !data?.items?.length ? (
         <EmptyState
           title="No notification channels"
@@ -194,7 +211,15 @@ export function Notifications() {
             </TableHead>
             <TableBody>
               {data.items?.map((ch) => (
-                <TableRow key={`${ch.metadata.namespace}/${ch.metadata.name}`} hover sx={{ cursor: 'pointer' }} onClick={() => openEdit(ch)}>
+                <TableRow
+                  key={`${ch.metadata.namespace}/${ch.metadata.name}`}
+                  hover
+                  tabIndex={0}
+                  aria-label={`Edit notification channel ${ch.metadata.name}`}
+                  sx={{ cursor: 'pointer' }}
+                  onClick={() => openEdit(ch)}
+                  onKeyDown={(event) => activateRow(event, () => openEdit(ch))}
+                >
                   <TableCell>
                     <Typography variant="subtitle2">{ch.metadata.name}</Typography>
                   </TableCell>
@@ -230,7 +255,14 @@ export function Notifications() {
                   </TableCell>
                   <TableCell align="right">
                     <Tooltip title="Delete">
-                      <IconButton size="small" onClick={() => setDeleteTarget({ name: ch.metadata.name, namespace: ch.metadata.namespace })}>
+                      <IconButton
+                        size="small"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setDeleteTarget({ name: ch.metadata.name, namespace: ch.metadata.namespace });
+                        }}
+                        aria-label={`Delete notification channel ${ch.metadata.name}`}
+                      >
                         <DeleteIcon fontSize="small" />
                       </IconButton>
                     </Tooltip>
@@ -243,11 +275,17 @@ export function Notifications() {
       )}
 
       {/* Create Channel Drawer */}
-      <Drawer anchor="right" open={drawerOpen} onClose={() => setDrawerOpen(false)} sx={{ '& .MuiDrawer-paper': { width: 400, p: 0 } }}>
+      <Drawer
+        anchor="right"
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        PaperProps={{ role: 'dialog', 'aria-modal': true, 'aria-labelledby': drawerTitleId }}
+        sx={{ '& .MuiDrawer-paper': { width: 400, maxWidth: '100vw', p: 0 } }}
+      >
         <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
           <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ px: 3, py: 2.5, borderBottom: 1, borderColor: 'divider' }}>
-            <Typography variant="h5">{editingChannel ? 'Edit Channel' : 'New Channel'}</Typography>
-            <IconButton onClick={() => setDrawerOpen(false)} size="small"><CloseIcon /></IconButton>
+            <Typography id={drawerTitleId} variant="h5">{editingChannel ? 'Edit Channel' : 'New Channel'}</Typography>
+            <IconButton onClick={() => setDrawerOpen(false)} size="small" aria-label="Close notification channel drawer" autoFocus><CloseIcon /></IconButton>
           </Stack>
 
           <Box sx={{ flex: 1, overflow: 'auto', px: 3, py: 3 }}>
@@ -257,7 +295,6 @@ export function Notifications() {
               <TextField label="Provider Type" value={type} onChange={e => setType(e.target.value)} select size="small" fullWidth>
                 <MenuItem value="google-chat">Google Chat</MenuItem>
                 <MenuItem value="slack">Slack</MenuItem>
-                <MenuItem value="discord">Discord</MenuItem>
                 <MenuItem value="generic">Generic Webhook</MenuItem>
               </TextField>
               <TextField label="Webhook URL" value={url} onChange={e => setUrl(e.target.value)} size="small" fullWidth required placeholder="https://..." />

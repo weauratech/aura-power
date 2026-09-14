@@ -81,27 +81,37 @@ func runLogin(server, username, password string) error {
 		fmt.Println() // newline after hidden input
 	}
 
-	// Call login API
-	payload := fmt.Sprintf(`{"username":"%s","password":"%s"}`, username, password)
-	resp, err := http.Post(server+"/api/v1/auth/login", "application/json", strings.NewReader(payload))
+	// Call login API using typed JSON so credentials are escaped correctly.
+	payload, err := json.Marshal(struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}{Username: username, Password: password})
+	if err != nil {
+		return fmt.Errorf("failed to encode credentials: %w", err)
+	}
+	resp, err := doJSONRequest(http.MethodPost, server+"/api/v1/auth/login", "", payload)
 	if err != nil {
 		return fmt.Errorf("failed to connect to server: %w", err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusUnauthorized {
-		return fmt.Errorf("invalid credentials")
-	}
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("login failed with status %d", resp.StatusCode)
+	body, err := requireStatus(resp, http.StatusOK)
+	if err != nil {
+		if resp.StatusCode == http.StatusUnauthorized {
+			return fmt.Errorf("invalid credentials: %w", err)
+		}
+		return fmt.Errorf("login failed: %w", err)
 	}
 
 	var tokens struct {
 		AccessToken  string `json:"accessToken"`
 		RefreshToken string `json:"refreshToken"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&tokens); err != nil {
+	if err := json.Unmarshal(body, &tokens); err != nil {
 		return fmt.Errorf("failed to parse response: %w", err)
+	}
+	if tokens.AccessToken == "" || tokens.RefreshToken == "" {
+		return fmt.Errorf("login response did not contain both tokens")
 	}
 
 	// Save config
@@ -140,8 +150,9 @@ func runWhoami() error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("failed to get user info (status %d)", resp.StatusCode)
+	body, err := requireStatus(resp, http.StatusOK)
+	if err != nil {
+		return fmt.Errorf("failed to get user info: %w", err)
 	}
 
 	var user struct {
@@ -149,7 +160,7 @@ func runWhoami() error {
 		Username string `json:"username"`
 		Role     string `json:"role"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&user); err != nil {
+	if err := json.Unmarshal(body, &user); err != nil {
 		return err
 	}
 

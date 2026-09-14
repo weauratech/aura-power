@@ -4,6 +4,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+const (
+	PowerScheduleStateOn  = "on"
+	PowerScheduleStateOff = "off"
+)
+
 // PowerScheduleSpec defines a named, reusable power schedule.
 type PowerScheduleSpec struct {
 	// Windows defines time windows when DesiredState is active.

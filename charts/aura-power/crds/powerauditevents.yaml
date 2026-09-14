@@ -31,19 +31,38 @@ spec:
                 type: string
               ruleName:
                 type: string
+              notificationSuppressed:
+                type: boolean
+              notificationSuppressionSource:
+                enum:
+                - namespace-label
+                type: string
+              notificationSuppressionNamespaceUID:
+                type: string
               target:
                 properties:
+                  apiVersion:
+                    type: string
+                  cluster:
+                    type: string
                   kind:
                     type: string
                   name:
                     type: string
                   namespace:
                     type: string
+                  uid:
+                    type: string
                 type: object
               timestamp:
                 format: date-time
                 type: string
             type: object
+            x-kubernetes-validations:
+            - message: suppressed notifications require a namespace-label source and namespace UID
+              rule: '!has(self.notificationSuppressed) || !self.notificationSuppressed || (has(self.notificationSuppressionSource) && self.notificationSuppressionSource == ''namespace-label'' && has(self.notificationSuppressionNamespaceUID) && self.notificationSuppressionNamespaceUID != '''')'
+            - message: notification suppression source requires a suppressed decision
+              rule: '!has(self.notificationSuppressionSource) || (has(self.notificationSuppressed) && self.notificationSuppressed)'
         type: object
     served: true
     storage: true

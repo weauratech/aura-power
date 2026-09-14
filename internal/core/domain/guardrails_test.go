@@ -68,6 +68,22 @@ func TestEvaluateGuardrails_ArgoCDManaged_OptedIn(t *testing.T) {
 	}
 }
 
+func TestEvaluateGuardrails_HPARequiresExplicitOptIn(t *testing.T) {
+	config := DefaultGuardrailConfig()
+	target := makeTarget("dev", "api", WorkloadKindDeployment)
+	target.Ownership = []OwnershipSignal{{Type: OwnershipHPA}}
+
+	blocks := EvaluateGuardrails(target, config)
+	if len(blocks) != 1 || blocks[0].Type != BlockHPAControlled || !blocks[0].Waivable {
+		t.Fatalf("HPA target did not fail closed: %+v", blocks)
+	}
+
+	target.Annotations = map[string]string{config.OptInAnnotation: "true"}
+	if blocks := EvaluateGuardrails(target, config); len(blocks) != 0 {
+		t.Fatalf("explicitly opted-in HPA target remained blocked: %+v", blocks)
+	}
+}
+
 func TestEvaluateGuardrails_MultipleBlocks_AllReported(t *testing.T) {
 	target := makeTarget("dev", "api", WorkloadKindDeployment)
 	target.Ownership = []OwnershipSignal{
@@ -101,6 +117,20 @@ func TestDetectOwnership_ArgoCD(t *testing.T) {
 	signals := DetectOwnership(annotations, labels, "aura.sh/power-eligible")
 	if len(signals) != 1 || signals[0].Type != OwnershipArgoCD {
 		t.Fatal("expected ArgoCD ownership signal")
+	}
+}
+
+func TestDetectOwnership_ArgoCDDefaultTrackingLabel(t *testing.T) {
+	signals := DetectOwnership(nil, map[string]string{"app.kubernetes.io/instance": "fixture-app"}, "aura.sh/power-eligible")
+	if len(signals) != 1 || signals[0].Type != OwnershipArgoCD {
+		t.Fatalf("default Argo CD tracking label was not detected: %+v", signals)
+	}
+}
+
+func TestDetectOwnership_ArgoCDCustomTrackingLabel(t *testing.T) {
+	signals := DetectOwnershipWithArgoTracking(nil, map[string]string{"gitops.example.io/app": "fixture-app"}, "aura.sh/power-eligible", []string{"gitops.example.io/app"})
+	if len(signals) != 1 || signals[0].Type != OwnershipArgoCD {
+		t.Fatalf("custom Argo CD tracking label was not detected: %+v", signals)
 	}
 }
 

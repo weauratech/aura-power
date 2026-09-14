@@ -4,20 +4,33 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// AuditResourceReference identifies a workload or configuration resource
+// involved in an auditable decision.
+type AuditResourceReference struct {
+	Cluster    string `json:"cluster,omitempty"`
+	APIVersion string `json:"apiVersion,omitempty"`
+	Namespace  string `json:"namespace"`
+	Name       string `json:"name"`
+	Kind       string `json:"kind"`
+	UID        string `json:"uid,omitempty"`
+}
+
 // PowerAuditEventSpec defines a structured audit record.
+// +kubebuilder:validation:XValidation:rule="!has(self.notificationSuppressed) || !self.notificationSuppressed || (has(self.notificationSuppressionSource) && self.notificationSuppressionSource == 'namespace-label' && has(self.notificationSuppressionNamespaceUID) && self.notificationSuppressionNamespaceUID != '')",message="suppressed notifications require a namespace-label source and namespace UID"
+// +kubebuilder:validation:XValidation:rule="!has(self.notificationSuppressionSource) || (has(self.notificationSuppressed) && self.notificationSuppressed)",message="notification suppression source requires a suppressed decision"
 type PowerAuditEventSpec struct {
 	// Timestamp of the event.
 	Timestamp metav1.Time `json:"timestamp"`
 
 	// Action identifies the type of event.
-	// +kubebuilder:validation:Enum=policy.created;policy.modified;policy.deleted;override.created;override.expired;workload.powered_down;workload.restored;action.blocked;execution.error;divergence.detected;workload.opted_in
+	// +kubebuilder:validation:Enum=policy.created;policy.modified;policy.deleted;override.created;override.modified;override.deleted;override.expired;workload.powered_down;workload.restored;action.blocked;execution.error;divergence.detected;workload.opted_in
 	Action string `json:"action"`
 
 	// Actor identifies who/what triggered the event.
 	Actor string `json:"actor"`
 
-	// Target identifies the affected workload.
-	Target TargetReference `json:"target"`
+	// Target identifies the affected workload or configuration resource.
+	Target AuditResourceReference `json:"target"`
 
 	// Result of the action.
 	// +kubebuilder:validation:Enum=success;blocked;error
@@ -29,6 +42,23 @@ type PowerAuditEventSpec struct {
 	// RuleName identifies the policy/override responsible.
 	// +optional
 	RuleName string `json:"ruleName,omitempty"`
+
+	// NotificationSuppressed records the immutable external-delivery decision
+	// made before the corresponding workload mutation. The audit remains visible
+	// through Kubernetes, the API, CSV export, and the panel.
+	// +optional
+	NotificationSuppressed bool `json:"notificationSuppressed"`
+
+	// NotificationSuppressionSource identifies the authority used for a true
+	// decision. Empty means normal delivery.
+	// +optional
+	// +kubebuilder:validation:Enum=namespace-label
+	NotificationSuppressionSource string `json:"notificationSuppressionSource,omitempty"`
+
+	// NotificationSuppressionNamespaceUID binds the decision to the live
+	// Namespace incarnation checked before mutation.
+	// +optional
+	NotificationSuppressionNamespaceUID string `json:"notificationSuppressionNamespaceUID,omitempty"`
 }
 
 // +kubebuilder:object:root=true

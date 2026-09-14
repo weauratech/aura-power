@@ -1,25 +1,53 @@
-{{- if .Values.serviceMonitor.enabled }}
+{{- if and .Values.serviceMonitor.enabled .Values.server.enabled }}
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
   name: {{ include "aura-power.fullname" . }}-server
+  {{- if .Values.serviceMonitor.namespace }}
+  namespace: {{ .Values.serviceMonitor.namespace }}
+  {{- end }}
   labels:
     {{- include "aura-power.labels" . | nindent 4 }}
     {{- with .Values.serviceMonitor.labels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
 spec:
-  {{- if .Values.serviceMonitor.namespace }}
   namespaceSelector:
     matchNames:
-      - {{ .Values.serviceMonitor.namespace }}
-  {{- end }}
+      - {{ .Release.Namespace }}
   selector:
     matchLabels:
       app.kubernetes.io/name: {{ include "aura-power.name" . }}
       app.kubernetes.io/component: server
   endpoints:
     - port: http
+      path: /metrics
+      interval: {{ .Values.serviceMonitor.interval | default "30s" }}
+{{- end }}
+{{- if and .Values.serviceMonitor.enabled .Values.controller.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "aura-power.fullname" . }}-controller
+  {{- if .Values.serviceMonitor.namespace }}
+  namespace: {{ .Values.serviceMonitor.namespace }}
+  {{- end }}
+  labels:
+    {{- include "aura-power.labels" . | nindent 4 }}
+    {{- with .Values.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "aura-power.name" . }}
+      app.kubernetes.io/component: controller
+  endpoints:
+    - port: metrics
       path: /metrics
       interval: {{ .Values.serviceMonitor.interval | default "30s" }}
 {{- end }}

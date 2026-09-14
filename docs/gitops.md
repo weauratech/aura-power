@@ -7,7 +7,7 @@ Aura Power operates safely alongside GitOps tools (ArgoCD, Flux, Helm) without c
 When Aura Power powers down a workload, it:
 1. Captures a snapshot of the current state (replica count)
 2. Scales `spec.replicas` to 0 (Deployments/StatefulSets) or sets `spec.suspend: true` (CronJobs)
-3. Annotates the workload with `aura.sh/last-action` and `aura.sh/snapshot-ref`
+3. Records the snapshot and durable action state on the corresponding `PowerTarget`
 
 This means the live state of `spec.replicas` will differ from what's in Git — which triggers GitOps sync warnings.
 
@@ -17,9 +17,17 @@ This means the live state of `spec.replicas` will differ from what's in Git — 
 
 ArgoCD detects that `spec.replicas` differs from the Git source and marks the Application as **OutOfSync**. If auto-sync is enabled, ArgoCD will immediately revert the scale-down.
 
-### Solution: ignoreDifferences
+### Supported field-ownership contract
 
-Add `ignoreDifferences` to your ArgoCD Application spec for workloads managed by Aura Power:
+Aura Power supports Argo CD coexistence only when the Application declares both
+parts of the field-ownership contract:
+
+1. `ignoreDifferences` delegates `/spec/replicas` or `/spec/suspend` to Aura Power.
+2. `RespectIgnoreDifferences=true` prevents sync and self-heal from applying those
+   delegated fields back to the Git value.
+
+Configure both on the Application (or on `spec.template.spec` in the
+ApplicationSet that generates it):
 
 ```yaml
 apiVersion: argoproj.io/v1alpha1
@@ -41,9 +49,18 @@ spec:
       kind: CronJob
       jsonPointers:
         - /spec/suspend
+  syncPolicy:
+    syncOptions:
+      - RespectIgnoreDifferences=true
 ```
 
-This tells ArgoCD to ignore replica count changes made by Aura Power.
+`ignoreDifferences` by itself only changes diff calculation and is not a
+supported configuration for self-heal. Complete Application and ApplicationSet
+examples are available in [`examples/gitops/argocd`](../examples/gitops/argocd).
+
+Argo CD applies `RespectIgnoreDifferences` only after the resource exists. Keep
+the replica/suspend value in Git for initial creation, allow the first sync to
+create the resource, and only then activate an Aura off policy.
 
 ### Per-Resource Override (more granular)
 
@@ -62,6 +79,9 @@ spec:
       namespace: staging
       jsonPointers:
         - /spec/replicas
+  syncPolicy:
+    syncOptions:
+      - RespectIgnoreDifferences=true
 ```
 
 ### Opt-In Annotation
@@ -86,9 +106,77 @@ metadata:
 
 ### Recommended Setup
 
-1. Add `ignoreDifferences` for `/spec/replicas` in your ArgoCD Application
-2. Add `aura.sh/power-eligible: "true"` to workloads you want Aura Power to manage
-3. Keep auto-sync enabled — ArgoCD will sync everything except replica count
+1. Add `ignoreDifferences` for the Aura-owned field in the Application or ApplicationSet source.
+2. Add `RespectIgnoreDifferences=true` to `syncPolicy.syncOptions` in the same source.
+3. Sync once and confirm that the workload exists before activating an off policy.
+4. Add `aura.sh/power-eligible: "true"` to workloads you want Aura Power to manage.
+5. Verify an unrelated Git change, such as an image update, still syncs.
+
+Aura Power persists an action intent before changing a workload. After one
+accepted write, a repeated divergence for the same desired state is reported as
+`status.action.phase: Contended`; the controller observes the resource without
+issuing the same mutation repeatedly. Correct the Application/ApplicationSet
+field ownership, then explicitly authorize one retry by changing the target's
+retry token:
+
+```bash
+kubectl annotate powertarget -n aura-system TARGET_NAME \
+  power.aura.sh/retry-action="$(date +%s)" --overwrite
+```
+
+`Applied` means the Kubernetes API accepted Aura's write; it does not yet mean
+the discovery loop observed the desired state. A fast self-heal can therefore
+move the operation from `Applied` to `Contended` on the next observation. A
+normal transition moves from `Applied` to `Converged` after discovery observes
+the delegated field.
+
+### CronJob restoration semantics
+
+Aura Power snapshots the effective value of `spec.suspend` before changing a
+CronJob and restores that exact value. An omitted `spec.suspend` uses the
+Kubernetes default `false`, so its snapshot is restored as `false`. Restoration
+fails without changing the CronJob when the snapshot has no suspend value or
+when the workload UID differs from the UID captured by discovery. Repeated
+restoration of the same snapshot is idempotent.
+
+Suspension only stops new schedules. It does not stop Jobs that the CronJob has
+already created; their count is exposed as
+`PowerTarget.status.observedState.activeJobs`. Aura Power does not delete,
+cancel, or restart those Jobs.
+
+Kubernetes counts schedules that occur while a CronJob is suspended as missed.
+When the CronJob is resumed, jobs can be created immediately according to its
+`startingDeadlineSeconds` and the CronJob controller's missed-schedule rules.
+Set `startingDeadlineSeconds`, concurrency policy, and job history limits in the
+CronJob manifest to express the intended catch-up behavior. Aura Power preserves
+those fields and does not promise that a suspended window will be skipped.
+
+For GitOps-managed CronJobs, delegate `/spec/suspend` with both
+`ignoreDifferences` and `RespectIgnoreDifferences=true`. Git remains authoritative
+for schedule and catch-up fields; Aura Power is temporarily authoritative only
+for `spec.suspend`. The same rule applies when restoring an originally suspended
+CronJob: Git must also declare the intended baseline or it can overwrite the
+restored value.
+
+### Reproducing the native compatibility gate
+
+`scripts/quality/kind-argocd-journey.sh` runs the supported contract against a
+disposable Kind cluster. The runner installs Argo CD v2.14.20 from a manifest
+with a pinned SHA-256, serves a two-revision Git fixture inside the cluster and
+tests manual sync, automated self-heal, `ignoreDifferences` with and without
+`RespectIgnoreDifferences=true`, and an ApplicationSet-generated Application.
+The workload matrix contains a Deployment, StatefulSet and CronJob. The CronJob
+case retains an existing Job, observes a schedule while suspended and verifies
+catch-up after resume.
+
+```bash
+export KUBECONFIG=/path/to/aura-power-quality.kubeconfig
+./scripts/quality/kind-argocd-journey.sh
+```
+
+The runner refuses any context other than `kind-aura-power-quality` by default,
+uses run-scoped names and labels, and verifies cleanup. `KIND_CLUSTER_NAME` may
+name another disposable Kind cluster for an isolated local run.
 
 ## Flux
 
@@ -160,7 +248,16 @@ No additional Helm configuration is needed since Helm won't revert the replica c
 
 ## HPA-Managed Workloads
 
-Workloads with an active Horizontal Pod Autoscaler are blocked by default. If Aura Power scales replicas to 0, the HPA has no effect. On restore, the HPA immediately takes over and scales to the appropriate level.
+Aura Power discovers `autoscaling/v2` Horizontal Pod Autoscalers by their exact
+`scaleTargetRef` (`apiVersion`, `kind`, `name`, and namespace). Deployments and
+StatefulSets with an active HPA are blocked by default.
+
+Immediately before power-down, the controller repeats the namespace HPA lookup
+through an uncached API-server reader. When it finds an HPA, it also reads the
+exact UID-bound workload and Namespace and recomputes opt-in from their current
+annotations. A newly-created HPA or removed opt-in therefore blocks that attempt.
+Any HPA LIST, workload GET, Namespace GET, or UID verification failure blocks
+the attempt; cached state is never treated as current safety evidence.
 
 ### Opt-In
 
@@ -169,17 +266,25 @@ kubectl annotate deployment my-app -n staging aura.sh/power-eligible="true"
 ```
 
 When opted in:
-- **Power-down**: Aura Power scales to 0, HPA becomes ineffective (min replicas = 0 pods)
-- **Restore**: Aura Power restores the snapshot replica count, HPA adjusts from there
+- **Power-down**: Aura Power snapshots the current live replica count and makes one scale-to-zero transition.
+- **Power-down hold**: the standard HPA algorithm disables scaling while current replicas are zero and `minReplicas` is positive, so the target remains off.
+- **Restore**: Aura Power restores the snapshot replica count, after which HPA resumes evaluation and may adjust positive replicas from live metrics.
+- **Contention**: if another scale writer reactivates the target during the off policy, Aura Power reports `Contended` and does not enter a write loop.
+
+Opt-in delegates a shared field to two controllers and must be deliberate. The
+validated contract covers the standard Kubernetes HPA zero-replica hold and
+snapshot restore. KEDA scale-to-zero, custom scale targets, and external systems
+that can activate a zero-replica target are separate integrations and are not
+covered by this contract.
 
 ## Summary
 
 | Tool | Default Behavior | Opt-In | Additional Config |
 |------|-----------------|--------|-------------------|
-| ArgoCD | Blocked | `aura.sh/power-eligible: "true"` | `ignoreDifferences` on `/spec/replicas` |
+| ArgoCD | Blocked | `aura.sh/power-eligible: "true"` | `ignoreDifferences` plus `RespectIgnoreDifferences=true` |
 | Flux | Blocked | `aura.sh/power-eligible: "true"` | Remove `/spec/replicas` from patch or use driftDetection ignore |
 | Helm | Blocked | `aura.sh/power-eligible: "true"` | None needed |
-| HPA | Blocked | `aura.sh/power-eligible: "true"` | None needed |
+| HPA (`autoscaling/v2`, Deployment/StatefulSet) | Blocked | `aura.sh/power-eligible: "true"` | Standard HPA holds at zero; verify separately when another autoscaler can activate from zero |
 | None | Eligible | Already eligible | N/A |
 
 ## Verifying Guardrail Status

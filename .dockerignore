@@ -1,0 +1,14 @@
+.git
+.github
+.codex
+.quality
+bin
+coverage*
+docs
+tests
+web/node_modules
+web/dist
+web/coverage
+web/tsconfig.tsbuildinfo
+*.db
+*.log

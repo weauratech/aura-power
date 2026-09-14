@@ -18,10 +18,14 @@ import (
 // Handles expiration lifecycle and enqueues affected targets.
 type OverrideReconciler struct {
 	client.Client
-	Audit ports.AuditRecorder
+	Audit            ports.AuditRecorder
+	ControlNamespace string
 }
 
 func (r *OverrideReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	if !namespaceIsManaged(r.ControlNamespace, req.Namespace) {
+		return ctrl.Result{}, nil
+	}
 	logger := log.FromContext(ctx).WithValues("override", req.NamespacedName)
 
 	var override v1alpha1.PowerOverride
@@ -85,5 +89,6 @@ func (r *OverrideReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 func (r *OverrideReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.PowerOverride{}).
+		WithEventFilter(namespacePredicate(r.ControlNamespace)).
 		Complete(r)
 }

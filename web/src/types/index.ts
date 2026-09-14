@@ -1,13 +1,19 @@
+export type PowerState = 'on' | 'off';
+
 export interface TargetRef {
+  cluster?: string;
+  apiVersion?: string;
   namespace: string;
   name: string;
   kind: 'Deployment' | 'StatefulSet' | 'CronJob';
+  uid?: string;
 }
 
 export interface ObservedState {
   replicas: number;
   suspended: boolean;
-  powerState: string;
+  activeJobs?: number;
+  powerState: PowerState | '';
 }
 
 export interface RuleReference {
@@ -43,12 +49,22 @@ export interface Savings {
   estimatedCost: number;
 }
 
+export interface PowerActionStatus {
+  desiredState: PowerState;
+  phase: string;
+  auditEventID?: string;
+  auditPhase?: string;
+  notificationSuppressed?: boolean;
+  notificationSuppressionSource?: 'namespace-label';
+  notificationSuppressionNamespaceUID?: string;
+}
+
 export interface PowerTarget {
   metadata: { name: string; namespace: string };
   spec: { targetRef: TargetRef };
   status: {
     observedState: ObservedState;
-    desiredState: string;
+    desiredState: PowerState | '';
     managed: boolean;
     divergent: boolean;
     winningRule?: RuleReference;
@@ -58,6 +74,7 @@ export interface PowerTarget {
     snapshot?: Snapshot;
     ownership?: Ownership[];
     savings?: Savings;
+    action?: PowerActionStatus;
     lastTransition?: string;
     lastReconciliation?: string;
   };
@@ -102,5 +119,8 @@ export interface AuditEvent {
     result: string;
     reason: string;
     ruleName?: string;
+    notificationSuppressed?: boolean;
+    notificationSuppressionSource?: 'namespace-label';
+    notificationSuppressionNamespaceUID?: string;
   };
 }

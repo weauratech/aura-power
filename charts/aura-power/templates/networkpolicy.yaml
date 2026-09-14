@@ -29,6 +29,16 @@ spec:
     - ports:
         - port: 9090
           protocol: TCP
+    # OpenCost
+    - ports:
+        - port: 9003
+          protocol: TCP
+    {{- range .Values.networkPolicy.additionalServerEgressPorts }}
+    # Explicit non-standard provider or notification webhook port
+    - ports:
+        - port: {{ . }}
+          protocol: TCP
+    {{- end }}
     # DNS
     - ports:
         - port: 53
@@ -60,6 +70,13 @@ spec:
       ports:
         - port: 8080
           protocol: TCP
+    {{- if .Values.webhook.enabled }}
+    # Admission requests originate from the Kubernetes API server. Managed
+    # control planes cannot be selected reliably by namespace or pod labels.
+    - ports:
+        - port: {{ .Values.webhook.port }}
+          protocol: TCP
+    {{- end }}
   egress:
     # K8s API
     - ports:
@@ -67,6 +84,12 @@ spec:
           protocol: TCP
         - port: 6443
           protocol: TCP
+    {{- range .Values.networkPolicy.additionalControllerEgressPorts }}
+    # Explicit non-standard notification webhook port
+    - ports:
+        - port: {{ . }}
+          protocol: TCP
+    {{- end }}
     # DNS
     - ports:
         - port: 53

@@ -10,6 +10,9 @@ Complete reference for all environment variables and Helm values.
 | `JWT_SECRET` | Secret key for JWT token signing | — | **Yes** |
 | `ADMIN_USERNAME` | Initial admin username | `admin` | No |
 | `ADMIN_PASSWORD` | Initial admin password (first install only) | — | **Yes** (first install) |
+| `ACCESS_TOKEN_TTL` | Access token lifetime (Go duration) | `1h` | No |
+| `REFRESH_TOKEN_TTL` | Refresh token lifetime (Go duration) | `168h` | No |
+| `CONTROL_NAMESPACE` | Namespace containing Aura Power CRDs | `aura-system` | No |
 | `AUTH_DB_PATH` | SQLite database file path | `/data/aura-power.db` | No |
 | `PROMETHEUS_URL` | Prometheus server URL for metrics queries | — | No |
 | `OPENCOST_URL` | OpenCost API URL for cost data | — | No |
@@ -21,8 +24,14 @@ Complete reference for all environment variables and Helm values.
 | Variable | Description | Default | Required |
 |----------|-------------|---------|----------|
 | `LEADER_ELECTION_ID` | Leader election lease name | `aura-power-controller-leader.power.aura.sh` | No |
+| `LEADER_ELECTION_ENABLED` | Enable leader election | `true` | No |
+| `CONTROL_NAMESPACE` | Namespace containing Aura Power CRDs and audit events | `aura-system` | No |
+| `SYSTEM_NAMESPACES` | Complete comma-separated guardrail blocklist | built-in defaults | No |
 | `AUDIT_RETENTION_DAYS` | Days to keep audit events before cleanup | `7` | No |
 | `AUDIT_CLEANUP_INTERVAL` | Interval between cleanup runs (Go duration) | `6h` | No |
+| `RECONCILIATION_INTERVAL` | Stable target reconciliation interval (Go duration) | `30s` | No |
+| `DISCOVERY_INTERVAL` | Full workload discovery interval (Go duration) | `60s` | No |
+| `GOMEMLIMIT` | Go runtime soft memory limit; set below the pod memory limit | `192MiB` (Helm) | No |
 | `EXTRA_SYSTEM_NAMESPACES` | Additional namespaces to block (comma-separated) | — | No |
 | `DEV_MODE` | Enable development logging | `false` | No |
 
@@ -31,13 +40,31 @@ Complete reference for all environment variables and Helm values.
 | Helm Value | Maps To | Component |
 |------------|---------|-----------|
 | `server.auth.jwtSecret` | `JWT_SECRET` | Server |
+| `server.auth.existingSecret` | `JWT_SECRET`, `ADMIN_PASSWORD` | Server |
 | `server.auth.initialAdmin.username` | `ADMIN_USERNAME` | Server |
 | `server.auth.initialAdmin.password` | `ADMIN_PASSWORD` | Server |
+| `server.auth.accessTokenTTL` | `ACCESS_TOKEN_TTL` | Server |
+| `server.auth.refreshTokenTTL` | `REFRESH_TOKEN_TTL` | Server |
 | `server.prometheus.url` | `PROMETHEUS_URL` | Server |
 | `server.opencost.url` | `OPENCOST_URL` | Server |
 | `server.port` | `API_PORT` | Server |
 | `controller.leaderElection.id` | `LEADER_ELECTION_ID` | Controller |
+| `controller.leaderElection.enabled` | `LEADER_ELECTION_ENABLED` | Controller |
+| Helm release namespace | `CONTROL_NAMESPACE` | Server, Controller |
+| `controller.config.systemNamespaceBlocklist` plus release namespace | `SYSTEM_NAMESPACES` | Controller |
 | `controller.config.auditRetentionDays` | `AUDIT_RETENTION_DAYS` | Controller |
+| `controller.config.auditCleanupInterval` | `AUDIT_CLEANUP_INTERVAL` | Controller |
+| `controller.config.reconciliationInterval` | `RECONCILIATION_INTERVAL` | Controller |
+| `controller.config.discoveryInterval` | `DISCOVERY_INTERVAL` | Controller |
+| `controller.config.goMemLimit` | `GOMEMLIMIT` | Controller |
+| `controller.config.pprofBindAddress` | `PPROF_BIND_ADDRESS` | Controller; disabled by default and restricted to loopback |
+
+`CONTROL_NAMESPACE` is an enforcement boundary. The server and controller only
+read, reconcile, count, or update namespaced Aura Power decision objects in that
+namespace. A `PowerPolicy`, `PowerOverride`, `PowerTarget`, namespace group, or
+notification channel created elsewhere is inert. Workload discovery remains
+cluster-wide because the selected workloads can live in any application
+namespace.
 
 ## Annotations
 
@@ -56,6 +83,7 @@ Default blocked namespaces (configurable via `controller.config.systemNamespaceB
 - kube-system
 - kube-public
 - kube-node-lease
+- aura-system
 ```
 
 Default blocked workloads (unless opted-in):
@@ -69,7 +97,9 @@ Default blocked workloads (unless opted-in):
 | Component | Port | Purpose |
 |-----------|------|---------|
 | Server | 8080 | HTTP API + Panel + Metrics |
-| Controller | 8081 | Health probes only |
+| Controller | 8080 | Prometheus metrics |
+| Controller | 8081 | Health probes |
+| Controller | 9443 | Admission webhook when enabled |
 
 ## Storage
 

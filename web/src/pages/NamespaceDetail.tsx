@@ -18,7 +18,13 @@ import { StatusChip } from '../design-system/react';
 import type { WorkloadState } from '../design-system/react/PowerRing';
 import { useTargets } from '../hooks/useApi';
 import { ScheduleDrawer } from '../components/ScheduleDrawer';
-import type { PowerTarget } from '../types';
+import type { PowerTarget, TargetRef } from '../types';
+
+function targetURL(ref: TargetRef): string {
+  const params = new URLSearchParams({ kind: ref.kind });
+  if (ref.uid) params.set('uid', ref.uid);
+  return `/targets/${encodeURIComponent(ref.namespace)}/${encodeURIComponent(ref.name)}?${params}`;
+}
 
 function mapState(t: PowerTarget): WorkloadState {
   if (t.status.blocked) return 'failed';
@@ -78,9 +84,9 @@ export function NamespaceDetail() {
             </TableHead>
             <TableBody>
               {targets.map((t) => (
-                <TableRow key={t.spec.targetRef.name} hover>
+                <TableRow key={`${t.spec.targetRef.kind}/${t.spec.targetRef.name}/${t.spec.targetRef.uid || ''}`} hover>
                   <TableCell>
-                    <MuiLink component={Link} to={`/targets/${namespace}/${t.spec.targetRef.name}`} underline="hover">
+                    <MuiLink component={Link} to={targetURL(t.spec.targetRef)} underline="hover">
                       {t.spec.targetRef.name}
                     </MuiLink>
                   </TableCell>

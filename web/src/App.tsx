@@ -2,24 +2,27 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import Box from '@mui/material/Box';
 import CircularProgress from '@mui/material/CircularProgress';
 import Typography from '@mui/material/Typography';
+import { lazy, Suspense } from 'react';
 import { Layout } from './components/Layout';
-import { Dashboard } from './pages/Dashboard';
-import { Targets } from './pages/Targets';
-import { NamespaceDetail } from './pages/NamespaceDetail';
-import { TargetDetail } from './pages/TargetDetail';
-import { Policies } from './pages/Policies';
-import { RuleDetail } from './pages/RuleDetail';
-import { Metrics } from './pages/Metrics';
-import { Savings } from './pages/Savings';
-import { Blocked } from './pages/Blocked';
-import { Schedule } from './pages/Schedule';
 import { Login } from './pages/Login';
-import { PendingApprovals } from './pages/PendingApprovals';
-import { Users } from './pages/Users';
-import { Overrides } from './pages/Overrides';
-import { AuditLog } from './pages/AuditLog';
-import { Notifications } from './pages/Notifications';
 import { useAuth } from './hooks/useAuth';
+import { CurrentUserContext } from './contexts/CurrentUser';
+
+const Dashboard = lazy(() => import('./pages/Dashboard').then(module => ({ default: module.Dashboard })));
+const Targets = lazy(() => import('./pages/Targets').then(module => ({ default: module.Targets })));
+const NamespaceDetail = lazy(() => import('./pages/NamespaceDetail').then(module => ({ default: module.NamespaceDetail })));
+const TargetDetail = lazy(() => import('./pages/TargetDetail').then(module => ({ default: module.TargetDetail })));
+const Policies = lazy(() => import('./pages/Policies').then(module => ({ default: module.Policies })));
+const RuleDetail = lazy(() => import('./pages/RuleDetail').then(module => ({ default: module.RuleDetail })));
+const Metrics = lazy(() => import('./pages/Metrics').then(module => ({ default: module.Metrics })));
+const Savings = lazy(() => import('./pages/Savings').then(module => ({ default: module.Savings })));
+const Blocked = lazy(() => import('./pages/Blocked').then(module => ({ default: module.Blocked })));
+const Schedule = lazy(() => import('./pages/Schedule').then(module => ({ default: module.Schedule })));
+const PendingApprovals = lazy(() => import('./pages/PendingApprovals').then(module => ({ default: module.PendingApprovals })));
+const Users = lazy(() => import('./pages/Users').then(module => ({ default: module.Users })));
+const Overrides = lazy(() => import('./pages/Overrides').then(module => ({ default: module.Overrides })));
+const AuditLog = lazy(() => import('./pages/AuditLog').then(module => ({ default: module.AuditLog })));
+const Notifications = lazy(() => import('./pages/Notifications').then(module => ({ default: module.Notifications })));
 
 export function App() {
   const { isAuthenticated, isLoading, authEnabled, user, logout } = useAuth();
@@ -43,7 +46,9 @@ export function App() {
   };
 
   return (
-    <BrowserRouter>
+	<CurrentUserContext.Provider value={user}>
+	<BrowserRouter>
+	  <Suspense fallback={<Box sx={{ p: 4 }}><CircularProgress size={24} aria-label="Loading page" /></Box>}>
       <Routes>
         <Route element={<Layout user={user} onLogout={handleLogout} />}>
           <Route path="/" element={<Dashboard />} />
@@ -64,6 +69,8 @@ export function App() {
           <Route path="/users" element={<Users />} />
         </Route>
       </Routes>
-    </BrowserRouter>
+	  </Suspense>
+	</BrowserRouter>
+    </CurrentUserContext.Provider>
   );
 }

@@ -17,10 +17,18 @@ import (
 
 // ServerConfig holds configuration for the API server.
 type ServerConfig struct {
-	Port            string
-	GuardrailConfig domain.GuardrailConfig
-	CostConfig      domain.CostConfig
-	PanelAssets     embed.FS
+	Port             string
+	GuardrailConfig  domain.GuardrailConfig
+	CostConfig       domain.CostConfig
+	PanelAssets      embed.FS
+	ControlNamespace string
+}
+
+func (s *Server) controlNamespace() string {
+	if s.config.ControlNamespace != "" {
+		return s.config.ControlNamespace
+	}
+	return "aura-system"
 }
 
 // Server is the Gin HTTP server serving REST API and panel.
@@ -76,7 +84,7 @@ func (s *Server) setupRoutes() {
 
 	// Auth endpoints (no middleware — login, refresh, logout must be accessible)
 	if s.authStore != nil && s.jwtService != nil {
-		authHandlers := NewAuthHandlers(s.authStore, s.jwtService)
+		authHandlers := NewAuthHandlers(s.authStore, s.jwtService, s.client, s.controlNamespace())
 		authHandlers.RegisterRoutes(api)
 	}
 
@@ -87,7 +95,7 @@ func (s *Server) setupRoutes() {
 
 	// Protected auth routes (me, users, pending)
 	if s.authStore != nil && s.jwtService != nil {
-		authHandlers := NewAuthHandlers(s.authStore, s.jwtService)
+		authHandlers := NewAuthHandlers(s.authStore, s.jwtService, s.client, s.controlNamespace())
 		authHandlers.RegisterProtectedRoutes(api)
 	}
 	{
