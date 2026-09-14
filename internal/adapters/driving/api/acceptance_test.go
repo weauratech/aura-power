@@ -19,9 +19,7 @@ func TestAcceptanceApprovedPolicyIsApplied(t *testing.T) {
 	f := newContractFixture(t)
 	approverToken := f.token(t, auth.RoleApprover)
 
-	pending, err := f.store.CreatePendingChange(auth.PendingChange{
-		UserID:       "requester-id",
-		Username:     "requester",
+	pending, err := f.createPending(t, auth.PendingChange{
 		Action:       "create",
 		ResourceKind: "PowerPolicy",
 		ResourceName: "approved-policy",

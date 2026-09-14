@@ -10,11 +10,26 @@ set -Eeuo pipefail
 : "${WORKLOAD_NAME:?missing workload name}"
 : "${WORKLOAD_UID:?missing workload UID}"
 : "${POLICY_NAME:?missing policy name}"
+: "${AURA_POWER_RUNTIME_KUBECONFIG:?missing private runtime kubeconfig}"
+
+[[ "$KUBECONFIG" == "$AURA_POWER_RUNTIME_KUBECONFIG" ]] || {
+  echo "refusing cleanup: runtime kubeconfig identity mismatch" >&2
+  exit 2
+}
+[[ -f "$KUBECONFIG" && "$(stat -f '%Lp' "$KUBECONFIG" 2>/dev/null || stat -c '%a' "$KUBECONFIG")" == "600" ]] || {
+  echo "refusing cleanup: runtime kubeconfig is missing or not mode 0600" >&2
+  exit 2
+}
 
 kube() {
-  local token
-  token="$(aws eks get-token --cluster-name "$EXPECTED_CLUSTER" --region "$AWS_REGION" | jq -er .status.token)"
-  kubectl --token="$token" "$@"
+  kubectl "$@"
+}
+
+remove_runtime_kubeconfig() {
+  if [[ -f "$AURA_POWER_RUNTIME_KUBECONFIG" ]]; then
+    : >"$AURA_POWER_RUNTIME_KUBECONFIG"
+    unlink "$AURA_POWER_RUNTIME_KUBECONFIG"
+  fi
 }
 
 owned_uid() {
@@ -74,7 +89,14 @@ case "${1:-}" in
     while kill -0 "$PARENT_PID" 2>/dev/null && (( $(date +%s) < HARD_DEADLINE_EPOCH )); do
       sleep 5
     done
-    cleanup_fixture
+    cleanup_status=0
+    cleanup_fixture || cleanup_status=$?
+    if [[ "$cleanup_status" -eq 0 ]]; then
+      remove_runtime_kubeconfig
+    else
+      echo "recovery kubeconfig retained at $AURA_POWER_RUNTIME_KUBECONFIG" >&2
+    fi
+    exit "$cleanup_status"
     ;;
   *)
     echo "usage: eks-fixture-watchdog.sh {watch|cleanup}" >&2

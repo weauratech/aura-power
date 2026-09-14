@@ -42,12 +42,15 @@ rotation_config="$(mktemp)"
 cleanup_rotation_files() {
   for file in "$rotation_body" "$rotation_config"; do
     if [ -f "$file" ]; then
-      dd if=/dev/zero of="$file" bs=4096 count=1 conv=notrunc status=none 2>/dev/null || true
-      rm -f "$file"
+      : >"$file"
+      unlink "$file"
     fi
   done
 }
-trap cleanup_rotation_files EXIT HUP INT TERM
+trap cleanup_rotation_files EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 # Write currentPassword/newPassword JSON to $rotation_body from the approved
 # secret manager, then write this curl configuration to $rotation_config:
 cat >"$rotation_config" <<EOF
@@ -78,11 +81,11 @@ umask 077
 effective_values="$(mktemp)"
 cleanup_effective_values() {
   if [ -f "$effective_values" ]; then
-    dd if=/dev/zero of="$effective_values" bs=4096 count=1 conv=notrunc status=none 2>/dev/null || true
-    rm -f "$effective_values"
+    : >"$effective_values"
+    unlink "$effective_values"
   fi
 }
-trap 'cleanup_effective_values; cleanup_rotation_files' EXIT HUP INT TERM
+trap 'cleanup_effective_values; cleanup_rotation_files' EXIT
 helm get values aura-power -n aura-system --all >"$effective_values"
 yq -i '
   .server.auth.keepManagedSecret = true
@@ -131,8 +134,9 @@ change to an externally managed Secret.
   neither credential values nor a rendered auth Secret.
 - API, audit, controller, and managed workloads remain healthy.
 
-Securely overwrite and unlink every temporary request, curl, patch and values
-file after the acceptance checks.
+Truncate and unlink every temporary request, curl, patch and values file after
+the acceptance checks. Storage media may retain deleted blocks, so keep these
+files on encrypted local storage while they exist.
 
 Logout clears browser cookies but JWTs are stateless. A copied token remains
 valid until expiry unless the user's password or role changes, the account is

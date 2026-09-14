@@ -8,7 +8,7 @@ set -Eeuo pipefail
 : "${KUBECONFIG:?set KUBECONFIG to the campaign-specific file}"
 : "${AURA_POWER_EKS_MUTATION_ACK:?set AURA_POWER_EKS_MUTATION_ACK=eks-aura-prd}"
 : "${AURA_POWER_AWS_PROFILE:?set AURA_POWER_AWS_PROFILE to the Aura Hub operations profile}"
-: "${AURA_POWER_EXPECTED_CONTROLLER_DIGEST:?set AURA_POWER_EXPECTED_CONTROLLER_DIGEST to the verified v2.2.1 sha256 digest}"
+: "${AURA_POWER_EXPECTED_CONTROLLER_DIGEST:?set AURA_POWER_EXPECTED_CONTROLLER_DIGEST to the verified v2.2.2 sha256 digest}"
 : "${AURA_POWER_EXPECTED_CONTROLLER_RUNTIME_DIGEST:?set AURA_POWER_EXPECTED_CONTROLLER_RUNTIME_DIGEST to the resolved controller platform digest}"
 
 EXPECTED_CLUSTER="eks-aura-prd"
@@ -25,6 +25,8 @@ WATCHDOG="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/eks-fixture-watchdog.sh"
 CHANNEL_QUIESCENCE_SECONDS="${CHANNEL_QUIESCENCE_SECONDS:-10}"
 CHANNEL_WATCH_LOG=""
 CHANNEL_WATCH_ERROR_LOG=""
+WATCHDOG_LOG=""
+RUNTIME_KUBECONFIG=""
 
 [[ "$AURA_POWER_EKS_MUTATION_ACK" == "$EXPECTED_CLUSTER" ]] || { echo "refusing mutation: acknowledgement must equal ${EXPECTED_CLUSTER}" >&2; exit 2; }
 [[ "$AURA_POWER_EXPECTED_CONTROLLER_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "refusing mutation: invalid expected controller digest" >&2; exit 2; }
@@ -33,25 +35,27 @@ CHANNEL_WATCH_ERROR_LOG=""
 [[ "$TIMEOUT_SECONDS" =~ ^[0-9]+$ && "$TIMEOUT_SECONDS" -le 300 ]] || { echo "refusing mutation: TIMEOUT_SECONDS must be an integer <= 300" >&2; exit 2; }
 [[ "$(kubectl config current-context)" == "$EXPECTED_CONTEXT" ]] || { echo "refusing mutation: unexpected kube context" >&2; exit 2; }
 
-credential_file="$(mktemp)"
-chmod 600 "$credential_file"
-remove_credential_file() {
-  if [[ -n "${credential_file:-}" && -f "$credential_file" ]]; then
-    : >"$credential_file"
-    unlink "$credential_file"
+remove_runtime_kubeconfig() {
+  if [[ -n "${RUNTIME_KUBECONFIG:-}" && -f "$RUNTIME_KUBECONFIG" ]]; then
+    : >"$RUNTIME_KUBECONFIG"
+    unlink "$RUNTIME_KUBECONFIG"
   fi
 }
-trap remove_credential_file EXIT
-aws configure export-credentials --profile "$AURA_POWER_AWS_PROFILE" --format process >"$credential_file"
-AWS_ACCESS_KEY_ID="$(jq -er .AccessKeyId "$credential_file")"
-AWS_SECRET_ACCESS_KEY="$(jq -er .SecretAccessKey "$credential_file")"
-export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
-session_token="$(jq -r '.SessionToken // empty' "$credential_file")"
-[[ -n "$session_token" ]] && export AWS_SESSION_TOKEN="$session_token"
-remove_credential_file
-trap - EXIT
+trap remove_runtime_kubeconfig EXIT
 
-cluster_json="$(aws eks describe-cluster --name "$EXPECTED_CLUSTER" --region "$AWS_REGION" --output json)"
+# Use the standard EKS exec credential plugin from a private kubeconfig. This
+# refreshes tokens for long journeys without ever putting a bearer token in a
+# process argument, where another local process could observe it.
+RUNTIME_KUBECONFIG="$(mktemp)"
+chmod 600 "$RUNTIME_KUBECONFIG"
+aws eks update-kubeconfig --name "$EXPECTED_CLUSTER" --region "$AWS_REGION" \
+  --alias "$EXPECTED_CONTEXT" --kubeconfig "$RUNTIME_KUBECONFIG" \
+  --profile "$AURA_POWER_AWS_PROFILE" >/dev/null
+export KUBECONFIG="$RUNTIME_KUBECONFIG"
+export AURA_POWER_RUNTIME_KUBECONFIG="$RUNTIME_KUBECONFIG"
+[[ "$(kubectl config current-context)" == "$EXPECTED_CONTEXT" ]] || { echo "refusing mutation: generated kube context is unexpected" >&2; exit 2; }
+
+cluster_json="$(aws eks describe-cluster --name "$EXPECTED_CLUSTER" --region "$AWS_REGION" --profile "$AURA_POWER_AWS_PROFILE" --output json)"
 expected_endpoint="$(jq -er .cluster.endpoint <<<"$cluster_json")"
 cluster_arn="$(jq -er .cluster.arn <<<"$cluster_json")"
 current_endpoint="$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')"
@@ -59,9 +63,7 @@ current_endpoint="$(kubectl config view --minify -o jsonpath='{.clusters[0].clus
 [[ "$cluster_arn" == arn:aws:eks:"$AWS_REGION":*:cluster/"$EXPECTED_CLUSTER" ]] || { echo "refusing mutation: unexpected cluster ARN" >&2; exit 2; }
 
 kube() {
-  local token
-  token="$(aws eks get-token --cluster-name "$EXPECTED_CLUSTER" --region "$AWS_REGION" | jq -er .status.token)"
-  kubectl --token="$token" "$@"
+  kubectl "$@"
 }
 
 for permission in "create namespaces" "delete namespaces" "create deployments.apps" "patch deployments.apps" "create powerpolicies.power.aura.sh" "delete powerpolicies.power.aura.sh"; do
@@ -116,16 +118,22 @@ cleanup_on_exit() {
   if [[ -n "$CHANNEL_WATCH_ERROR_LOG" && -f "$CHANNEL_WATCH_ERROR_LOG" ]]; then
     rm -f "$CHANNEL_WATCH_ERROR_LOG"
   fi
+  if [[ -n "$WATCHDOG_LOG" && -f "$WATCHDOG_LOG" ]]; then
+    : >"$WATCHDOG_LOG"
+    unlink "$WATCHDOG_LOG"
+  fi
   local cleanup_status=0
   if [[ -n "$NAMESPACE_UID" && -n "$WORKLOAD_UID" ]]; then
     export RUN_ID FIXTURE_NAMESPACE NAMESPACE_UID WORKLOAD_NAME WORKLOAD_UID POLICY_NAME
     "$WATCHDOG" cleanup || cleanup_status=$?
   fi
-  unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
   if [[ "$cleanup_status" -ne 0 ]]; then
+    echo "FATAL: recovery kubeconfig retained at $RUNTIME_KUBECONFIG" >&2
     echo "FATAL: fixture recovery or deletion was not verified" >&2
     exit 90
   fi
+  remove_runtime_kubeconfig
+  unset AURA_POWER_RUNTIME_KUBECONFIG
   exit "$original_status"
 }
 trap cleanup_on_exit EXIT
@@ -197,9 +205,9 @@ namespace_notification_policy="$(jq -r '.status.namespaceLabels["power.aura.sh/n
 
 export RUN_ID FIXTURE_NAMESPACE NAMESPACE_UID WORKLOAD_NAME WORKLOAD_UID POLICY_NAME
 export PARENT_PID="$$" HARD_DEADLINE_EPOCH="$(( $(date +%s) + TIMEOUT_SECONDS * 2 + 60 ))"
-watchdog_log="$(mktemp)"
-chmod 600 "$watchdog_log"
-nohup "$WATCHDOG" watch </dev/null >"$watchdog_log" 2>&1 &
+WATCHDOG_LOG="$(mktemp)"
+chmod 600 "$WATCHDOG_LOG"
+nohup "$WATCHDOG" watch </dev/null >"$WATCHDOG_LOG" 2>&1 &
 WATCHDOG_PID=$!
 disown "$WATCHDOG_PID" 2>/dev/null || true
 

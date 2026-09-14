@@ -50,10 +50,21 @@ export function ChangePasswordDialog({ open, onClose, onChanged }: ChangePasswor
     setSubmitting(true);
     try {
       await apiPut('/auth/password', { currentPassword, newPassword }, { redirectOnUnauthorized: false });
-      await onChanged();
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Password change failed. Please try again.');
       setSubmitting(false);
+      return;
+    }
+    // A 200 response is irreversible: auth_version has already changed and the
+    // old session is invalid. Never present a later logout/navigation failure
+    // as a failed password change or invite a retry with the old password.
+    onClose();
+    setSubmitting(false);
+    try {
+      await onChanged();
+    } catch {
+      // The application callback performs a forced reauthentication in a
+      // finally block. Swallow its transport error after the successful change.
     }
   };
 

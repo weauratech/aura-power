@@ -130,6 +130,8 @@ jobs:
           CANDIDATE_SERVER_IMAGE: aura-power-server:release-candidate
           CANDIDATE_CONTROLLER_IMAGE: aura-power-controller:release-candidate
         run: ./scripts/quality/kind-release-upgrade-journey.sh
+      - name: Prove managed auth Secret externalization
+        run: ./scripts/quality/kind-secret-externalization-journey.sh
       - name: Install candidate and run native journeys
         run: |
           helm upgrade --install aura-power charts/aura-power --namespace aura-system --create-namespace --wait --timeout 5m \

@@ -171,6 +171,8 @@ jobs:
           CGO_ENABLED=0 go build -ldflags="-s -w" -o bin/aura-power ./cmd/aura-power/
       - name: Prove v2.1.7 full release upgrade
         run: ./scripts/quality/kind-release-upgrade-journey.sh
+      - name: Prove managed auth Secret externalization
+        run: ./scripts/quality/kind-secret-externalization-journey.sh
       - name: Install candidate and run native journey
         run: |
           export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config}"

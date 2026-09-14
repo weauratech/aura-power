@@ -51,6 +51,21 @@ describe('password change experience', () => {
     expect(submitted).not.toHaveBeenCalled();
   });
 
+  it('keeps a successful rotation successful when logout cleanup rejects', async () => {
+    server.use(http.put(`${origin}/auth/password`, () => HttpResponse.json({ updated: true })));
+    const onClose = vi.fn();
+    const onChanged = vi.fn().mockRejectedValue(new Error('logout unavailable'));
+    renderUI(<ChangePasswordDialog open onClose={onClose} onChanged={onChanged} />);
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText(/Current password/), 'Current-password-17!');
+    await user.type(screen.getByLabelText(/^New password/), 'New-passphrase-28!');
+    await user.type(screen.getByLabelText(/Confirm new password/), 'New-passphrase-28!');
+    await user.click(screen.getByRole('button', { name: 'Change password' }));
+    await waitFor(() => expect(onChanged).toHaveBeenCalledOnce());
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(screen.queryByText(/Password change failed/i)).not.toBeInTheDocument();
+  });
+
   it.each([400, 401])('shows a %s response in place without redirecting or logging out', async status => {
     server.use(http.put(`${origin}/auth/password`, () => HttpResponse.json({ error: 'current password is invalid' }, { status })));
     const onChanged = vi.fn();
