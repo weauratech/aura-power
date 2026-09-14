@@ -27,6 +27,7 @@ CHANNEL_WATCH_LOG=""
 CHANNEL_WATCH_ERROR_LOG=""
 WATCHDOG_LOG=""
 RUNTIME_KUBECONFIG=""
+RECOVERY_STATE=""
 
 [[ "$AURA_POWER_EKS_MUTATION_ACK" == "$EXPECTED_CLUSTER" ]] || { echo "refusing mutation: acknowledgement must equal ${EXPECTED_CLUSTER}" >&2; exit 2; }
 [[ "$AURA_POWER_EXPECTED_CONTROLLER_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "refusing mutation: invalid expected controller digest" >&2; exit 2; }
@@ -41,7 +42,31 @@ remove_runtime_kubeconfig() {
     unlink "$RUNTIME_KUBECONFIG"
   fi
 }
-trap remove_runtime_kubeconfig EXIT
+
+remove_recovery_state() {
+  if [[ -n "${RECOVERY_STATE:-}" && -f "$RECOVERY_STATE" ]]; then
+    : >"$RECOVERY_STATE"
+    unlink "$RECOVERY_STATE"
+  fi
+}
+
+write_recovery_state() {
+  local pending_state
+  pending_state="$(mktemp "${RECOVERY_STATE}.pending.XXXXXX")"
+  chmod 600 "$pending_state"
+  jq -n \
+    --arg runID "$RUN_ID" \
+    --arg fixtureNamespace "$FIXTURE_NAMESPACE" \
+    --arg namespaceUID "$NAMESPACE_UID" \
+    --arg workloadName "$WORKLOAD_NAME" \
+    --arg workloadUID "$WORKLOAD_UID" \
+    --arg policyName "$POLICY_NAME" \
+    '{runID:$runID,fixtureNamespace:$fixtureNamespace,namespaceUID:$namespaceUID,workloadName:$workloadName,workloadUID:$workloadUID,policyName:$policyName}' \
+    >"$pending_state"
+  mv -f "$pending_state" "$RECOVERY_STATE"
+}
+
+trap 'remove_recovery_state; remove_runtime_kubeconfig' EXIT
 
 # Use the standard EKS exec credential plugin from a private kubeconfig. This
 # refreshes tokens for long journeys without ever putting a bearer token in a
@@ -66,9 +91,23 @@ kube() {
   kubectl "$@"
 }
 
-for permission in "create namespaces" "delete namespaces" "create deployments.apps" "patch deployments.apps" "create powerpolicies.power.aura.sh" "delete powerpolicies.power.aura.sh"; do
-  read -r verb resource <<<"$permission"
-  [[ "$(kube auth can-i "$verb" "$resource" -n "$CONTROL_NAMESPACE")" == "yes" ]] || { echo "missing permission: ${verb} ${resource}" >&2; exit 3; }
+for permission in \
+  "create namespaces -" \
+  "get namespaces -" \
+  "delete namespaces -" \
+  "create deployments.apps ${FIXTURE_NAMESPACE}" \
+  "get deployments.apps ${FIXTURE_NAMESPACE}" \
+  "patch deployments.apps ${FIXTURE_NAMESPACE}" \
+  "create powerpolicies.power.aura.sh ${CONTROL_NAMESPACE}" \
+  "get powerpolicies.power.aura.sh ${CONTROL_NAMESPACE}" \
+  "patch powerpolicies.power.aura.sh ${CONTROL_NAMESPACE}" \
+  "delete powerpolicies.power.aura.sh ${CONTROL_NAMESPACE}"; do
+  read -r verb resource permission_namespace <<<"$permission"
+  auth_args=(auth can-i "$verb" "$resource")
+  if [[ "$permission_namespace" != "-" ]]; then
+    auth_args+=(-n "$permission_namespace")
+  fi
+  [[ "$(kube "${auth_args[@]}")" == "yes" ]] || { echo "missing permission: ${verb} ${resource} namespace=${permission_namespace}" >&2; exit 3; }
 done
 
 # Prove the running controller, not only the chart metadata, has the suppression
@@ -123,8 +162,8 @@ cleanup_on_exit() {
     unlink "$WATCHDOG_LOG"
   fi
   local cleanup_status=0
-  if [[ -n "$NAMESPACE_UID" && -n "$WORKLOAD_UID" ]]; then
-    export RUN_ID FIXTURE_NAMESPACE NAMESPACE_UID WORKLOAD_NAME WORKLOAD_UID POLICY_NAME
+  if [[ -n "$NAMESPACE_UID" ]]; then
+    export RUN_ID FIXTURE_NAMESPACE NAMESPACE_UID WORKLOAD_NAME WORKLOAD_UID POLICY_NAME RECOVERY_STATE
     "$WATCHDOG" cleanup || cleanup_status=$?
   fi
   if [[ "$cleanup_status" -ne 0 ]]; then
@@ -132,6 +171,7 @@ cleanup_on_exit() {
     echo "FATAL: fixture recovery or deletion was not verified" >&2
     exit 90
   fi
+  remove_recovery_state
   remove_runtime_kubeconfig
   unset AURA_POWER_RUNTIME_KUBECONFIG
   exit "$original_status"
@@ -140,7 +180,7 @@ trap cleanup_on_exit EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
 
-kube create -f - <<YAML
+namespace_json="$(kube create -f - -o json <<YAML
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -152,9 +192,24 @@ metadata:
   annotations:
     aura.sh/power-eligible: "true"
 YAML
-NAMESPACE_UID="$(kube get namespace "$FIXTURE_NAMESPACE" -o jsonpath='{.metadata.uid}')"
+)"
+NAMESPACE_UID="$(jq -er '.metadata.uid' <<<"$namespace_json")"
 
-kube create -f - <<YAML
+# Arm recovery as soon as the API server returns the namespace UID. The state
+# file is replaced atomically when later fixture identities become available,
+# so the detached watchdog never observes a partially written identity.
+RECOVERY_STATE="$(mktemp)"
+chmod 600 "$RECOVERY_STATE"
+write_recovery_state
+export RUN_ID FIXTURE_NAMESPACE NAMESPACE_UID WORKLOAD_NAME WORKLOAD_UID POLICY_NAME RECOVERY_STATE
+export PARENT_PID="$$" HARD_DEADLINE_EPOCH="$(( $(date +%s) + TIMEOUT_SECONDS * 4 + CHANNEL_QUIESCENCE_SECONDS + 300 ))"
+WATCHDOG_LOG="$(mktemp)"
+chmod 600 "$WATCHDOG_LOG"
+nohup "$WATCHDOG" watch </dev/null >"$WATCHDOG_LOG" 2>&1 &
+WATCHDOG_PID=$!
+disown "$WATCHDOG_PID" 2>/dev/null || true
+
+workload_json="$(kube create -f - -o json <<YAML
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -181,7 +236,9 @@ spec:
             requests: {cpu: 10m, memory: 8Mi}
             limits: {cpu: 20m, memory: 16Mi}
 YAML
-WORKLOAD_UID="$(kube get deployment "$WORKLOAD_NAME" -n "$FIXTURE_NAMESPACE" -o jsonpath='{.metadata.uid}')"
+)"
+WORKLOAD_UID="$(jq -er '.metadata.uid' <<<"$workload_json")"
+write_recovery_state
 kube rollout status deployment "$WORKLOAD_NAME" -n "$FIXTURE_NAMESPACE" --timeout=120s
 
 # Suppression is a discovered, durable property of the exact target. Prove it
@@ -202,14 +259,6 @@ namespace_notification_policy="$(jq -r '.status.namespaceLabels["power.aura.sh/n
   echo "FAIL: notification suppression was not discovered on the exact fixture target" >&2
   exit 13
 }
-
-export RUN_ID FIXTURE_NAMESPACE NAMESPACE_UID WORKLOAD_NAME WORKLOAD_UID POLICY_NAME
-export PARENT_PID="$$" HARD_DEADLINE_EPOCH="$(( $(date +%s) + TIMEOUT_SECONDS * 2 + 60 ))"
-WATCHDOG_LOG="$(mktemp)"
-chmod 600 "$WATCHDOG_LOG"
-nohup "$WATCHDOG" watch </dev/null >"$WATCHDOG_LOG" 2>&1 &
-WATCHDOG_PID=$!
-disown "$WATCHDOG_PID" 2>/dev/null || true
 
 echo "run_id=${RUN_ID} context=${EXPECTED_CONTEXT} cluster_arn=${cluster_arn}"
 live_namespace_json="$(kube get namespace "$FIXTURE_NAMESPACE" -o json)"

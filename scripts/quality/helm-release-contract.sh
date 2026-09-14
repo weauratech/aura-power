@@ -21,6 +21,13 @@ if grep -R --line-number -- '--token=' scripts/quality/eks-*.sh; then
 fi
 grep -q 'aws eks update-kubeconfig' scripts/quality/eks-core-journey.sh
 grep -q 'AURA_POWER_RUNTIME_KUBECONFIG' scripts/quality/eks-fixture-watchdog.sh
+grep -Fq 'create -f - -o json' scripts/quality/eks-core-journey.sh
+grep -Fq 'write_recovery_state' scripts/quality/eks-core-journey.sh
+grep -Fq 'RECOVERY_STATE' scripts/quality/eks-fixture-watchdog.sh
+grep -Fq '"create deployments.apps ${FIXTURE_NAMESPACE}"' scripts/quality/eks-core-journey.sh
+grep -Fq '"patch deployments.apps ${FIXTURE_NAMESPACE}"' scripts/quality/eks-core-journey.sh
+grep -Fq '"create powerpolicies.power.aura.sh ${CONTROL_NAMESPACE}"' scripts/quality/eks-core-journey.sh
+scripts/quality/eks-fixture-watchdog-test.sh
 grep -Fq 'group: aura-power-release-promotion' .github/workflows/release.yaml
 perl -0ne 'exit(!/validate:.*Validate release identity.*scripts\/release\/preflight\.sh/s)' .github/workflows/release.yaml
 grep -Fq 'scripts/release/github-release-guard.sh assert-releasable "$GITHUB_REF_NAME"' .github/workflows/release.yaml
