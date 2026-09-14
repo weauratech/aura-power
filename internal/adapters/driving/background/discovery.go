@@ -340,7 +340,7 @@ func (d *DiscoveryLoop) restoreBeforeExemption(ctx context.Context, wl ports.Dis
 
 func (d *DiscoveryLoop) newPowerTarget(ctx context.Context, targetName string, wl ports.DiscoveredWorkload, previous *v1alpha1.PowerTargetStatus) (bool, error) {
 	// Detect ownership
-	ownership := domain.DetectOwnershipWithArgoTracking(wl.Annotations, wl.Labels, d.Config.OptInAnnotation, d.Config.ArgoTrackingLabelKeys, wl.NamespaceAnnotations)
+	ownership := d.detectOwnership(wl)
 	var ownershipSpecs []v1alpha1.OwnershipSpec
 	for _, o := range ownership {
 		ownershipSpecs = append(ownershipSpecs, v1alpha1.OwnershipSpec{
@@ -433,7 +433,7 @@ func (d *DiscoveryLoop) updateObservedState(ctx context.Context, target *v1alpha
 	}
 
 	// Update ownership
-	ownership := domain.DetectOwnershipWithArgoTracking(wl.Annotations, wl.Labels, d.Config.OptInAnnotation, d.Config.ArgoTrackingLabelKeys, wl.NamespaceAnnotations)
+	ownership := d.detectOwnership(wl)
 	var ownershipSpecs []v1alpha1.OwnershipSpec
 	for _, o := range ownership {
 		ownershipSpecs = append(ownershipSpecs, v1alpha1.OwnershipSpec{
@@ -456,6 +456,15 @@ func (d *DiscoveryLoop) updateObservedState(ctx context.Context, target *v1alpha
 		return nil
 	}
 	return d.Client.Status().Update(ctx, target)
+}
+
+func (d *DiscoveryLoop) detectOwnership(wl ports.DiscoveredWorkload) []domain.OwnershipSignal {
+	ownership := domain.DetectOwnershipWithArgoTracking(wl.Annotations, wl.Labels, d.Config.OptInAnnotation, d.Config.ArgoTrackingLabelKeys, wl.NamespaceAnnotations)
+	if wl.HPAControlled {
+		optedIn := wl.Annotations[d.Config.OptInAnnotation] == "true" || wl.NamespaceAnnotations[d.Config.OptInAnnotation] == "true"
+		ownership = append(ownership, domain.OwnershipSignal{Type: domain.OwnershipHPA, OptedIn: optedIn})
+	}
+	return ownership
 }
 
 func copyStringMap(source map[string]string) map[string]string {

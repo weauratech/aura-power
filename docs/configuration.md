@@ -59,6 +59,13 @@ Complete reference for all environment variables and Helm values.
 | `controller.config.goMemLimit` | `GOMEMLIMIT` | Controller |
 | `controller.config.pprofBindAddress` | `PPROF_BIND_ADDRESS` | Controller; disabled by default and restricted to loopback |
 
+`CONTROL_NAMESPACE` is an enforcement boundary. The server and controller only
+read, reconcile, count, or update namespaced Aura Power decision objects in that
+namespace. A `PowerPolicy`, `PowerOverride`, `PowerTarget`, namespace group, or
+notification channel created elsewhere is inert. Workload discovery remains
+cluster-wide because the selected workloads can live in any application
+namespace.
+
 ## Annotations
 
 | Annotation | Target | Purpose |

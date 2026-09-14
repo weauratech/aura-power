@@ -4,6 +4,7 @@ import (
 	"context"
 
 	appsv1 "k8s.io/api/apps/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -68,6 +69,11 @@ func (d *Discoverer) DiscoverAll(ctx context.Context, namespaces []string) ([]po
 	if err := d.client.List(ctx, &cronJobs); err != nil {
 		return nil, err
 	}
+	var horizontalPodAutoscalers autoscalingv2.HorizontalPodAutoscalerList
+	if err := d.client.List(ctx, &horizontalPodAutoscalers); err != nil {
+		return nil, err
+	}
+	hpaTargets := indexedHPATargets(horizontalPodAutoscalers.Items, include)
 
 	result := make([]ports.DiscoveredWorkload, 0, len(deployments.Items)+len(statefulSets.Items)+len(cronJobs.Items))
 	for i := range deployments.Items {
@@ -79,7 +85,8 @@ func (d *Discoverer) DiscoverAll(ctx context.Context, namespaces []string) ([]po
 			Ref:      domain.WorkloadRef{APIVersion: "apps/v1", Namespace: dep.Namespace, Name: dep.Name, Kind: domain.WorkloadKindDeployment, UID: string(dep.UID)},
 			Replicas: depReplicas(dep), Annotations: dep.Annotations, Labels: dep.Labels,
 			NamespaceAnnotations: nsAnnotations[dep.Namespace], NamespaceLabels: nsLabels[dep.Namespace],
-			Resources: computeDeploymentResources(dep),
+			Resources:     computeDeploymentResources(dep),
+			HPAControlled: hpaTargets[workloadIdentity(dep.Namespace, "apps/v1", "Deployment", dep.Name)],
 		})
 	}
 	for i := range statefulSets.Items {
@@ -91,7 +98,8 @@ func (d *Discoverer) DiscoverAll(ctx context.Context, namespaces []string) ([]po
 			Ref:      domain.WorkloadRef{APIVersion: "apps/v1", Namespace: ss.Namespace, Name: ss.Name, Kind: domain.WorkloadKindStatefulSet, UID: string(ss.UID)},
 			Replicas: ptrInt32Val(ss.Spec.Replicas), Annotations: ss.Annotations, Labels: ss.Labels,
 			NamespaceAnnotations: nsAnnotations[ss.Namespace], NamespaceLabels: nsLabels[ss.Namespace],
-			Resources: computeStatefulSetResources(ss),
+			Resources:     computeStatefulSetResources(ss),
+			HPAControlled: hpaTargets[workloadIdentity(ss.Namespace, "apps/v1", "StatefulSet", ss.Name)],
 		})
 	}
 	for i := range cronJobs.Items {
@@ -113,6 +121,15 @@ func depReplicas(dep *appsv1.Deployment) int32 { return ptrInt32Val(dep.Spec.Rep
 
 func (d *Discoverer) DiscoverByNamespace(ctx context.Context, namespace string) ([]ports.DiscoveredWorkload, error) {
 	var result []ports.DiscoveredWorkload
+	var ns corev1.Namespace
+	if err := d.client.Get(ctx, client.ObjectKey{Name: namespace}, &ns); err != nil {
+		return nil, err
+	}
+	var horizontalPodAutoscalers autoscalingv2.HorizontalPodAutoscalerList
+	if err := d.client.List(ctx, &horizontalPodAutoscalers, client.InNamespace(namespace)); err != nil {
+		return nil, err
+	}
+	hpaTargets := indexedHPATargets(horizontalPodAutoscalers.Items, func(string) bool { return true })
 
 	// Discover Deployments
 	var deployments appsv1.DeploymentList
@@ -121,12 +138,14 @@ func (d *Discoverer) DiscoverByNamespace(ctx context.Context, namespace string) 
 	}
 	for _, dep := range deployments.Items {
 		result = append(result, ports.DiscoveredWorkload{
-			Ref:             domain.WorkloadRef{APIVersion: "apps/v1", Namespace: namespace, Name: dep.Name, Kind: domain.WorkloadKindDeployment, UID: string(dep.UID)},
-			Replicas:        ptrInt32Val(dep.Spec.Replicas),
-			Annotations:     dep.Annotations,
-			Labels:          dep.Labels,
-			NamespaceLabels: nil, // populated by caller if needed
-			Resources:       computeDeploymentResources(&dep),
+			Ref:                  domain.WorkloadRef{APIVersion: "apps/v1", Namespace: namespace, Name: dep.Name, Kind: domain.WorkloadKindDeployment, UID: string(dep.UID)},
+			Replicas:             ptrInt32Val(dep.Spec.Replicas),
+			Annotations:          dep.Annotations,
+			Labels:               dep.Labels,
+			NamespaceLabels:      ns.Labels,
+			NamespaceAnnotations: ns.Annotations,
+			Resources:            computeDeploymentResources(&dep),
+			HPAControlled:        hpaTargets[workloadIdentity(namespace, "apps/v1", "Deployment", dep.Name)],
 		})
 	}
 
@@ -137,11 +156,14 @@ func (d *Discoverer) DiscoverByNamespace(ctx context.Context, namespace string) 
 	}
 	for _, ss := range statefulSets.Items {
 		result = append(result, ports.DiscoveredWorkload{
-			Ref:         domain.WorkloadRef{APIVersion: "apps/v1", Namespace: namespace, Name: ss.Name, Kind: domain.WorkloadKindStatefulSet, UID: string(ss.UID)},
-			Replicas:    ptrInt32Val(ss.Spec.Replicas),
-			Annotations: ss.Annotations,
-			Labels:      ss.Labels,
-			Resources:   computeStatefulSetResources(&ss),
+			Ref:                  domain.WorkloadRef{APIVersion: "apps/v1", Namespace: namespace, Name: ss.Name, Kind: domain.WorkloadKindStatefulSet, UID: string(ss.UID)},
+			Replicas:             ptrInt32Val(ss.Spec.Replicas),
+			Annotations:          ss.Annotations,
+			Labels:               ss.Labels,
+			Resources:            computeStatefulSetResources(&ss),
+			NamespaceLabels:      ns.Labels,
+			NamespaceAnnotations: ns.Annotations,
+			HPAControlled:        hpaTargets[workloadIdentity(namespace, "apps/v1", "StatefulSet", ss.Name)],
 		})
 	}
 
@@ -152,16 +174,41 @@ func (d *Discoverer) DiscoverByNamespace(ctx context.Context, namespace string) 
 	}
 	for _, cj := range cronJobs.Items {
 		result = append(result, ports.DiscoveredWorkload{
-			Ref:         domain.WorkloadRef{APIVersion: "batch/v1", Namespace: namespace, Name: cj.Name, Kind: domain.WorkloadKindCronJob, UID: string(cj.UID)},
-			Suspended:   ptrBoolVal(cj.Spec.Suspend),
-			ActiveJobs:  int32(len(cj.Status.Active)),
-			Annotations: cj.Annotations,
-			Labels:      cj.Labels,
-			Resources:   computeCronJobResources(&cj),
+			Ref:                  domain.WorkloadRef{APIVersion: "batch/v1", Namespace: namespace, Name: cj.Name, Kind: domain.WorkloadKindCronJob, UID: string(cj.UID)},
+			Suspended:            ptrBoolVal(cj.Spec.Suspend),
+			ActiveJobs:           int32(len(cj.Status.Active)),
+			Annotations:          cj.Annotations,
+			Labels:               cj.Labels,
+			Resources:            computeCronJobResources(&cj),
+			NamespaceLabels:      ns.Labels,
+			NamespaceAnnotations: ns.Annotations,
 		})
 	}
 
 	return result, nil
+}
+
+func indexedHPATargets(hpas []autoscalingv2.HorizontalPodAutoscaler, include func(string) bool) map[string]bool {
+	targets := make(map[string]bool, len(hpas))
+	for i := range hpas {
+		hpa := &hpas[i]
+		if !include(hpa.Namespace) {
+			continue
+		}
+		ref := hpa.Spec.ScaleTargetRef
+		// Aura Power only mutates these two scalable workload kinds. Requiring
+		// the full reference prevents a same-name custom resource from blocking
+		// an unrelated Deployment or StatefulSet.
+		if ref.APIVersion != "apps/v1" || (ref.Kind != "Deployment" && ref.Kind != "StatefulSet") || ref.Name == "" {
+			continue
+		}
+		targets[workloadIdentity(hpa.Namespace, ref.APIVersion, ref.Kind, ref.Name)] = true
+	}
+	return targets
+}
+
+func workloadIdentity(namespace, apiVersion, kind, name string) string {
+	return namespace + "\x00" + apiVersion + "\x00" + kind + "\x00" + name
 }
 
 func computeDeploymentResources(dep *appsv1.Deployment) domain.ResourceSummary {

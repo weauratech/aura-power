@@ -133,15 +133,94 @@ aura-power login --server https://power.your-domain.com
 
 ---
 
-## Rollback
+## Downgrade and rollback
 
-If issues occur:
+Do not run a direct `helm rollback` from v2.2 or later to v2.1.7 or older.
+Those controllers do not understand `scope.targetRefs` or workload UIDs. A rule
+that contains only `targetRefs` is decoded by v2.1.7 as an empty scope, which
+matches every discovered workload. The newer controller also replaces legacy
+PowerTarget names with UID-bound names, so starting the old controller before
+restoration can delete the only persisted snapshots.
+
+Use the fail-closed preparation command while the newer release is still
+healthy. The backup directory must be on durable, access-controlled storage and
+must be reused if the command is repeated:
 
 ```bash
-helm rollback aura-power -n aura-system
+mkdir -p ./aura-power-downgrade-backup
+chmod 700 ./aura-power-downgrade-backup
+
+./scripts/release/prepare-safe-downgrade.sh \
+  --expected-context eks-aura-prd \
+  --namespace aura-system \
+  --release aura-power \
+  --backup-dir ./aura-power-downgrade-backup
 ```
 
-CRD changes are additive (new fields only) and backward-compatible.
+The preparation first stops the Aura Power server so API clients cannot change
+rules through the product. It captures the complete rule set and each
+`resourceVersion`, saves the original policies, overrides, and targets, then
+uses UID/resourceVersion-conditional JSON Patches through the live admission
+webhook to quarantine every inventoried rule. It stops the controller,
+re-inventories the rule set, and restores each available snapshot. Restoration
+also uses UID and powered-down-state preconditions. The command aborts instead
+of overwriting a concurrent rule edit, a rule created after inventory, a
+recreated workload, or a concurrent scale change. The final
+`safe_downgrade_prepared=true` line is required before continuing.
+
+Keep the upgraded CRDs installed. They are backward-readable, while downgrading
+the CRDs themselves could prune the UID and snapshot fields needed for recovery.
+Render and inspect the old chart, then deploy it with its controller held at
+zero. Prefer the immutable chart artifact for the destination version; the path
+below is illustrative:
+
+```bash
+helm template aura-power ./aura-power-v2.1.7/charts/aura-power \
+  --namespace aura-system \
+  --set controller.replicas=0 > rendered-v2.1.7.yaml
+
+helm upgrade aura-power ./aura-power-v2.1.7/charts/aura-power \
+  --namespace aura-system \
+  --reuse-values \
+  --set controller.replicas=0 \
+  --wait --timeout 8m
+```
+
+Confirm that every workload recorded with an available snapshot in
+`powertargets/*.json` still has the same UID and restored replica or suspension
+state. Then start the legacy controller while all rules remain quarantined:
+
+```bash
+kubectl scale deployment aura-power-controller \
+  --namespace aura-system --replicas=1
+kubectl rollout status deployment aura-power-controller \
+  --namespace aura-system --timeout=5m
+```
+
+Observe at least one discovery and reconciliation interval and verify that no
+workload changed. Review rules one at a time before restoring them. A saved rule
+with `spec.scope.targetRefs` cannot be enabled on v2.1.7; translate it to a
+legacy selector and verify the preview first. For a rule that is already
+legacy-compatible, restore only its original spec and remove the quarantine
+annotation:
+
+```bash
+rule=example-policy
+backup=./aura-power-downgrade-backup/powerpolicies/${rule}.json
+kubectl patch powerpolicy "$rule" --namespace aura-system --type=merge \
+  --patch "$(jq '{spec:.spec,metadata:{annotations:{"power.aura.sh/downgrade-quarantined":null}}}' "$backup")"
+```
+
+If preparation detects an inventory or resourceVersion conflict, it leaves both
+the server and controller at zero and keeps the original backup unchanged. Do
+not delete the backup. Inspect the reported resource and decide whether the
+concurrent version or the saved version is authoritative. After removing an
+unwanted newly-created rule (DELETE remains available while the webhook is
+stopped), start the controller temporarily to restore admission, resolve any
+intentional update, then start the server and retry with a new backup directory.
+For other failures, keep both writers stopped and resolve the reported missing
+workload, UID mismatch, incomplete snapshot, or concurrent state change before
+retrying.
 
 ---
 
@@ -183,10 +262,14 @@ helm upgrade aura-power ./charts/aura-power \
 ## FAQ
 
 **Q: Will my existing PowerTargets be lost?**
-A: No. CRD data persists in etcd. The new controller will pick up existing targets.
+A: Upgrades preserve the data in etcd and migrate targets to UID-bound names.
+Downgrades require the procedure above because v2.1.7 recreates legacy target
+names and cannot preserve the newer identity contract.
 
 **Q: Do I need to recreate policies?**
-A: No. Existing PowerPolicies are fully compatible with v2.0.
+A: Existing v1/v2.1 selector-based policies remain compatible when upgrading.
+Policies that use v2.2 `targetRefs` must stay quarantined during a downgrade to
+v2.1.7 until they are translated and reviewed.
 
 **Q: What happens to the old single-binary deployment?**
 A: Helm will replace it with the new server StatefulSet + controller Deployment.

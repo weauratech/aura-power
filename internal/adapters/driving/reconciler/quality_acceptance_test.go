@@ -8,6 +8,9 @@ import (
 	"testing"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -505,6 +508,42 @@ func TestAcceptanceArgoRestoredLiveStateIsNotOverwrittenByStaleSnapshot(t *testi
 	}
 }
 
+func TestAcceptanceContendedLiveRestoreRetiresStaleSnapshot(t *testing.T) {
+	s := runtime.NewScheme()
+	if err := v1alpha1.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+	snapshotReplicas := int32(2)
+	now := metav1.Now()
+	target := &v1alpha1.PowerTarget{
+		ObjectMeta: metav1.ObjectMeta{Name: "fixtures--api", Namespace: "aura-system"},
+		Spec:       v1alpha1.PowerTargetSpec{TargetRef: v1alpha1.TargetReference{Namespace: "fixtures", Name: "api", Kind: "Deployment", UID: "uid-api"}},
+		Status: v1alpha1.PowerTargetStatus{
+			ObservedState: v1alpha1.ObservedStateSpec{Replicas: 1, PowerState: "on"},
+			Snapshot:      &v1alpha1.SnapshotSpec{Available: true, ReplicaCount: &snapshotReplicas},
+			Action:        &v1alpha1.PowerActionStatus{DesiredState: "off", Phase: "Contended", AttemptedAt: &now},
+		},
+	}
+	policy := &v1alpha1.PowerPolicy{ObjectMeta: metav1.ObjectMeta{Name: "on", Namespace: "aura-system"}, Spec: v1alpha1.PowerPolicySpec{Scope: v1alpha1.PolicyScope{Namespaces: []string{"fixtures"}}, Schedule: v1alpha1.PolicySchedule{DesiredState: "on"}}}
+	c := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&v1alpha1.PowerTarget{}).WithObjects(target, policy).Build()
+	executor := &countingExecutor{}
+	r := TargetReconciler{Client: c, Config: domain.DefaultGuardrailConfig(), Executor: executor, Audit: noopAudit{}, Metrics: noopMetrics{}}
+	req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(target)}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	if executor.restores != 0 {
+		t.Fatalf("contended live restore was overwritten %d times", executor.restores)
+	}
+	var got v1alpha1.PowerTarget
+	if err := c.Get(context.Background(), req.NamespacedName, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.Snapshot != nil || got.Status.Action == nil || got.Status.Action.DesiredState != "on" || got.Status.Action.Phase != "Converged" {
+		t.Fatalf("contended live state did not retire stale recovery state: %+v", got.Status)
+	}
+}
+
 func TestAcceptancePolicyFlipPreservesSnapshotUntilPowerDownIsObserved(t *testing.T) {
 	s := runtime.NewScheme()
 	if err := v1alpha1.AddToScheme(s); err != nil {
@@ -602,6 +641,175 @@ func TestAcceptanceTargetWithoutUIDCannotMutateWorkload(t *testing.T) {
 	if executor.calls != 0 {
 		t.Fatalf("UID-less target mutated workload %d times", executor.calls)
 	}
+}
+
+func TestAcceptanceLiveHPAAddedBeforeMutationFailsClosedUntilDiscoveredOptIn(t *testing.T) {
+	s := runtime.NewScheme()
+	if err := v1alpha1.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+	if err := autoscalingv2.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+	if err := appsv1.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+	if err := corev1.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+	target := &v1alpha1.PowerTarget{
+		ObjectMeta: metav1.ObjectMeta{Name: "target-api", Namespace: "aura-system"},
+		Spec:       v1alpha1.PowerTargetSpec{TargetRef: v1alpha1.TargetReference{APIVersion: "apps/v1", Namespace: "fixtures", Name: "api", Kind: "Deployment", UID: "uid-api"}},
+		Status:     v1alpha1.PowerTargetStatus{ObservedState: v1alpha1.ObservedStateSpec{Replicas: 3, PowerState: "on"}},
+	}
+	policy := &v1alpha1.PowerPolicy{ObjectMeta: metav1.ObjectMeta{Name: "off", Namespace: "aura-system"}, Spec: v1alpha1.PowerPolicySpec{Scope: v1alpha1.PolicyScope{Namespaces: []string{"fixtures"}}, Schedule: v1alpha1.PolicySchedule{DesiredState: "off"}}}
+	hpa := &autoscalingv2.HorizontalPodAutoscaler{
+		ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "fixtures"},
+		Spec: autoscalingv2.HorizontalPodAutoscalerSpec{ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
+			APIVersion: "apps/v1", Kind: "Deployment", Name: "api",
+		}},
+	}
+	namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "fixtures"}}
+	workload := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "fixtures", UID: "uid-api"}}
+	c := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&v1alpha1.PowerTarget{}).WithObjects(target, policy, hpa, namespace, workload).Build()
+	executor := &countingExecutor{}
+	r := TargetReconciler{Client: c, APIReader: c, Config: domain.DefaultGuardrailConfig(), Executor: executor, Audit: noopAudit{}, Metrics: noopMetrics{}}
+	req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(target)}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	if executor.calls != 0 {
+		t.Fatalf("newly-created HPA raced discovery and allowed %d mutations", executor.calls)
+	}
+	var got v1alpha1.PowerTarget
+	if err := c.Get(context.Background(), req.NamespacedName, &got); err != nil {
+		t.Fatal(err)
+	}
+	if !got.Status.Blocked || len(got.Status.BlockReasons) != 1 || got.Status.BlockReasons[0].Type != string(domain.BlockHPAControlled) || len(got.Status.Ownership) != 1 || got.Status.Ownership[0].Type != string(domain.OwnershipHPA) || got.Status.Ownership[0].OptedIn {
+		t.Fatalf("live HPA race was not persisted fail-closed: %+v", got.Status)
+	}
+	if got.Status.Snapshot == nil || !got.Status.Snapshot.Available {
+		t.Fatalf("safe pre-mutation snapshot was not retained: %+v", got.Status.Snapshot)
+	}
+
+	// A persisted opt-in projection alone is insufficient: the workload and
+	// namespace no longer carry the annotation at the mutation boundary.
+	got.Status.Ownership[0].OptedIn = true
+	if err := c.Status().Update(context.Background(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	if executor.calls != 0 {
+		t.Fatalf("removed live opt-in allowed %d mutations from stale ownership", executor.calls)
+	}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(workload), workload); err != nil {
+		t.Fatal(err)
+	}
+	workload.Annotations = map[string]string{domain.DefaultGuardrailConfig().OptInAnnotation: "true"}
+	if err := c.Update(context.Background(), workload); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(context.Background(), req.NamespacedName, &got); err != nil {
+		t.Fatal(err)
+	}
+	// Discovery subsequently persists the current opt-in projection.
+	got.Status.Ownership[0].OptedIn = true
+	if err := c.Status().Update(context.Background(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	if executor.calls != 1 {
+		t.Fatalf("current and discovered explicit HPA opt-in did not admit one mutation: calls=%d", executor.calls)
+	}
+}
+
+func TestAcceptanceLiveHPAListFailureBlocksMutation(t *testing.T) {
+	s := runtime.NewScheme()
+	if err := v1alpha1.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+	if err := autoscalingv2.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+	target := &v1alpha1.PowerTarget{
+		ObjectMeta: metav1.ObjectMeta{Name: "target-api", Namespace: "aura-system"},
+		Spec:       v1alpha1.PowerTargetSpec{TargetRef: v1alpha1.TargetReference{APIVersion: "apps/v1", Namespace: "fixtures", Name: "api", Kind: "Deployment", UID: "uid-api"}},
+		Status:     v1alpha1.PowerTargetStatus{ObservedState: v1alpha1.ObservedStateSpec{Replicas: 3, PowerState: "on"}},
+	}
+	policy := &v1alpha1.PowerPolicy{ObjectMeta: metav1.ObjectMeta{Name: "off", Namespace: "aura-system"}, Spec: v1alpha1.PowerPolicySpec{Scope: v1alpha1.PolicyScope{Namespaces: []string{"fixtures"}}, Schedule: v1alpha1.PolicySchedule{DesiredState: "off"}}}
+	c := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&v1alpha1.PowerTarget{}).WithObjects(target, policy).Build()
+	executor := &countingExecutor{}
+	r := TargetReconciler{Client: c, APIReader: &hpaListFailingReader{Reader: c}, Config: domain.DefaultGuardrailConfig(), Executor: executor, Audit: noopAudit{}, Metrics: noopMetrics{}}
+	req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(target)}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	if executor.calls != 0 {
+		t.Fatalf("HPA LIST failure allowed %d mutations", executor.calls)
+	}
+	var got v1alpha1.PowerTarget
+	if err := c.Get(context.Background(), req.NamespacedName, &got); err != nil {
+		t.Fatal(err)
+	}
+	if !got.Status.Blocked || len(got.Status.BlockReasons) != 1 || got.Status.BlockReasons[0].Type != string(domain.BlockInsufficientInfo) || got.Status.BlockReasons[0].Waivable || got.Status.ConsecutiveFailures != 1 {
+		t.Fatalf("HPA inspection failure was not persisted fail-closed: %+v", got.Status)
+	}
+}
+
+func TestAcceptanceLiveHPAOptInGetFailureBlocksMutation(t *testing.T) {
+	s := runtime.NewScheme()
+	if err := v1alpha1.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+	if err := autoscalingv2.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+	target := &v1alpha1.PowerTarget{
+		ObjectMeta: metav1.ObjectMeta{Name: "target-api", Namespace: "aura-system"},
+		Spec:       v1alpha1.PowerTargetSpec{TargetRef: v1alpha1.TargetReference{APIVersion: "apps/v1", Namespace: "fixtures", Name: "api", Kind: "Deployment", UID: "uid-api"}},
+		Status: v1alpha1.PowerTargetStatus{
+			ObservedState: v1alpha1.ObservedStateSpec{Replicas: 3, PowerState: "on"},
+			Ownership:     []v1alpha1.OwnershipSpec{{Type: string(domain.OwnershipHPA), OptedIn: true}},
+		},
+	}
+	policy := &v1alpha1.PowerPolicy{ObjectMeta: metav1.ObjectMeta{Name: "off", Namespace: "aura-system"}, Spec: v1alpha1.PowerPolicySpec{Scope: v1alpha1.PolicyScope{Namespaces: []string{"fixtures"}}, Schedule: v1alpha1.PolicySchedule{DesiredState: "off"}}}
+	hpa := &autoscalingv2.HorizontalPodAutoscaler{ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "fixtures"}, Spec: autoscalingv2.HorizontalPodAutoscalerSpec{ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{APIVersion: "apps/v1", Kind: "Deployment", Name: "api"}}}
+	c := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&v1alpha1.PowerTarget{}).WithObjects(target, policy, hpa).Build()
+	executor := &countingExecutor{}
+	r := TargetReconciler{Client: c, APIReader: &hpaGetFailingReader{Reader: c}, Config: domain.DefaultGuardrailConfig(), Executor: executor, Audit: noopAudit{}, Metrics: noopMetrics{}}
+	req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(target)}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	if executor.calls != 0 {
+		t.Fatalf("live opt-in GET failure allowed %d mutations", executor.calls)
+	}
+	var got v1alpha1.PowerTarget
+	if err := c.Get(context.Background(), req.NamespacedName, &got); err != nil {
+		t.Fatal(err)
+	}
+	if !got.Status.Blocked || len(got.Status.BlockReasons) != 1 || got.Status.BlockReasons[0].Type != string(domain.BlockInsufficientInfo) || got.Status.BlockReasons[0].Waivable {
+		t.Fatalf("live opt-in GET failure was not persisted fail-closed: %+v", got.Status)
+	}
+}
+
+type hpaListFailingReader struct{ client.Reader }
+
+func (r *hpaListFailingReader) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	if _, ok := list.(*autoscalingv2.HorizontalPodAutoscalerList); ok {
+		return errors.New("injected HPA LIST failure")
+	}
+	return r.Reader.List(ctx, list, opts...)
+}
+
+type hpaGetFailingReader struct{ client.Reader }
+
+func (r *hpaGetFailingReader) Get(context.Context, client.ObjectKey, client.Object, ...client.GetOption) error {
+	return errors.New("injected live opt-in GET failure")
 }
 
 type statusFailingClient struct{ client.Client }

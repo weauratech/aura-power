@@ -68,6 +68,22 @@ func TestEvaluateGuardrails_ArgoCDManaged_OptedIn(t *testing.T) {
 	}
 }
 
+func TestEvaluateGuardrails_HPARequiresExplicitOptIn(t *testing.T) {
+	config := DefaultGuardrailConfig()
+	target := makeTarget("dev", "api", WorkloadKindDeployment)
+	target.Ownership = []OwnershipSignal{{Type: OwnershipHPA}}
+
+	blocks := EvaluateGuardrails(target, config)
+	if len(blocks) != 1 || blocks[0].Type != BlockHPAControlled || !blocks[0].Waivable {
+		t.Fatalf("HPA target did not fail closed: %+v", blocks)
+	}
+
+	target.Annotations = map[string]string{config.OptInAnnotation: "true"}
+	if blocks := EvaluateGuardrails(target, config); len(blocks) != 0 {
+		t.Fatalf("explicitly opted-in HPA target remained blocked: %+v", blocks)
+	}
+}
+
 func TestEvaluateGuardrails_MultipleBlocks_AllReported(t *testing.T) {
 	target := makeTarget("dev", "api", WorkloadKindDeployment)
 	target.Ownership = []OwnershipSignal{

@@ -12,6 +12,8 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	crwebhook "sigs.k8s.io/controller-runtime/pkg/webhook"
@@ -28,6 +30,11 @@ import (
 
 var scheme = runtime.NewScheme()
 
+var (
+	version = "dev"
+	commit  = "unknown"
+)
+
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(v1alpha1.AddToScheme(scheme))
@@ -37,6 +44,7 @@ func main() {
 	opts := zap.Options{Development: os.Getenv("DEV_MODE") == "true"}
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 	log := ctrl.Log.WithName("setup")
+	log.Info("starting aura-power-controller", "version", version, "commit", commit)
 
 	// Configuration
 	guardrailConfig := domain.DefaultGuardrailConfig()
@@ -48,12 +56,22 @@ func main() {
 	leaderElectionID := getEnvOrDefault("LEADER_ELECTION_ID", "aura-power-controller-leader.power.aura.sh")
 	leaderElectionEnabled := envBool("LEADER_ELECTION_ENABLED", true)
 	controlNamespace := getEnvOrDefault("CONTROL_NAMESPACE", "aura-system")
+	controlCache := cache.ByObject{Namespaces: map[string]cache.Config{controlNamespace: {}}}
 
 	managerOptions := ctrl.Options{
 		Scheme:                 scheme,
 		LeaderElection:         leaderElectionEnabled,
 		LeaderElectionID:       leaderElectionID,
 		HealthProbeBindAddress: ":8081",
+		Cache: cache.Options{ByObject: map[client.Object]cache.ByObject{
+			&v1alpha1.PowerTarget{}:              controlCache,
+			&v1alpha1.PowerPolicy{}:              controlCache,
+			&v1alpha1.PowerOverride{}:            controlCache,
+			&v1alpha1.PowerSchedule{}:            controlCache,
+			&v1alpha1.PowerNamespaceGroup{}:      controlCache,
+			&v1alpha1.PowerNotificationChannel{}: controlCache,
+			&v1alpha1.PowerAuditEvent{}:          controlCache,
+		}},
 	}
 	webhookEnabled := envBool("WEBHOOK_ENABLED", false)
 	if webhookEnabled {
@@ -87,17 +105,19 @@ func main() {
 	metricsExporter := observability.NewPrometheusExporter()
 
 	// Create notification dispatcher
-	notifDispatcher := notifications.NewDispatcher(k8sClient, mgr.GetAPIReader())
+	notifDispatcher := notifications.NewDispatcherForNamespace(k8sClient, mgr.GetAPIReader(), controlNamespace)
 	auditRecorder.SetNotifier(notifDispatcher)
 
 	// Register reconcilers
 	targetReconciler := &reconciler.TargetReconciler{
-		Client:       k8sClient,
-		Config:       guardrailConfig,
-		Executor:     executor,
-		Audit:        auditRecorder,
-		Metrics:      metricsExporter,
-		RequeueAfter: durationEnv("RECONCILIATION_INTERVAL", 30*time.Second),
+		Client:           k8sClient,
+		ControlNamespace: controlNamespace,
+		APIReader:        mgr.GetAPIReader(),
+		Config:           guardrailConfig,
+		Executor:         executor,
+		Audit:            auditRecorder,
+		Metrics:          metricsExporter,
+		RequeueAfter:     durationEnv("RECONCILIATION_INTERVAL", 30*time.Second),
 	}
 	if err := targetReconciler.SetupWithManager(mgr); err != nil {
 		log.Error(err, "unable to create controller", "controller", "PowerTarget")
@@ -105,8 +125,9 @@ func main() {
 	}
 
 	policyReconciler := &reconciler.PolicyReconciler{
-		Client: k8sClient,
-		Audit:  auditRecorder,
+		Client:           k8sClient,
+		Audit:            auditRecorder,
+		ControlNamespace: controlNamespace,
 	}
 	if err := policyReconciler.SetupWithManager(mgr); err != nil {
 		log.Error(err, "unable to create controller", "controller", "PowerPolicy")
@@ -114,8 +135,9 @@ func main() {
 	}
 
 	overrideReconciler := &reconciler.OverrideReconciler{
-		Client: k8sClient,
-		Audit:  auditRecorder,
+		Client:           k8sClient,
+		Audit:            auditRecorder,
+		ControlNamespace: controlNamespace,
 	}
 	if err := overrideReconciler.SetupWithManager(mgr); err != nil {
 		log.Error(err, "unable to create controller", "controller", "PowerOverride")

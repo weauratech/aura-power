@@ -25,6 +25,9 @@ type CachedClientConfig struct {
 	Scheme *runtime.Scheme
 	// SyncTimeout is how long to wait for initial cache sync.
 	SyncTimeout time.Duration
+	// ControlNamespace bounds every namespaced informer used by the API server.
+	// Cluster-scoped types such as Namespace remain visible.
+	ControlNamespace string
 }
 
 // CachedClient implements sigs.k8s.io/controller-runtime/pkg/client.Client
@@ -45,9 +48,11 @@ func NewCachedClient(ctx context.Context, cfg CachedClientConfig) (*CachedClient
 	}
 
 	// Create the informer cache (watches all registered types)
-	informerCache, err := cache.New(cfg.RestConfig, cache.Options{
-		Scheme: cfg.Scheme,
-	})
+	cacheOptions := cache.Options{Scheme: cfg.Scheme}
+	if cfg.ControlNamespace != "" {
+		cacheOptions.DefaultNamespaces = map[string]cache.Config{cfg.ControlNamespace: {}}
+	}
+	informerCache, err := cache.New(cfg.RestConfig, cacheOptions)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create informer cache: %w", err)
 	}

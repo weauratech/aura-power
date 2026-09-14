@@ -26,6 +26,10 @@ docker image inspect "$CANDIDATE_CONTROLLER_IMAGE" >/dev/null
 legacy_dir="$(mktemp -d -t aura-power-v217.XXXXXX)"
 kubeconfig="$(mktemp -t aura-power-release-upgrade.XXXXXX.kubeconfig)"
 port_forward_log="$(mktemp -t aura-power-release-upgrade-port-forward.XXXXXX.log)"
+rollback_backup_dir="$(mktemp -d -t aura-power-release-downgrade.XXXXXX)"
+rollback_conflict_dir="$(mktemp -d -t aura-power-release-downgrade-conflict.XXXXXX)"
+rollback_creation_dir="$(mktemp -d -t aura-power-release-downgrade-creation.XXXXXX)"
+rollback_race_log="$(mktemp -t aura-power-release-downgrade-race.XXXXXX.log)"
 legacy_server_image="aura-power-server:upgrade-v217"
 legacy_controller_image="aura-power-controller:upgrade-v217"
 fixture_namespace="ap-release-upgrade"
@@ -47,7 +51,7 @@ cleanup() {
       original_status=90
     }
   fi
-  rm -rf "$legacy_dir" "$kubeconfig" "$port_forward_log"
+  rm -rf "$legacy_dir" "$kubeconfig" "$port_forward_log" "$rollback_backup_dir" "$rollback_conflict_dir" "$rollback_creation_dir" "$rollback_race_log"
   docker image rm "$legacy_server_image" "$legacy_controller_image" >/dev/null 2>&1 || true
   exit "$original_status"
 }
@@ -217,8 +221,271 @@ done
 audit_count="$(kubectl get powerauditevent -n aura-system -o json | jq --arg ns "$fixture_namespace" --arg name "$workload_name" '[.items[] | select(.spec.target.namespace == $ns and .spec.target.name == $name)] | length')"
 [[ "$audit_count" -ge 2 ]] || { echo "FAIL: expected durable off/on audit events, observed $audit_count" >&2; exit 32; }
 
+# Prove the documented fail-closed downgrade while all candidate identity and
+# snapshot fields still exist. A direct rollback here would make this
+# targetRefs-only policy global in v2.1.7.
+statefulset_name="rollback-stateful"
+cronjob_name="rollback-cron"
+sentinel_name="rollback-sentinel"
+kubectl apply -f - >/dev/null <<YAML
+apiVersion: v1
+kind: Service
+metadata:
+  name: ${statefulset_name}
+  namespace: ${fixture_namespace}
+spec:
+  clusterIP: None
+  selector:
+    app: ${statefulset_name}
+  ports:
+    - port: 80
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: ${statefulset_name}
+  namespace: ${fixture_namespace}
+  annotations:
+    aura.sh/power-eligible: "true"
+spec:
+  serviceName: ${statefulset_name}
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ${statefulset_name}
+  template:
+    metadata:
+      labels:
+        app: ${statefulset_name}
+    spec:
+      containers:
+        - name: pause
+          image: registry.k8s.io/pause:3.10
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ${cronjob_name}
+  namespace: ${fixture_namespace}
+  annotations:
+    aura.sh/power-eligible: "true"
+spec:
+  schedule: "0 0 1 1 *"
+  suspend: false
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: pause
+              image: registry.k8s.io/pause:3.10
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${sentinel_name}
+  namespace: ${fixture_namespace}
+  annotations:
+    aura.sh/power-eligible: "true"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ${sentinel_name}
+  template:
+    metadata:
+      labels:
+        app: ${sentinel_name}
+    spec:
+      containers:
+        - name: pause
+          image: registry.k8s.io/pause:3.10
+YAML
+
+kubectl rollout status statefulset "$statefulset_name" -n "$fixture_namespace" --timeout=180s >/dev/null
+kubectl rollout status deployment "$sentinel_name" -n "$fixture_namespace" --timeout=180s >/dev/null
+
+statefulset_uid="$(kubectl get statefulset "$statefulset_name" -n "$fixture_namespace" -o jsonpath='{.metadata.uid}')"
+cronjob_uid="$(kubectl get cronjob "$cronjob_name" -n "$fixture_namespace" -o jsonpath='{.metadata.uid}')"
+sentinel_uid="$(kubectl get deployment "$sentinel_name" -n "$fixture_namespace" -o jsonpath='{.metadata.uid}')"
+
+deadline=$((SECONDS + TIMEOUT_SECONDS)); statefulset_target=""; cronjob_target=""; sentinel_target=""
+while (( SECONDS < deadline )); do
+  targets_json="$(kubectl get powertarget -n aura-system -l "power.aura.sh/target-namespace=${fixture_namespace}" -o json)"
+  statefulset_target="$(jq -r --arg uid "$statefulset_uid" '.items[] | select(.spec.targetRef.uid == $uid) | .metadata.name' <<<"$targets_json" | head -1)"
+  cronjob_target="$(jq -r --arg uid "$cronjob_uid" '.items[] | select(.spec.targetRef.uid == $uid) | .metadata.name' <<<"$targets_json" | head -1)"
+  sentinel_target="$(jq -r --arg uid "$sentinel_uid" '.items[] | select(.spec.targetRef.uid == $uid) | .metadata.name' <<<"$targets_json" | head -1)"
+  [[ -n "$statefulset_target" && -n "$cronjob_target" && -n "$sentinel_target" ]] && break
+  sleep 3
+done
+[[ -n "$statefulset_target" && -n "$cronjob_target" && -n "$sentinel_target" ]] || { echo "FAIL: candidate did not discover all downgrade fixtures" >&2; exit 34; }
+
+rollback_policy_patch="$(jq -nc \
+  --arg deployment_uid "$workload_uid" \
+  --arg statefulset_uid "$statefulset_uid" \
+  --arg cronjob_uid "$cronjob_uid" \
+  --arg namespace "$fixture_namespace" \
+  --arg deployment "$workload_name" \
+  --arg statefulset "$statefulset_name" \
+  --arg cronjob "$cronjob_name" \
+  '{spec:{scope:{targetRefs:[
+    {apiVersion:"apps/v1",kind:"Deployment",namespace:$namespace,name:$deployment,uid:$deployment_uid},
+    {apiVersion:"apps/v1",kind:"StatefulSet",namespace:$namespace,name:$statefulset,uid:$statefulset_uid},
+    {apiVersion:"batch/v1",kind:"CronJob",namespace:$namespace,name:$cronjob,uid:$cronjob_uid}
+  ]},schedule:{desiredState:"off",windows:[]}}}')"
+deadline=$((SECONDS + 60)); rollback_policy_updated=false
+while (( SECONDS < deadline )); do
+  if kubectl patch powerpolicy "$policy_name" -n aura-system --type=merge -p "$rollback_policy_patch" >/dev/null 2>&1 && \
+    [[ "$(kubectl get powerpolicy "$policy_name" -n aura-system -o json | jq '.spec.scope.targetRefs | length')" == "3" ]]; then
+    rollback_policy_updated=true
+    break
+  fi
+  sleep 5
+done
+[[ "$rollback_policy_updated" == true ]] || { echo "FAIL: targetRefs rollback policy could not pass admission or persist" >&2; exit 35; }
+
+deadline=$((SECONDS + TIMEOUT_SECONDS)); downgrade_ready=false
+while (( SECONDS < deadline )); do
+  deployment_replicas="$(kubectl get deployment "$workload_name" -n "$fixture_namespace" -o jsonpath='{.spec.replicas}')"
+  statefulset_replicas="$(kubectl get statefulset "$statefulset_name" -n "$fixture_namespace" -o jsonpath='{.spec.replicas}')"
+  cronjob_suspended="$(kubectl get cronjob "$cronjob_name" -n "$fixture_namespace" -o jsonpath='{.spec.suspend}')"
+  deployment_snapshot="$(kubectl get powertarget "$migrated_target" -n aura-system -o jsonpath='{.status.snapshot.replicaCount}' 2>/dev/null || true)"
+  statefulset_snapshot="$(kubectl get powertarget "$statefulset_target" -n aura-system -o jsonpath='{.status.snapshot.replicaCount}' 2>/dev/null || true)"
+  cronjob_snapshot="$(kubectl get powertarget "$cronjob_target" -n aura-system -o jsonpath='{.status.snapshot.suspended}' 2>/dev/null || true)"
+  if [[ "$deployment_replicas" == "0" && "$statefulset_replicas" == "0" && "$cronjob_suspended" == "true" && "$deployment_snapshot" == "3" && "$statefulset_snapshot" == "2" && "$cronjob_snapshot" == "false" ]]; then
+    downgrade_ready=true
+    break
+  fi
+  sleep 3
+done
+[[ "$downgrade_ready" == true ]] || { echo "FAIL: candidate did not power down all downgrade fixtures with snapshots" >&2; exit 36; }
+[[ "$(kubectl get deployment "$sentinel_name" -n "$fixture_namespace" -o jsonpath='{.spec.replicas}')" == "2" ]] || { echo "FAIL: targetRefs policy changed the unselected sentinel" >&2; exit 37; }
+
+restore_candidate_writers() {
+  kubectl scale deployment aura-power-controller -n aura-system --replicas=1 >/dev/null
+  kubectl rollout status deployment aura-power-controller -n aura-system --timeout=180s >/dev/null
+  kubectl scale statefulset aura-power-server -n aura-system --replicas=1 >/dev/null
+  kubectl rollout status statefulset aura-power-server -n aura-system --timeout=180s >/dev/null
+}
+
+# Inject an update after the backup inventory. The resourceVersion precondition
+# must preserve the concurrent edit and stop both release writers.
+AURA_POWER_DOWNGRADE_TEST_PAUSE_AFTER_INVENTORY_SECONDS=12 \
+  ./scripts/release/prepare-safe-downgrade.sh \
+    --expected-context "kind-${CLUSTER_NAME}" \
+    --namespace aura-system \
+    --release aura-power \
+    --backup-dir "$rollback_conflict_dir" >"$rollback_race_log" 2>&1 &
+race_pid=$!
+deadline=$((SECONDS + 60))
+while [[ ! -f "$rollback_conflict_dir/inventory.ready" && $SECONDS -lt $deadline ]]; do sleep 1; done
+[[ -f "$rollback_conflict_dir/inventory.ready" ]] || { echo "FAIL: conflict injection inventory barrier was not reached" >&2; exit 51; }
+kubectl annotate powerpolicy "$policy_name" -n aura-system power.aura.sh/race-injected=preserve --overwrite >/dev/null
+if wait "$race_pid"; then
+  echo "FAIL: concurrent resourceVersion change did not abort downgrade preparation" >&2
+  exit 52
+fi
+grep -q 'changed after backup' "$rollback_race_log" || { echo "FAIL: resourceVersion conflict was not reported" >&2; exit 53; }
+[[ "$(kubectl get deployment aura-power-controller -n aura-system -o jsonpath='{.spec.replicas}')" == "0" ]] || { echo "FAIL: controller remained active after rule conflict" >&2; exit 54; }
+[[ "$(kubectl get statefulset aura-power-server -n aura-system -o jsonpath='{.spec.replicas}')" == "0" ]] || { echo "FAIL: server remained active after rule conflict" >&2; exit 55; }
+[[ "$(kubectl get powerpolicy "$policy_name" -n aura-system -o jsonpath='{.metadata.annotations.power\.aura\.sh/race-injected}')" == "preserve" ]] || { echo "FAIL: concurrent policy edit was overwritten" >&2; exit 56; }
+[[ -z "$(kubectl get powerpolicy "$policy_name" -n aura-system -o jsonpath='{.spec.scope.workloadLabels.power\.aura\.sh/downgrade-quarantine}')" ]] || { echo "FAIL: conflicted policy was partially quarantined" >&2; exit 57; }
+restore_candidate_writers
+kubectl annotate powerpolicy "$policy_name" -n aura-system power.aura.sh/race-injected- >/dev/null
+
+# Inject a new CR after inventory. It must never be quarantined without a
+# backup, and the failed preparation must again leave both writers stopped.
+AURA_POWER_DOWNGRADE_TEST_PAUSE_AFTER_INVENTORY_SECONDS=12 \
+  ./scripts/release/prepare-safe-downgrade.sh \
+    --expected-context "kind-${CLUSTER_NAME}" \
+    --namespace aura-system \
+    --release aura-power \
+    --backup-dir "$rollback_creation_dir" >"$rollback_race_log" 2>&1 &
+race_pid=$!
+deadline=$((SECONDS + 60))
+while [[ ! -f "$rollback_creation_dir/inventory.ready" && $SECONDS -lt $deadline ]]; do sleep 1; done
+[[ -f "$rollback_creation_dir/inventory.ready" ]] || { echo "FAIL: creation injection inventory barrier was not reached" >&2; exit 58; }
+kubectl apply -f - >/dev/null <<YAML
+apiVersion: power.aura.sh/v1alpha1
+kind: PowerPolicy
+metadata:
+  name: downgrade-race-created
+  namespace: aura-system
+spec:
+  scope:
+    workloadLabels:
+      aura-power-quality/never-match: "true"
+  schedule:
+    desiredState: "off"
+    windows: []
+  priority: 1
+YAML
+if wait "$race_pid"; then
+  echo "FAIL: rule-set inclusion did not abort downgrade preparation" >&2
+  exit 59
+fi
+grep -q 'rule set changed after inventory' "$rollback_race_log" || { echo "FAIL: rule-set inclusion was not reported" >&2; exit 60; }
+[[ ! -f "$rollback_creation_dir/powerpolicies/downgrade-race-created.json" ]] || { echo "FAIL: un-inventoried rule received an unsafe backup" >&2; exit 61; }
+[[ -z "$(kubectl get powerpolicy downgrade-race-created -n aura-system -o jsonpath='{.metadata.annotations.power\.aura\.sh/downgrade-quarantined}')" ]] || { echo "FAIL: unbacked rule was quarantined" >&2; exit 62; }
+[[ "$(kubectl get deployment aura-power-controller -n aura-system -o jsonpath='{.spec.replicas}')" == "0" ]] || { echo "FAIL: controller remained active after rule inclusion" >&2; exit 63; }
+[[ "$(kubectl get statefulset aura-power-server -n aura-system -o jsonpath='{.spec.replicas}')" == "0" ]] || { echo "FAIL: server remained active after rule inclusion" >&2; exit 64; }
+kubectl delete powerpolicy downgrade-race-created -n aura-system --wait=true >/dev/null
+restore_candidate_writers
+
+./scripts/release/prepare-safe-downgrade.sh \
+  --expected-context "kind-${CLUSTER_NAME}" \
+  --namespace aura-system \
+  --release aura-power \
+  --backup-dir "$rollback_backup_dir"
+# A second execution must preserve the first backup and converge without writes
+# that weaken UID or concurrent-state checks.
+./scripts/release/prepare-safe-downgrade.sh \
+  --expected-context "kind-${CLUSTER_NAME}" \
+  --namespace aura-system \
+  --release aura-power \
+  --backup-dir "$rollback_backup_dir" >/dev/null
+
+[[ "$(kubectl get deployment "$workload_name" -n "$fixture_namespace" -o jsonpath='{.spec.replicas}')" == "3" ]] || { echo "FAIL: downgrade preparation did not restore Deployment" >&2; exit 38; }
+[[ "$(kubectl get statefulset "$statefulset_name" -n "$fixture_namespace" -o jsonpath='{.spec.replicas}')" == "2" ]] || { echo "FAIL: downgrade preparation did not restore StatefulSet" >&2; exit 39; }
+[[ "$(kubectl get cronjob "$cronjob_name" -n "$fixture_namespace" -o jsonpath='{.spec.suspend}')" == "false" ]] || { echo "FAIL: downgrade preparation did not restore CronJob" >&2; exit 40; }
+[[ "$(kubectl get deployment "$sentinel_name" -n "$fixture_namespace" -o jsonpath='{.spec.replicas}')" == "2" ]] || { echo "FAIL: downgrade preparation changed the sentinel" >&2; exit 41; }
+jq -e '.spec.scope.targetRefs | length == 3' "$rollback_backup_dir/powerpolicies/${policy_name}.json" >/dev/null || { echo "FAIL: original targetRefs policy was not backed up" >&2; exit 42; }
+quarantine_token="$(jq -er '.quarantineToken' "$rollback_backup_dir/metadata.json")"
+kubectl get powerpolicy "$policy_name" -n aura-system -o json | jq -e --arg token "$quarantine_token" \
+  '((.spec.scope.targetRefs | length) == 0) and (.spec.scope.workloadLabels["power.aura.sh/downgrade-quarantine"] == $token)' >/dev/null || { echo "FAIL: targetRefs policy was not quarantined" >&2; exit 43; }
+
+helm upgrade aura-power "$legacy_dir/charts/aura-power" \
+  --namespace aura-system --wait --timeout 8m --reuse-values \
+  --set server.image.repository=aura-power-server \
+  --set server.image.tag=upgrade-v217 \
+  --set server.image.pullPolicy=Never \
+  --set controller.image.repository=aura-power-controller \
+  --set controller.image.tag=upgrade-v217 \
+  --set controller.image.pullPolicy=Never \
+  --set controller.replicas=0 >/dev/null
+
+[[ "$(kubectl get deployment aura-power-controller -n aura-system -o jsonpath='{.spec.replicas}')" == "0" ]] || { echo "FAIL: legacy controller started before downgrade verification" >&2; exit 44; }
+[[ "$(kubectl get deployment aura-power-controller -n aura-system -o jsonpath='{.spec.template.spec.containers[0].image}')" == "$legacy_controller_image" ]] || { echo "FAIL: controller did not downgrade to v2.1.7" >&2; exit 45; }
+
+kubectl scale deployment aura-power-controller -n aura-system --replicas=1 >/dev/null
+kubectl rollout status deployment aura-power-controller -n aura-system --timeout=180s >/dev/null
+deadline=$((SECONDS + TIMEOUT_SECONDS)); legacy_sentinel_target=""
+while (( SECONDS < deadline )); do
+  legacy_sentinel_target="$(kubectl get powertarget "${fixture_namespace}--${sentinel_name}" -n aura-system -o name 2>/dev/null || true)"
+  [[ -n "$legacy_sentinel_target" ]] && break
+  sleep 3
+done
+[[ -n "$legacy_sentinel_target" ]] || { echo "FAIL: legacy controller did not complete discovery after downgrade" >&2; exit 46; }
+sleep 35
+
+[[ "$(kubectl get deployment "$workload_name" -n "$fixture_namespace" -o jsonpath='{.spec.replicas}')" == "3" ]] || { echo "FAIL: legacy controller changed restored Deployment" >&2; exit 47; }
+[[ "$(kubectl get statefulset "$statefulset_name" -n "$fixture_namespace" -o jsonpath='{.spec.replicas}')" == "2" ]] || { echo "FAIL: legacy controller changed restored StatefulSet" >&2; exit 48; }
+[[ "$(kubectl get cronjob "$cronjob_name" -n "$fixture_namespace" -o jsonpath='{.spec.suspend}')" == "false" ]] || { echo "FAIL: legacy controller changed restored CronJob" >&2; exit 49; }
+[[ "$(kubectl get deployment "$sentinel_name" -n "$fixture_namespace" -o jsonpath='{.spec.replicas}')" == "2" ]] || { echo "FAIL: targetRefs-only policy became global after downgrade" >&2; exit 50; }
+
 kubectl delete namespace "$fixture_namespace" --wait=true --timeout=180s >/dev/null
 kubectl delete powertarget -n aura-system -l "power.aura.sh/target-namespace=${fixture_namespace}" --wait=true --timeout=120s >/dev/null 2>&1 || true
 [[ -z "$(kubectl get powertarget -n aura-system -l "power.aura.sh/target-namespace=${fixture_namespace}" -o name)" ]] || { echo "FAIL: fixture PowerTarget cleanup was incomplete" >&2; exit 33; }
 
-echo "kind_release_upgrade_journey=passed from=${LEGACY_REF} old_chart=true old_server=true old_controller=true crds_updated=true status_subresource=true auth_secret_stable=true refresh_token_survived=true pvc_stable=true webhook_tls_stable=true uid_migrated=true power_off=true snapshot=3 restore=3 audit_events=${audit_count} cleanup=true"
+echo "kind_release_upgrade_journey=passed from=${LEGACY_REF} old_chart=true old_server=true old_controller=true crds_updated=true status_subresource=true auth_secret_stable=true refresh_token_survived=true pvc_stable=true webhook_tls_stable=true uid_migrated=true power_off=true snapshot=3 restore=3 audit_events=${audit_count} safe_downgrade=true downgrade_idempotent=true deployment_restore=3 statefulset_restore=2 cronjob_restore=false targetrefs_quarantined=true no_global_action=true cleanup=true"

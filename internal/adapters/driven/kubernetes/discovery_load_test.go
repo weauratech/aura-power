@@ -42,8 +42,8 @@ func TestDiscoveryMemoryBudget(t *testing.T) {
 	runtime.GC()
 	var after runtime.MemStats
 	runtime.ReadMemStats(&after)
-	if len(got) != workloads || counting.lists != 4 {
-		t.Fatalf("result=%d listCalls=%d, want %d and 4", len(got), counting.lists, workloads)
+	if len(got) != workloads || counting.lists != 5 {
+		t.Fatalf("result=%d listCalls=%d, want %d and 5", len(got), counting.lists, workloads)
 	}
 	const maxRetained = 96 << 20
 	if delta := int64(after.HeapAlloc) - int64(before.HeapAlloc); delta > maxRetained {

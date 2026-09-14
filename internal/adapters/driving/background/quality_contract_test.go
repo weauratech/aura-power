@@ -229,6 +229,48 @@ func TestQualityDiscoveryRequiresLeaderElection(t *testing.T) {
 	}
 }
 
+func TestQualityDiscoveryPersistsHPAOwnershipAndOptInChanges(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(discoveryScheme(t)).WithStatusSubresource(&v1alpha1.PowerTarget{}).Build()
+	loop := DiscoveryLoop{Client: c, Config: DiscoveryConfig{Namespace: "aura-system", ExemptAnnotation: "aura.sh/power-exempt", OptInAnnotation: "aura.sh/power-eligible"}}
+	ref := domain.WorkloadRef{APIVersion: "apps/v1", Namespace: "fixtures", Name: "api", Kind: domain.WorkloadKindDeployment, UID: "uid-api"}
+	wl := ports.DiscoveredWorkload{Ref: ref, Replicas: 2, HPAControlled: true}
+	if _, err := loop.ensurePowerTarget(context.Background(), wl); err != nil {
+		t.Fatal(err)
+	}
+
+	key := types.NamespacedName{Namespace: "aura-system", Name: powerTargetName(ref)}
+	var target v1alpha1.PowerTarget
+	if err := c.Get(context.Background(), key, &target); err != nil {
+		t.Fatal(err)
+	}
+	if len(target.Status.Ownership) != 1 || target.Status.Ownership[0].Type != string(domain.OwnershipHPA) || target.Status.Ownership[0].OptedIn {
+		t.Fatalf("HPA ownership was not persisted as blocked: %+v", target.Status.Ownership)
+	}
+
+	wl.NamespaceAnnotations = map[string]string{"aura.sh/power-eligible": "true"}
+	if _, err := loop.ensurePowerTarget(context.Background(), wl); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(context.Background(), key, &target); err != nil {
+		t.Fatal(err)
+	}
+	if len(target.Status.Ownership) != 1 || !target.Status.Ownership[0].OptedIn {
+		t.Fatalf("namespace opt-in did not update HPA ownership: %+v", target.Status.Ownership)
+	}
+
+	wl.HPAControlled = false
+	wl.NamespaceAnnotations = nil
+	if _, err := loop.ensurePowerTarget(context.Background(), wl); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(context.Background(), key, &target); err != nil {
+		t.Fatal(err)
+	}
+	if len(target.Status.Ownership) != 0 {
+		t.Fatalf("stale HPA ownership remained after HPA removal: %+v", target.Status.Ownership)
+	}
+}
+
 func TestQualityNamespacePolicyCollisionFailsClosed(t *testing.T) {
 	for _, tc := range []struct {
 		name         string

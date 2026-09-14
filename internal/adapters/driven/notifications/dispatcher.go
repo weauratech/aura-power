@@ -51,12 +51,13 @@ type TargetRef struct {
 
 // Dispatcher sends notifications to configured channels.
 type Dispatcher struct {
-	client       client.Client
-	secretReader client.Reader
-	senders      map[string]Sender
-	queue        chan Event
-	mu           sync.Mutex
-	throttle     map[string]time.Time // key: "channel/target" → expiry
+	client           client.Client
+	secretReader     client.Reader
+	controlNamespace string
+	senders          map[string]Sender
+	queue            chan Event
+	mu               sync.Mutex
+	throttle         map[string]time.Time // key: "channel/target" → expiry
 }
 
 // Sender formats and sends a notification for a given provider type.
@@ -73,18 +74,34 @@ type observableSender interface {
 // the manager cache: watching Secrets cluster-wide would require broader RBAC
 // than the namespace-scoped get permission used by notification channels.
 func NewDispatcher(c client.Client, secretReader client.Reader) *Dispatcher {
+	return NewDispatcherForNamespace(c, secretReader, "")
+}
+
+// NewDispatcherForNamespace restricts channel reads and status writes to the
+// installation control namespace. An empty namespace is retained only for
+// backwards-compatible unit tests and embedders that explicitly want all
+// namespaces.
+func NewDispatcherForNamespace(c client.Client, secretReader client.Reader, controlNamespace string) *Dispatcher {
 	d := &Dispatcher{
-		client:       c,
-		secretReader: secretReader,
-		senders:      make(map[string]Sender),
-		queue:        make(chan Event, 500),
-		throttle:     make(map[string]time.Time),
+		client:           c,
+		secretReader:     secretReader,
+		controlNamespace: controlNamespace,
+		senders:          make(map[string]Sender),
+		queue:            make(chan Event, 500),
+		throttle:         make(map[string]time.Time),
 	}
 	// Register built-in senders
 	d.RegisterSender(&GoogleChatSender{})
 	d.RegisterSender(&GenericSender{})
 	d.RegisterSender(&SlackSender{})
 	return d
+}
+
+func (d *Dispatcher) listChannels(ctx context.Context, channels *v1alpha1.PowerNotificationChannelList) error {
+	if d.controlNamespace == "" {
+		return d.client.List(ctx, channels)
+	}
+	return d.client.List(ctx, channels, client.InNamespace(d.controlNamespace))
 }
 
 // RegisterSender adds a sender for a provider type.
@@ -176,7 +193,7 @@ const redactedDeliveryFailure = "notification delivery failed; endpoint and tran
 // safely replay an ambiguous side effect.
 func (d *Dispatcher) recoverIncompleteAttempts(ctx context.Context, startedBefore time.Time) error {
 	var channels v1alpha1.PowerNotificationChannelList
-	if err := d.client.List(ctx, &channels); err != nil {
+	if err := d.listChannels(ctx, &channels); err != nil {
 		return fmt.Errorf("list notification channels for recovery: %w", err)
 	}
 	var recoveryErrs []error
@@ -255,7 +272,7 @@ func (d *Dispatcher) dispatchBatch(ctx context.Context, batch []Event) error {
 
 	// Load all channels
 	var channels v1alpha1.PowerNotificationChannelList
-	if err := d.client.List(ctx, &channels); err != nil {
+	if err := d.listChannels(ctx, &channels); err != nil {
 		return fmt.Errorf("list notification channels: %w", err)
 	}
 	var dispatchErrs []error
@@ -415,7 +432,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, event Event) error {
 
 	// Load all channels
 	var channels v1alpha1.PowerNotificationChannelList
-	if err := d.client.List(ctx, &channels); err != nil {
+	if err := d.listChannels(ctx, &channels); err != nil {
 		return fmt.Errorf("list notification channels: %w", err)
 	}
 	var dispatchErrs []error

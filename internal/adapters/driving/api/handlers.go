@@ -17,6 +17,17 @@ import (
 	"github.com/weauratech/aura-power/internal/core/domain"
 )
 
+func (s *Server) requireControlNamespace(c *gin.Context, namespace string) bool {
+	if namespace == s.controlNamespace() {
+		return true
+	}
+	c.JSON(http.StatusUnprocessableEntity, gin.H{
+		"error":            "resource namespace must match the configured control namespace",
+		"controlNamespace": s.controlNamespace(),
+	})
+	return false
+}
+
 func (s *Server) handleHealthz(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
@@ -24,7 +35,7 @@ func (s *Server) handleHealthz(c *gin.Context) {
 func (s *Server) handleReadyz(c *gin.Context) {
 	// Check K8s API
 	var list v1alpha1.PowerTargetList
-	if err := s.client.List(c.Request.Context(), &list, client.Limit(1)); err != nil {
+	if err := s.client.List(c.Request.Context(), &list, client.InNamespace(s.controlNamespace()), client.Limit(1)); err != nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"status": "not ready", "component": "kubernetes", "error": err.Error()})
 		return
 	}
@@ -42,16 +53,16 @@ func (s *Server) handleStatus(c *gin.Context) {
 	ctx := c.Request.Context()
 
 	var targets v1alpha1.PowerTargetList
-	if err := s.client.List(ctx, &targets); err != nil {
+	if err := s.client.List(ctx, &targets, client.InNamespace(s.controlNamespace())); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
 	var policies v1alpha1.PowerPolicyList
-	_ = s.client.List(ctx, &policies)
+	_ = s.client.List(ctx, &policies, client.InNamespace(s.controlNamespace()))
 
 	var overrides v1alpha1.PowerOverrideList
-	_ = s.client.List(ctx, &overrides)
+	_ = s.client.List(ctx, &overrides, client.InNamespace(s.controlNamespace()))
 
 	var poweredOn, poweredOff, blocked, divergent int
 	for _, t := range targets.Items {
@@ -89,19 +100,19 @@ func (s *Server) handleDashboard(c *gin.Context) {
 	ctx := c.Request.Context()
 
 	var targets v1alpha1.PowerTargetList
-	if err := s.client.List(ctx, &targets); err != nil {
+	if err := s.client.List(ctx, &targets, client.InNamespace(s.controlNamespace())); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
 	var policies v1alpha1.PowerPolicyList
-	_ = s.client.List(ctx, &policies)
+	_ = s.client.List(ctx, &policies, client.InNamespace(s.controlNamespace()))
 
 	var overrides v1alpha1.PowerOverrideList
-	_ = s.client.List(ctx, &overrides)
+	_ = s.client.List(ctx, &overrides, client.InNamespace(s.controlNamespace()))
 
 	recentAudit := make([]v1alpha1.PowerAuditEvent, 0, 10)
-	_, _ = visitAuditPages(ctx, s.client, nil, func(page []v1alpha1.PowerAuditEvent) error {
+	_, _ = visitAuditPages(ctx, s.client, []client.ListOption{client.InNamespace(s.controlNamespace())}, func(page []v1alpha1.PowerAuditEvent) error {
 		recentAudit = retainNewest(recentAudit, page, 10)
 		return nil
 	})
@@ -219,7 +230,7 @@ func (s *Server) handleDiscover(c *gin.Context) {
 	ctx := c.Request.Context()
 
 	var targets v1alpha1.PowerTargetList
-	if err := s.client.List(ctx, &targets); err != nil {
+	if err := s.client.List(ctx, &targets, client.InNamespace(s.controlNamespace())); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -246,7 +257,7 @@ func (s *Server) handleListTargets(c *gin.Context) {
 	state := c.Query("state")
 
 	var targets v1alpha1.PowerTargetList
-	listOpts := []client.ListOption{}
+	listOpts := []client.ListOption{client.InNamespace(s.controlNamespace())}
 	if namespace != "" {
 		listOpts = append(listOpts, client.MatchingLabels{"power.aura.sh/target-namespace": namespace})
 	}
@@ -281,7 +292,7 @@ func (s *Server) handleExplainTarget(c *gin.Context) {
 		"power.aura.sh/target-namespace": ns,
 		"power.aura.sh/target-name":      name,
 	}
-	if err := s.client.List(ctx, &targets, client.MatchingLabels(labels)); err != nil {
+	if err := s.client.List(ctx, &targets, client.InNamespace(s.controlNamespace()), client.MatchingLabels(labels)); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -328,6 +339,9 @@ func (s *Server) handlePreviewPolicy(c *gin.Context) {
 	ctx := c.Request.Context()
 	namespace := c.DefaultQuery("namespace", s.controlNamespace())
 	previewName := c.DefaultQuery("name", "preview")
+	if !s.requireControlNamespace(c, namespace) {
+		return
+	}
 
 	// Parse policy from request body
 	var policySpec v1alpha1.PowerPolicySpec
@@ -338,18 +352,18 @@ func (s *Server) handlePreviewPolicy(c *gin.Context) {
 
 	// Load current state
 	var targets v1alpha1.PowerTargetList
-	if err := s.client.List(ctx, &targets); err != nil {
+	if err := s.client.List(ctx, &targets, client.InNamespace(s.controlNamespace())); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	var policies v1alpha1.PowerPolicyList
-	if err := s.client.List(ctx, &policies); err != nil {
+	if err := s.client.List(ctx, &policies, client.InNamespace(s.controlNamespace())); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
 	var overrides v1alpha1.PowerOverrideList
-	if err := s.client.List(ctx, &overrides); err != nil {
+	if err := s.client.List(ctx, &overrides, client.InNamespace(s.controlNamespace())); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -399,6 +413,9 @@ func (s *Server) handlePreviewOverride(c *gin.Context) {
 	ctx := c.Request.Context()
 	namespace := c.DefaultQuery("namespace", s.controlNamespace())
 	previewName := c.DefaultQuery("name", "preview")
+	if !s.requireControlNamespace(c, namespace) {
+		return
+	}
 
 	var overrideSpec v1alpha1.PowerOverrideSpec
 	if err := c.ShouldBindJSON(&overrideSpec); err != nil {
@@ -407,17 +424,17 @@ func (s *Server) handlePreviewOverride(c *gin.Context) {
 	}
 
 	var targets v1alpha1.PowerTargetList
-	if err := s.client.List(ctx, &targets); err != nil {
+	if err := s.client.List(ctx, &targets, client.InNamespace(s.controlNamespace())); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	var policies v1alpha1.PowerPolicyList
-	if err := s.client.List(ctx, &policies); err != nil {
+	if err := s.client.List(ctx, &policies, client.InNamespace(s.controlNamespace())); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	var overrides v1alpha1.PowerOverrideList
-	if err := s.client.List(ctx, &overrides); err != nil {
+	if err := s.client.List(ctx, &overrides, client.InNamespace(s.controlNamespace())); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -466,7 +483,7 @@ func (s *Server) handleSavings(c *gin.Context) {
 	ctx := c.Request.Context()
 
 	var targets v1alpha1.PowerTargetList
-	if err := s.client.List(ctx, &targets); err != nil {
+	if err := s.client.List(ctx, &targets, client.InNamespace(s.controlNamespace())); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -491,7 +508,7 @@ func (s *Server) handleSavingsBreakdown(c *gin.Context) {
 	ctx := c.Request.Context()
 
 	var targets v1alpha1.PowerTargetList
-	if err := s.client.List(ctx, &targets); err != nil {
+	if err := s.client.List(ctx, &targets, client.InNamespace(s.controlNamespace())); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -554,7 +571,7 @@ func (s *Server) handleSavingsExport(c *gin.Context) {
 	ctx := c.Request.Context()
 
 	var targets v1alpha1.PowerTargetList
-	if err := s.client.List(ctx, &targets); err != nil {
+	if err := s.client.List(ctx, &targets, client.InNamespace(s.controlNamespace())); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -585,7 +602,7 @@ func (s *Server) handleAuditExport(c *gin.Context) {
 	c.Header("Content-Disposition", "attachment; filename=aura-power-audit.csv")
 
 	c.Writer.WriteString("timestamp,action,target_namespace,target_name,target_kind,result,reason,rule_name\n")
-	_, _ = visitAuditPages(ctx, s.client, nil, func(page []v1alpha1.PowerAuditEvent) error {
+	_, _ = visitAuditPages(ctx, s.client, []client.ListOption{client.InNamespace(s.controlNamespace())}, func(page []v1alpha1.PowerAuditEvent) error {
 		for _, e := range page {
 			line := fmt.Sprintf("%s,%s,%s,%s,%s,%s,%s,%s\n",
 				e.Spec.Timestamp, e.Spec.Action,
@@ -609,7 +626,7 @@ func csvEscape(s string) string {
 func (s *Server) handleAuditList(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	listOpts := []client.ListOption{}
+	listOpts := []client.ListOption{client.InNamespace(s.controlNamespace())}
 
 	targetNs := c.Query("targetNamespace")
 	targetName := c.Query("targetName")
@@ -657,7 +674,7 @@ func (s *Server) handleListPolicies(c *gin.Context) {
 	ctx := c.Request.Context()
 
 	var policies v1alpha1.PowerPolicyList
-	if err := s.client.List(ctx, &policies); err != nil {
+	if err := s.client.List(ctx, &policies, client.InNamespace(s.controlNamespace())); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -669,7 +686,7 @@ func (s *Server) handleListOverrides(c *gin.Context) {
 	ctx := c.Request.Context()
 
 	var overrides v1alpha1.PowerOverrideList
-	if err := s.client.List(ctx, &overrides); err != nil {
+	if err := s.client.List(ctx, &overrides, client.InNamespace(s.controlNamespace())); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -690,6 +707,9 @@ func (s *Server) handleCreatePolicy(c *gin.Context) {
 	if policy.Namespace == "" {
 		policy.Namespace = s.controlNamespace()
 	}
+	if !s.requireControlNamespace(c, policy.Namespace) {
+		return
+	}
 	if _, err := selection.ResolveScope(ctx, s.client, policy.Namespace, policy.Spec.Scope); err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
 		return
@@ -707,6 +727,9 @@ func (s *Server) handleUpdatePolicy(c *gin.Context) {
 	ctx := c.Request.Context()
 	ns := c.Param("namespace")
 	name := c.Param("name")
+	if !s.requireControlNamespace(c, ns) {
+		return
+	}
 
 	// Get existing policy
 	var existing v1alpha1.PowerPolicy
@@ -742,6 +765,9 @@ func (s *Server) handleDeletePolicy(c *gin.Context) {
 	ctx := c.Request.Context()
 	ns := c.Param("namespace")
 	name := c.Param("name")
+	if !s.requireControlNamespace(c, ns) {
+		return
+	}
 
 	policy := &v1alpha1.PowerPolicy{}
 	policy.Name = name
@@ -767,6 +793,9 @@ func (s *Server) handleCreateOverride(c *gin.Context) {
 	if override.Namespace == "" {
 		override.Namespace = s.controlNamespace()
 	}
+	if !s.requireControlNamespace(c, override.Namespace) {
+		return
+	}
 	if _, err := selection.ResolveScope(ctx, s.client, override.Namespace, override.Spec.Scope); err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
 		return
@@ -784,6 +813,9 @@ func (s *Server) handleDeleteOverride(c *gin.Context) {
 	ctx := c.Request.Context()
 	ns := c.Param("namespace")
 	name := c.Param("name")
+	if !s.requireControlNamespace(c, ns) {
+		return
+	}
 
 	override := &v1alpha1.PowerOverride{}
 	override.Name = name
@@ -818,7 +850,7 @@ func (s *Server) handleListNamespaceGroups(c *gin.Context) {
 	ctx := c.Request.Context()
 
 	var groups v1alpha1.PowerNamespaceGroupList
-	if err := s.client.List(ctx, &groups); err != nil {
+	if err := s.client.List(ctx, &groups, client.InNamespace(s.controlNamespace())); err != nil {
 		// If CRD doesn't exist, return empty list gracefully
 		c.JSON(http.StatusOK, gin.H{"items": []interface{}{}, "count": 0})
 		return
@@ -839,6 +871,9 @@ func (s *Server) handleCreateNamespaceGroup(c *gin.Context) {
 	if group.Namespace == "" {
 		group.Namespace = s.controlNamespace()
 	}
+	if !s.requireControlNamespace(c, group.Namespace) {
+		return
+	}
 
 	if err := s.client.Create(ctx, &group); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create group: " + err.Error()})
@@ -852,6 +887,9 @@ func (s *Server) handleDeleteNamespaceGroup(c *gin.Context) {
 	ctx := c.Request.Context()
 	ns := c.Param("namespace")
 	name := c.Param("name")
+	if !s.requireControlNamespace(c, ns) {
+		return
+	}
 
 	group := &v1alpha1.PowerNamespaceGroup{}
 	group.Name = name
@@ -869,7 +907,7 @@ func (s *Server) handleListNotificationChannels(c *gin.Context) {
 	ctx := c.Request.Context()
 
 	var channels v1alpha1.PowerNotificationChannelList
-	if err := s.client.List(ctx, &channels); err != nil {
+	if err := s.client.List(ctx, &channels, client.InNamespace(s.controlNamespace())); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -889,6 +927,9 @@ func (s *Server) handleCreateNotificationChannel(c *gin.Context) {
 	if channel.Namespace == "" {
 		channel.Namespace = s.controlNamespace()
 	}
+	if !s.requireControlNamespace(c, channel.Namespace) {
+		return
+	}
 
 	if err := s.client.Create(ctx, &channel); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create channel: " + err.Error()})
@@ -902,6 +943,9 @@ func (s *Server) handleDeleteNotificationChannel(c *gin.Context) {
 	ctx := c.Request.Context()
 	ns := c.Param("namespace")
 	name := c.Param("name")
+	if !s.requireControlNamespace(c, ns) {
+		return
+	}
 
 	channel := &v1alpha1.PowerNotificationChannel{}
 	channel.Name = name
@@ -919,6 +963,9 @@ func (s *Server) handleUpdateNotificationChannel(c *gin.Context) {
 	ctx := c.Request.Context()
 	ns := c.Param("namespace")
 	name := c.Param("name")
+	if !s.requireControlNamespace(c, ns) {
+		return
+	}
 
 	// Get existing
 	var existing v1alpha1.PowerNotificationChannel

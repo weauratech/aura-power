@@ -248,7 +248,16 @@ No additional Helm configuration is needed since Helm won't revert the replica c
 
 ## HPA-Managed Workloads
 
-Workloads with an active Horizontal Pod Autoscaler are blocked by default. If Aura Power scales replicas to 0, the HPA has no effect. On restore, the HPA immediately takes over and scales to the appropriate level.
+Aura Power discovers `autoscaling/v2` Horizontal Pod Autoscalers by their exact
+`scaleTargetRef` (`apiVersion`, `kind`, `name`, and namespace). Deployments and
+StatefulSets with an active HPA are blocked by default.
+
+Immediately before power-down, the controller repeats the namespace HPA lookup
+through an uncached API-server reader. When it finds an HPA, it also reads the
+exact UID-bound workload and Namespace and recomputes opt-in from their current
+annotations. A newly-created HPA or removed opt-in therefore blocks that attempt.
+Any HPA LIST, workload GET, Namespace GET, or UID verification failure blocks
+the attempt; cached state is never treated as current safety evidence.
 
 ### Opt-In
 
@@ -257,8 +266,16 @@ kubectl annotate deployment my-app -n staging aura.sh/power-eligible="true"
 ```
 
 When opted in:
-- **Power-down**: Aura Power scales to 0, HPA becomes ineffective (min replicas = 0 pods)
-- **Restore**: Aura Power restores the snapshot replica count, HPA adjusts from there
+- **Power-down**: Aura Power snapshots the current live replica count and makes one scale-to-zero transition.
+- **Power-down hold**: the standard HPA algorithm disables scaling while current replicas are zero and `minReplicas` is positive, so the target remains off.
+- **Restore**: Aura Power restores the snapshot replica count, after which HPA resumes evaluation and may adjust positive replicas from live metrics.
+- **Contention**: if another scale writer reactivates the target during the off policy, Aura Power reports `Contended` and does not enter a write loop.
+
+Opt-in delegates a shared field to two controllers and must be deliberate. The
+validated contract covers the standard Kubernetes HPA zero-replica hold and
+snapshot restore. KEDA scale-to-zero, custom scale targets, and external systems
+that can activate a zero-replica target are separate integrations and are not
+covered by this contract.
 
 ## Summary
 
@@ -267,7 +284,7 @@ When opted in:
 | ArgoCD | Blocked | `aura.sh/power-eligible: "true"` | `ignoreDifferences` plus `RespectIgnoreDifferences=true` |
 | Flux | Blocked | `aura.sh/power-eligible: "true"` | Remove `/spec/replicas` from patch or use driftDetection ignore |
 | Helm | Blocked | `aura.sh/power-eligible: "true"` | None needed |
-| HPA | Blocked | `aura.sh/power-eligible: "true"` | None needed |
+| HPA (`autoscaling/v2`, Deployment/StatefulSet) | Blocked | `aura.sh/power-eligible: "true"` | Standard HPA holds at zero; verify separately when another autoscaler can activate from zero |
 | None | Eligible | Already eligible | N/A |
 
 ## Verifying Guardrail Status

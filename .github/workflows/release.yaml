@@ -7,6 +7,11 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  # Only one release may decide or update the global `latest` aliases at once.
+  group: aura-power-release-promotion
+  cancel-in-progress: false
+
 env:
   REGISTRY: ghcr.io
   IMAGE_SERVER: ghcr.io/weauratech/aura-power-server
@@ -17,52 +22,101 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          fetch-depth: 0
+        with: {fetch-depth: 0}
+      - name: Validate release identity
+        env: {GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}'}
+        run: |
+          scripts/release/preflight.sh
+          scripts/release/github-release-guard.sh assert-releasable "$GITHUB_REF_NAME"
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
-        with:
-          go-version-file: go.mod
-          cache: true
+        with: {go-version-file: go.mod, cache: true}
       - name: Install envtest assets
         run: |
           go install sigs.k8s.io/controller-runtime/tools/setup-envtest@v0.0.0-20250308055145-5fe7bb3edc86
           setup_envtest="$(go env GOPATH)/bin/setup-envtest"
           echo "KUBEBUILDER_ASSETS=$("$setup_envtest" use -p path 1.31.x!)" >> "$GITHUB_ENV"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: web/package-lock.json
+        with: {node-version: 22, cache: npm, cache-dependency-path: web/package-lock.json}
       - uses: azure/setup-helm@bf6a7d304bc2fdb57e0331155b7ebf2c504acf0a # v4
       - name: Test release candidate
         run: make quality quality-acceptance quality-envtest quality-load
 
-  kind-acceptance:
+  authorize-release:
     runs-on: ubuntu-latest
     needs: validate
+    environment: release
+    steps:
+      - name: Record protected release authorization
+        run: echo "release_environment=authorized"
+
+  build-amd64:
+    runs-on: ubuntu-latest
+    needs: authorize-release
+    permissions: {contents: read, packages: write}
+    outputs:
+      server-digest: ${{ steps.server.outputs.digest }}
+      controller-digest: ${{ steps.controller.outputs.digest }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with: {registry: '${{ env.REGISTRY }}', username: '${{ github.actor }}', password: '${{ secrets.GITHUB_TOKEN }}'}
+      - name: Build and stage server amd64 exactly once
+        id: server
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
-          fetch-depth: 0
+          context: .
+          file: Dockerfile.server
+          platforms: linux/amd64
+          tags: ${{ env.IMAGE_SERVER }}
+          build-args: |
+            VERSION=${{ github.ref_name }}
+            COMMIT=${{ github.sha }}
+          outputs: type=image,name=${{ env.IMAGE_SERVER }},push-by-digest=true,name-canonical=true,push=true
+          provenance: false
+          sbom: false
+      - name: Build and stage controller amd64 exactly once
+        id: controller
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: Dockerfile.controller
+          platforms: linux/amd64
+          tags: ${{ env.IMAGE_CONTROLLER }}
+          build-args: |
+            VERSION=${{ github.ref_name }}
+            COMMIT=${{ github.sha }}
+          outputs: type=image,name=${{ env.IMAGE_CONTROLLER }},push-by-digest=true,name-canonical=true,push=true
+          provenance: false
+          sbom: false
+
+  kind-acceptance:
+    runs-on: ubuntu-latest
+    needs: build-amd64
+    permissions: {contents: read, packages: read}
+    env:
+      TESTED_SERVER_DIGEST: ${{ needs.build-amd64.outputs.server-digest }}
+      TESTED_CONTROLLER_DIGEST: ${{ needs.build-amd64.outputs.controller-digest }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: {fetch-depth: 0}
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with: {registry: '${{ env.REGISTRY }}', username: '${{ github.actor }}', password: '${{ secrets.GITHUB_TOKEN }}'}
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
-        with:
-          go-version-file: go.mod
-          cache: true
+        with: {go-version-file: go.mod, cache: true}
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: tests/e2e/playwright/package-lock.json
+        with: {node-version: 22, cache: npm, cache-dependency-path: tests/e2e/playwright/package-lock.json}
       - uses: helm/kind-action@0b5c88445f37b7e12a2ce1ecca7805b9046a74db # v1
-        with:
-          cluster_name: aura-power-quality
-          node_image: kindest/node:v1.35.0
-          version: v0.32.0
+        with: {cluster_name: aura-power-quality, node_image: kindest/node:v1.35.0, version: v0.32.0}
       - uses: azure/setup-helm@bf6a7d304bc2fdb57e0331155b7ebf2c504acf0a # v4
-      - name: Build and load candidate images
+      - name: Load the exact published digests under test
         run: |
-          docker build -f Dockerfile.server -t aura-power-server:release-candidate .
-          docker build -f Dockerfile.controller -t aura-power-controller:release-candidate .
+          docker pull "${IMAGE_SERVER}@${TESTED_SERVER_DIGEST}"
+          docker pull "${IMAGE_CONTROLLER}@${TESTED_CONTROLLER_DIGEST}"
+          docker image inspect "${IMAGE_SERVER}@${TESTED_SERVER_DIGEST}" --format '{{join .RepoDigests "\n"}}' | grep -Fx "${IMAGE_SERVER}@${TESTED_SERVER_DIGEST}"
+          docker image inspect "${IMAGE_CONTROLLER}@${TESTED_CONTROLLER_DIGEST}" --format '{{join .RepoDigests "\n"}}' | grep -Fx "${IMAGE_CONTROLLER}@${TESTED_CONTROLLER_DIGEST}"
+          docker tag "${IMAGE_SERVER}@${TESTED_SERVER_DIGEST}" aura-power-server:release-candidate
+          docker tag "${IMAGE_CONTROLLER}@${TESTED_CONTROLLER_DIGEST}" aura-power-controller:release-candidate
           kind load docker-image --name aura-power-quality aura-power-server:release-candidate aura-power-controller:release-candidate
           CGO_ENABLED=0 go build -ldflags="-s -w" -o bin/aura-power ./cmd/aura-power/
       - name: Prove v2.1.7 full release upgrade
@@ -70,35 +124,28 @@ jobs:
           CANDIDATE_SERVER_IMAGE: aura-power-server:release-candidate
           CANDIDATE_CONTROLLER_IMAGE: aura-power-controller:release-candidate
         run: ./scripts/quality/kind-release-upgrade-journey.sh
-      - name: Install candidate and run native journey
+      - name: Install candidate and run native journeys
         run: |
-          export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config}"
-          helm upgrade --install aura-power charts/aura-power \
-            --namespace aura-system --create-namespace --wait --timeout 5m \
-            --set server.image.repository=aura-power-server \
-            --set server.image.tag=release-candidate \
-            --set server.image.pullPolicy=Never \
-            --set server.persistence.enabled=false \
-            --set controller.image.repository=aura-power-controller \
-            --set controller.image.tag=release-candidate \
+          helm upgrade --install aura-power charts/aura-power --namespace aura-system --create-namespace --wait --timeout 5m \
+            --set server.image.repository=aura-power-server --set server.image.tag=release-candidate \
+            --set server.image.pullPolicy=Never --set server.persistence.enabled=false \
+            --set controller.image.repository=aura-power-controller --set controller.image.tag=release-candidate \
             --set controller.image.pullPolicy=Never
           ./scripts/quality/kind-helm-upgrade-admission.sh
           ./scripts/quality/kind-legacy-upgrade-journey.sh
           ./scripts/quality/kind-core-journey.sh
+          ./scripts/quality/kind-hpa-journey.sh
+          ./scripts/quality/kind-control-namespace-journey.sh
           ./scripts/quality/kind-approval-journey.sh
           ./scripts/quality/kind-notification-journey.sh
           ./scripts/quality/kind-argocd-journey.sh
           ./scripts/quality/kind-cli-journey.sh
       - name: Run controller cardinality, memory and leader failover soak
-        run: |
-          export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config}"
-          ./scripts/quality/kind-memory-soak.sh
+        run: ./scripts/quality/kind-memory-soak.sh
       - name: Upload controller memory diagnostics
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: controller-memory-release
-          path: artifacts/quality/memory-*
+        with: {name: controller-memory-release, path: 'artifacts/quality/memory-*'}
       - name: Install browser test dependencies
         run: |
           cd tests/e2e/playwright
@@ -120,17 +167,14 @@ jobs:
           kubectl port-forward -n aura-system statefulset/aura-power-server 19091:8080 >/tmp/aura-power-port-forward.log 2>&1 &
           forward_pid=$!
           trap 'kill "$forward_pid" 2>/dev/null || true' EXIT
-          for _ in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:19091/api/v1/health >/dev/null; then break; fi
-            sleep 1
-          done
+          for _ in $(seq 1 30); do curl -fsS http://127.0.0.1:19091/api/v1/health >/dev/null && break; sleep 1; done
           curl -fsS http://127.0.0.1:19091/api/v1/health >/dev/null
           admin_password="$(kubectl get secret aura-power-server-secret -n aura-system -o jsonpath='{.data.admin-password}' | base64 -d)"
           cd tests/e2e/playwright
           CI=true AURA_E2E_BASE_URL=http://127.0.0.1:19091 AURA_E2E_ADMIN_USER=admin \
             AURA_E2E_ADMIN_PASSWORD="$admin_password" AURA_E2E_FIXTURE_NAMESPACE=aura-power-e2e-browser \
-            AURA_E2E_KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config}" \
-            AURA_E2E_ALLOW_MUTATION=true AURA_E2E_BROWSERS=all npx playwright test
+            AURA_E2E_KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config}" AURA_E2E_ALLOW_MUTATION=true \
+            AURA_E2E_BROWSERS=all npx playwright test
       - name: Upload browser diagnostics
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -140,184 +184,360 @@ jobs:
             tests/e2e/playwright/playwright-report
             tests/e2e/playwright/test-results
 
-  docker-amd64:
-    runs-on: ubuntu-latest
-    needs: kind-acceptance
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Extract version
-        id: version
-        run: echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
-      - name: Build server (amd64)
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
-        with:
-          context: .
-          file: Dockerfile.server
-          platforms: linux/amd64
-          push: true
-          tags: ${{ env.IMAGE_SERVER }}:${{ steps.version.outputs.tag }}-amd64
-          cache-from: type=gha,scope=server-amd64
-          cache-to: type=gha,mode=max,scope=server-amd64
-      - name: Build controller (amd64)
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
-        with:
-          context: .
-          file: Dockerfile.controller
-          platforms: linux/amd64
-          push: true
-          tags: ${{ env.IMAGE_CONTROLLER }}:${{ steps.version.outputs.tag }}-amd64
-          cache-from: type=gha,scope=controller-amd64
-          cache-to: type=gha,mode=max,scope=controller-amd64
-
-  docker-arm64:
+  build-arm64:
     runs-on: ubuntu-24.04-arm
     needs: kind-acceptance
-    permissions:
-      contents: read
-      packages: write
+    permissions: {contents: read, packages: write}
+    outputs:
+      server-digest: ${{ steps.server.outputs.digest }}
+      controller-digest: ${{ steps.controller.outputs.digest }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Extract version
-        id: version
-        run: echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
-      - name: Build server (arm64)
+        with: {registry: '${{ env.REGISTRY }}', username: '${{ github.actor }}', password: '${{ secrets.GITHUB_TOKEN }}'}
+      - name: Build server arm64 by digest
+        id: server
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: Dockerfile.server
           platforms: linux/arm64
-          push: true
-          tags: ${{ env.IMAGE_SERVER }}:${{ steps.version.outputs.tag }}-arm64
-          cache-from: type=gha,scope=server-arm64
-          cache-to: type=gha,mode=max,scope=server-arm64
-      - name: Build controller (arm64)
+          tags: ${{ env.IMAGE_SERVER }}
+          build-args: |
+            VERSION=${{ github.ref_name }}
+            COMMIT=${{ github.sha }}
+          outputs: type=image,name=${{ env.IMAGE_SERVER }},push-by-digest=true,name-canonical=true,push=true
+          provenance: false
+          sbom: false
+      - name: Build controller arm64 by digest
+        id: controller
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: Dockerfile.controller
           platforms: linux/arm64
-          push: true
-          tags: ${{ env.IMAGE_CONTROLLER }}:${{ steps.version.outputs.tag }}-arm64
-          cache-from: type=gha,scope=controller-arm64
-          cache-to: type=gha,mode=max,scope=controller-arm64
+          tags: ${{ env.IMAGE_CONTROLLER }}
+          build-args: |
+            VERSION=${{ github.ref_name }}
+            COMMIT=${{ github.sha }}
+          outputs: type=image,name=${{ env.IMAGE_CONTROLLER }},push-by-digest=true,name-canonical=true,push=true
+          provenance: false
+          sbom: false
+      - name: Execute native arm64 image smoke checks
+        env:
+          SERVER_DIGEST: ${{ steps.server.outputs.digest }}
+          CONTROLLER_DIGEST: ${{ steps.controller.outputs.digest }}
+        run: |
+          for image in "${IMAGE_SERVER}@${SERVER_DIGEST}" "${IMAGE_CONTROLLER}@${CONTROLLER_DIGEST}"; do
+            docker pull "$image"
+            test "$(docker image inspect "$image" --format '{{.Architecture}}')" = arm64
+            set +e
+            output="$(timeout 10s docker run --rm "$image" 2>&1)"
+            status=$?
+            set -e
+            test "$status" -ne 126
+            if grep -qi 'exec format error' <<<"$output"; then printf '%s\n' "$output" >&2; exit 1; fi
+          done
 
-  docker-manifest:
+  assemble-images:
     runs-on: ubuntu-latest
-    needs: [docker-amd64, docker-arm64]
-    permissions:
-      packages: write
+    needs: [build-amd64, build-arm64]
+    permissions: {packages: write}
+    outputs:
+      server-digest: ${{ steps.assemble.outputs.server-digest }}
+      controller-digest: ${{ steps.assemble.outputs.controller-digest }}
     steps:
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Extract version
-        id: version
-        run: echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
-      - name: Create multi-arch manifests
+        with: {registry: '${{ env.REGISTRY }}', username: '${{ github.actor }}', password: '${{ secrets.GITHUB_TOKEN }}'}
+      - name: Assemble commit and run scoped image candidates
+        id: assemble
+        env:
+          SERVER_AMD64: ${{ needs.build-amd64.outputs.server-digest }}
+          CONTROLLER_AMD64: ${{ needs.build-amd64.outputs.controller-digest }}
+          SERVER_ARM64: ${{ needs.build-arm64.outputs.server-digest }}
+          CONTROLLER_ARM64: ${{ needs.build-arm64.outputs.controller-digest }}
         run: |
-          TAG="${{ steps.version.outputs.tag }}"
-          VERSION="${TAG#v}"
-          # Server
-          docker buildx imagetools create -t "${{ env.IMAGE_SERVER }}:${TAG}" -t "${{ env.IMAGE_SERVER }}:${VERSION}" \
-            "${{ env.IMAGE_SERVER }}:${TAG}-amd64" \
-            "${{ env.IMAGE_SERVER }}:${TAG}-arm64"
-          # Controller
-          docker buildx imagetools create -t "${{ env.IMAGE_CONTROLLER }}:${TAG}" -t "${{ env.IMAGE_CONTROLLER }}:${VERSION}" \
-            "${{ env.IMAGE_CONTROLLER }}:${TAG}-amd64" \
-            "${{ env.IMAGE_CONTROLLER }}:${TAG}-arm64"
+          staging_tag="candidate-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          docker buildx imagetools create -t "${IMAGE_SERVER}:${staging_tag}" "${IMAGE_SERVER}@${SERVER_AMD64}" "${IMAGE_SERVER}@${SERVER_ARM64}"
+          docker buildx imagetools create -t "${IMAGE_CONTROLLER}:${staging_tag}" "${IMAGE_CONTROLLER}@${CONTROLLER_AMD64}" "${IMAGE_CONTROLLER}@${CONTROLLER_ARM64}"
+          server_digest="$(docker buildx imagetools inspect "${IMAGE_SERVER}:${staging_tag}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+          controller_digest="$(docker buildx imagetools inspect "${IMAGE_CONTROLLER}:${staging_tag}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+          echo "server-digest=$server_digest" >> "$GITHUB_OUTPUT"
+          echo "controller-digest=$controller_digest" >> "$GITHUB_OUTPUT"
 
-  sign:
+  build-release-assets:
     runs-on: ubuntu-latest
-    needs: docker-manifest
-    permissions:
-      contents: read
-      packages: write
-      id-token: write
-    steps:
-      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: sigstore/cosign-installer@f713795cb21599bc4e5c4b58cbad1da852d7eeb9 # v3
-      - name: Extract version
-        id: version
-        run: echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
-      - name: Sign images
-        run: |
-          SERVER_DIGEST="$(docker buildx imagetools inspect "${{ env.IMAGE_SERVER }}:${{ steps.version.outputs.tag }}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
-          CONTROLLER_DIGEST="$(docker buildx imagetools inspect "${{ env.IMAGE_CONTROLLER }}:${{ steps.version.outputs.tag }}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
-          cosign sign --yes "${{ env.IMAGE_SERVER }}@${SERVER_DIGEST}"
-          cosign sign --yes "${{ env.IMAGE_CONTROLLER }}@${CONTROLLER_DIGEST}"
-
-  goreleaser:
-    runs-on: ubuntu-latest
-    needs: sign
-    permissions:
-      contents: write
+    needs: kind-acceptance
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          fetch-depth: 0
+        with: {fetch-depth: 0}
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
-        with:
-          go-version-file: go.mod
+        with: {go-version-file: go.mod}
+      - uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0
       - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
+        with: {version: v2.18.1, args: 'release --clean --skip=publish'}
+        env: {GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}'}
+      - name: Verify and smoke the exact release archives
+        run: |
+          cd dist
+          sha256sum --check checksums.txt
+          for archive in aura-power_*; do
+            case "$archive" in *.tar.gz|*.zip) ;; *) continue ;; esac
+            case "$archive" in
+              *.tar.gz) tar -tf "$archive" | grep -Eq '(^|/)aura-power$' ;;
+              *.zip) unzip -l "$archive" | grep -Eq '[[:space:]]aura-power(.exe)?$' ;;
+            esac
+          done
+          archive="$(find . -maxdepth 1 -name 'aura-power_*_linux_amd64.tar.gz' -print -quit)"
+          test -n "$archive"
+          mkdir smoke && tar -xzf "$archive" -C smoke
+          smoke/aura-power --help >/dev/null
+          cd ..
+          mkdir prepared-release
+          find dist -maxdepth 1 -type f \( -name 'aura-power_*.tar.gz' -o -name 'aura-power_*.zip' -o -name '*.sbom.json' -o -name 'checksums.txt' \) \
+            -exec cp '{}' prepared-release/ \;
+          test -f prepared-release/checksums.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          version: latest
-          args: release --clean
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: release-assets-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: prepared-release/*
+          if-no-files-found: error
+          retention-days: 7
 
-  helm:
+  stage-chart:
     runs-on: ubuntu-latest
-    needs: [sign, goreleaser]
-    permissions:
-      contents: read
-      packages: write
+    needs: kind-acceptance
+    permissions: {contents: read, packages: write}
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+      repository: ${{ steps.push.outputs.repository }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: azure/setup-helm@bf6a7d304bc2fdb57e0331155b7ebf2c504acf0a # v4
       - name: Login to GHCR
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
-      - name: Extract version
-        id: version
-        run: echo "tag=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
-      - name: Package and push Helm chart
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: Package and stage the exact versioned chart
+        id: push
         run: |
-          helm package charts/aura-power --version ${{ steps.version.outputs.tag }} --app-version ${{ steps.version.outputs.tag }}
-          helm push aura-power-${{ steps.version.outputs.tag }}.tgz oci://ghcr.io/weauratech/charts
-
-  promote-latest:
-    runs-on: ubuntu-latest
-    needs: helm
-    permissions:
-      packages: write
-    steps:
-      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+          version="${GITHUB_REF_NAME#v}"
+          staging="ghcr.io/weauratech/charts/staging/${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}/aura-power"
+          scripts/release/package-chart-reproducibly.sh charts/aura-power . "$version" "$version"
+          output="$(helm push "aura-power-${version}.tgz" "oci://${staging%/aura-power}")"
+          printf '%s\n' "$output"
+          digest="$(printf '%s\n' "$output" | awk '$1 == "Digest:" {print $2}')"
+          [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "repository=$staging" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Promote verified images
+          name: staged-chart-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: aura-power-*.tgz
+          if-no-files-found: error
+          retention-days: 7
+
+  verify-and-promote:
+    runs-on: ubuntu-latest
+    needs: [build-amd64, build-arm64, assemble-images, build-release-assets, stage-chart]
+    permissions: {contents: write, packages: write, id-token: write, attestations: write, artifact-metadata: write}
+    env:
+      SERVER_AMD64: ${{ needs.build-amd64.outputs.server-digest }}
+      CONTROLLER_AMD64: ${{ needs.build-amd64.outputs.controller-digest }}
+      SERVER_ARM64: ${{ needs.build-arm64.outputs.server-digest }}
+      CONTROLLER_ARM64: ${{ needs.build-arm64.outputs.controller-digest }}
+      SERVER_DIGEST: ${{ needs.assemble-images.outputs.server-digest }}
+      CONTROLLER_DIGEST: ${{ needs.assemble-images.outputs.controller-digest }}
+      STAGING_CHART: ${{ needs.stage-chart.outputs.repository }}
+      CHART_DIGEST: ${{ needs.stage-chart.outputs.digest }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with: {name: 'release-assets-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}', path: release-assets}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with: {name: 'staged-chart-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}', path: staged-chart}
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with: {registry: '${{ env.REGISTRY }}', username: '${{ github.actor }}', password: '${{ secrets.GITHUB_TOKEN }}'}
+      - uses: sigstore/cosign-installer@f713795cb21599bc4e5c4b58cbad1da852d7eeb9 # v3
+      - uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0
+      - uses: oras-project/setup-oras@22ce207df3b08e061f537244349aac6ae1d214f6 # v1.2.4
+      - name: Generate architecture-specific SPDX SBOMs
         run: |
-          TAG="${GITHUB_REF#refs/tags/}"
-          docker buildx imagetools create -t "${{ env.IMAGE_SERVER }}:latest" "${{ env.IMAGE_SERVER }}:${TAG}"
-          docker buildx imagetools create -t "${{ env.IMAGE_CONTROLLER }}:latest" "${{ env.IMAGE_CONTROLLER }}:${TAG}"
+          syft "${IMAGE_SERVER}@${SERVER_AMD64}" -o spdx-json=server-amd64.spdx.json
+          syft "${IMAGE_SERVER}@${SERVER_ARM64}" -o spdx-json=server-arm64.spdx.json
+          syft "${IMAGE_CONTROLLER}@${CONTROLLER_AMD64}" -o spdx-json=controller-amd64.spdx.json
+          syft "${IMAGE_CONTROLLER}@${CONTROLLER_ARM64}" -o spdx-json=controller-arm64.spdx.json
+          mkdir chart-root
+          tar -xzf staged-chart/aura-power-*.tgz -C chart-root
+          syft dir:chart-root/aura-power -o spdx-json=chart.spdx.json
+      - name: Sign immutable staged OCI artifacts
+        run: |
+          cosign sign --yes "${IMAGE_SERVER}@${SERVER_DIGEST}"
+          cosign sign --yes "${IMAGE_CONTROLLER}@${CONTROLLER_DIGEST}"
+          cosign sign --yes "${STAGING_CHART}@${CHART_DIGEST}"
+      - name: Attest server index provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with: {subject-name: '${{ env.IMAGE_SERVER }}', subject-digest: '${{ env.SERVER_DIGEST }}', push-to-registry: true}
+      - name: Attest controller index provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with: {subject-name: '${{ env.IMAGE_CONTROLLER }}', subject-digest: '${{ env.CONTROLLER_DIGEST }}', push-to-registry: true}
+      - name: Attest chart provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with: {subject-name: '${{ env.STAGING_CHART }}', subject-digest: '${{ env.CHART_DIGEST }}', push-to-registry: true}
+      - name: Attest server amd64 SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with: {subject-name: '${{ env.IMAGE_SERVER }}', subject-digest: '${{ env.SERVER_AMD64 }}', sbom-path: server-amd64.spdx.json, push-to-registry: true}
+      - name: Attest server arm64 SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with: {subject-name: '${{ env.IMAGE_SERVER }}', subject-digest: '${{ env.SERVER_ARM64 }}', sbom-path: server-arm64.spdx.json, push-to-registry: true}
+      - name: Attest controller amd64 SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with: {subject-name: '${{ env.IMAGE_CONTROLLER }}', subject-digest: '${{ env.CONTROLLER_AMD64 }}', sbom-path: controller-amd64.spdx.json, push-to-registry: true}
+      - name: Attest controller arm64 SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with: {subject-name: '${{ env.IMAGE_CONTROLLER }}', subject-digest: '${{ env.CONTROLLER_ARM64 }}', sbom-path: controller-arm64.spdx.json, push-to-registry: true}
+      - name: Attest chart SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with: {subject-name: '${{ env.STAGING_CHART }}', subject-digest: '${{ env.CHART_DIGEST }}', sbom-path: chart.spdx.json, push-to-registry: true}
+      - name: Verify staged signatures and attestations
+        env: {GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}'}
+        run: |
+          identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yaml@refs/tags/${GITHUB_REF_NAME}"
+          issuer="https://token.actions.githubusercontent.com"
+          cosign verify --certificate-identity "$identity" --certificate-oidc-issuer "$issuer" "${IMAGE_SERVER}@${SERVER_DIGEST}"
+          cosign verify --certificate-identity "$identity" --certificate-oidc-issuer "$issuer" "${IMAGE_CONTROLLER}@${CONTROLLER_DIGEST}"
+          cosign verify --certificate-identity "$identity" --certificate-oidc-issuer "$issuer" "${STAGING_CHART}@${CHART_DIGEST}"
+          gh attestation verify "oci://${IMAGE_SERVER}@${SERVER_DIGEST}" --repo "$GITHUB_REPOSITORY"
+          gh attestation verify "oci://${IMAGE_CONTROLLER}@${CONTROLLER_DIGEST}" --repo "$GITHUB_REPOSITORY"
+          gh attestation verify "oci://${STAGING_CHART}@${CHART_DIGEST}" --repo "$GITHUB_REPOSITORY"
+          gh attestation verify "oci://${STAGING_CHART}@${CHART_DIGEST}" --repo "$GITHUB_REPOSITORY" --predicate-type https://spdx.dev/Document
+          gh attestation verify "oci://${IMAGE_SERVER}@${SERVER_AMD64}" --repo "$GITHUB_REPOSITORY" --predicate-type https://spdx.dev/Document
+          gh attestation verify "oci://${IMAGE_SERVER}@${SERVER_ARM64}" --repo "$GITHUB_REPOSITORY" --predicate-type https://spdx.dev/Document
+          gh attestation verify "oci://${IMAGE_CONTROLLER}@${CONTROLLER_AMD64}" --repo "$GITHUB_REPOSITORY" --predicate-type https://spdx.dev/Document
+          gh attestation verify "oci://${IMAGE_CONTROLLER}@${CONTROLLER_ARM64}" --repo "$GITHUB_REPOSITORY" --predicate-type https://spdx.dev/Document
+      - name: Build and sign exact release files
+        env: {GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}'}
+        run: |
+          jq -n --arg version "${GITHUB_REF_NAME#v}" --arg tag "$GITHUB_REF_NAME" --arg commit "$GITHUB_SHA" \
+            --arg server "${IMAGE_SERVER}@${SERVER_DIGEST}" --arg controller "${IMAGE_CONTROLLER}@${CONTROLLER_DIGEST}" \
+            --arg chart "ghcr.io/weauratech/charts/aura-power@${CHART_DIGEST}" \
+            '{version:$version,tag:$tag,commit:$commit,serverImage:$server,controllerImage:$controller,helmChart:$chart}' > release-assets/release-manifest.json
+          cosign sign-blob --yes --bundle release-assets/checksums.txt.bundle release-assets/checksums.txt
+          cosign sign-blob --yes --bundle release-assets/release-manifest.json.bundle release-assets/release-manifest.json
+      - name: Attest exact release files
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with: {subject-path: 'release-assets/**'}
+      - name: Verify exact release files before promotion
+        env: {GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}'}
+        run: |
+          identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yaml@refs/tags/${GITHUB_REF_NAME}"
+          issuer="https://token.actions.githubusercontent.com"
+          cosign verify-blob --certificate-identity "$identity" --certificate-oidc-issuer "$issuer" --bundle release-assets/checksums.txt.bundle release-assets/checksums.txt
+          cosign verify-blob --certificate-identity "$identity" --certificate-oidc-issuer "$issuer" --bundle release-assets/release-manifest.json.bundle release-assets/release-manifest.json
+          for artifact in release-assets/*; do gh attestation verify "$artifact" --repo "$GITHUB_REPOSITORY"; done
+      - name: Stage draft GitHub Release
+        env: {GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}'}
+        run: scripts/release/github-release-guard.sh ensure-draft "$GITHUB_REF_NAME"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-supply-chain-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            *.spdx.json
+            release-assets/release-manifest.json
+            release-assets/*.bundle
+          if-no-files-found: error
+          retention-days: 30
+      - name: Guard immutable public aliases
+        env: {GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}'}
+        run: |
+          image_digest() {
+            local ref="$1" output error_file
+            error_file="${RUNNER_TEMP}/image-inspect-$(printf '%s' "$ref" | sha256sum | cut -d' ' -f1)"
+            if output="$(docker buildx imagetools inspect "$ref" --format '{{json .Manifest.Digest}}' 2>"$error_file")"; then
+              tr -d '"' <<<"$output"
+              return 0
+            fi
+            if grep -Eq '(: not found$|manifest unknown|name unknown|HTTP[^ ]* 404)' "$error_file"; then return 1; fi
+            cat "$error_file" >&2
+            return 2
+          }
+          chart_digest() {
+            local ref="$1" output error_file
+            error_file="${RUNNER_TEMP}/chart-inspect-$(printf '%s' "$ref" | sha256sum | cut -d' ' -f1)"
+            if output="$(oras manifest fetch --descriptor "$ref" 2>"$error_file")"; then
+              jq -r .digest <<<"$output"
+              return 0
+            fi
+            if grep -Eiq '(^|: )not found($|:)|manifest unknown|name unknown|HTTP[^ ]* 404' "$error_file"; then return 1; fi
+            cat "$error_file" >&2
+            return 2
+          }
+          assert_absent_or_equal() {
+            local kind="$1" ref="$2" expected="$3" observed status
+            set +e
+            if [[ "$kind" == image ]]; then observed="$(image_digest "$ref")"; status=$?; else observed="$(chart_digest "$ref")"; status=$?; fi
+            set -e
+            if [[ $status -eq 1 ]]; then return; fi
+            [[ $status -eq 0 ]] || exit "$status"
+            [[ "$observed" == "$expected" ]] || { echo "immutable alias $ref already points to $observed, expected $expected" >&2; exit 1; }
+          }
+          version="${GITHUB_REF_NAME#v}"
+          for tag in "$GITHUB_REF_NAME" "$version"; do
+            assert_absent_or_equal image "${IMAGE_SERVER}:${tag}" "$SERVER_DIGEST"
+            assert_absent_or_equal image "${IMAGE_CONTROLLER}:${tag}" "$CONTROLLER_DIGEST"
+          done
+          assert_absent_or_equal chart "ghcr.io/weauratech/charts/aura-power:${version}" "$CHART_DIGEST"
+
+          previous_tag="$(scripts/release/github-release-guard.sh latest "$GITHUB_REF_NAME")"
+          for pair in "${IMAGE_SERVER}|${SERVER_DIGEST}" "${IMAGE_CONTROLLER}|${CONTROLLER_DIGEST}"; do
+            repository="${pair%%|*}"; candidate="${pair#*|}"
+            set +e; current_latest="$(image_digest "${repository}:latest")"; latest_status=$?; set -e
+            if [[ $latest_status -eq 1 ]]; then continue; fi
+            [[ $latest_status -eq 0 ]] || exit "$latest_status"
+            if [[ "$current_latest" == "$candidate" ]]; then continue; fi
+            [[ -n "$previous_tag" ]] || { echo "unexpected pre-existing latest alias for $repository" >&2; exit 1; }
+            previous_digest="$(image_digest "${repository}:${previous_tag}")"
+            [[ "$current_latest" == "$previous_digest" ]] || {
+              echo "latest alias for $repository is not the last published release or this candidate" >&2
+              exit 1
+            }
+          done
+      - name: Upload verified release files to the draft
+        env: {GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}'}
+        run: scripts/release/github-release-guard.sh upload-assets "$GITHUB_REF_NAME" release-assets/*
+      - name: Promote immutable version aliases
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          docker buildx imagetools create -t "${IMAGE_SERVER}:${GITHUB_REF_NAME}" -t "${IMAGE_SERVER}:${version}" "${IMAGE_SERVER}@${SERVER_DIGEST}"
+          docker buildx imagetools create -t "${IMAGE_CONTROLLER}:${GITHUB_REF_NAME}" -t "${IMAGE_CONTROLLER}:${version}" "${IMAGE_CONTROLLER}@${CONTROLLER_DIGEST}"
+          for tag in "$GITHUB_REF_NAME" "$version"; do
+            test "$(docker buildx imagetools inspect "${IMAGE_SERVER}:${tag}" --format '{{json .Manifest.Digest}}' | tr -d '"')" = "$SERVER_DIGEST"
+            test "$(docker buildx imagetools inspect "${IMAGE_CONTROLLER}:${tag}" --format '{{json .Manifest.Digest}}' | tr -d '"')" = "$CONTROLLER_DIGEST"
+          done
+          oras cp "${STAGING_CHART}@${CHART_DIGEST}" "ghcr.io/weauratech/charts/aura-power:${version}"
+          test "$(oras manifest fetch --descriptor "ghcr.io/weauratech/charts/aura-power:${version}" | jq -r .digest)" = "$CHART_DIGEST"
+          cosign sign --yes "ghcr.io/weauratech/charts/aura-power@${CHART_DIGEST}"
+      - name: Attest promoted chart provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with: {subject-name: ghcr.io/weauratech/charts/aura-power, subject-digest: '${{ env.CHART_DIGEST }}', push-to-registry: true}
+      - name: Attest promoted chart SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with: {subject-name: ghcr.io/weauratech/charts/aura-power, subject-digest: '${{ env.CHART_DIGEST }}', sbom-path: chart.spdx.json, push-to-registry: true}
+      - name: Verify promoted immutable artifacts
+        env: {GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}'}
+        run: |
+          identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yaml@refs/tags/${GITHUB_REF_NAME}"
+          issuer="https://token.actions.githubusercontent.com"
+          cosign verify --certificate-identity "$identity" --certificate-oidc-issuer "$issuer" "${IMAGE_SERVER}@${SERVER_DIGEST}"
+          cosign verify --certificate-identity "$identity" --certificate-oidc-issuer "$issuer" "${IMAGE_CONTROLLER}@${CONTROLLER_DIGEST}"
+          cosign verify --certificate-identity "$identity" --certificate-oidc-issuer "$issuer" "ghcr.io/weauratech/charts/aura-power@${CHART_DIGEST}"
+          gh attestation verify "oci://ghcr.io/weauratech/charts/aura-power@${CHART_DIGEST}" --repo "$GITHUB_REPOSITORY"
+          gh attestation verify "oci://ghcr.io/weauratech/charts/aura-power@${CHART_DIGEST}" --repo "$GITHUB_REPOSITORY" --predicate-type https://spdx.dev/Document
+      - name: Promote monotonic latest image aliases
+        run: |
+          docker buildx imagetools create -t "${IMAGE_SERVER}:latest" "${IMAGE_SERVER}@${SERVER_DIGEST}"
+          docker buildx imagetools create -t "${IMAGE_CONTROLLER}:latest" "${IMAGE_CONTROLLER}@${CONTROLLER_DIGEST}"
+          test "$(docker buildx imagetools inspect "${IMAGE_SERVER}:latest" --format '{{json .Manifest.Digest}}' | tr -d '"')" = "$SERVER_DIGEST"
+          test "$(docker buildx imagetools inspect "${IMAGE_CONTROLLER}:latest" --format '{{json .Manifest.Digest}}' | tr -d '"')" = "$CONTROLLER_DIGEST"
+      - name: Publish GitHub Release as the final transition
+        env: {GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}'}
+        run: gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false --latest=false

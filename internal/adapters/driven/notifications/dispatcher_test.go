@@ -133,6 +133,30 @@ func TestDispatchFiltersUpdatesStatusAndThrottles(t *testing.T) {
 	}
 }
 
+func TestDispatcherControlNamespaceExcludesForeignChannels(t *testing.T) {
+	control := &v1alpha1.PowerNotificationChannel{
+		ObjectMeta: metav1.ObjectMeta{Name: "control", Namespace: "control"},
+		Spec:       v1alpha1.PowerNotificationChannelSpec{Type: "fixture", URL: "https://example.test/control", Enabled: true},
+	}
+	foreign := &v1alpha1.PowerNotificationChannel{
+		ObjectMeta: metav1.ObjectMeta{Name: "foreign", Namespace: "other"},
+		Spec:       v1alpha1.PowerNotificationChannelSpec{Type: "fixture", URL: "https://example.test/foreign", Enabled: true},
+	}
+	d, c, sender := testDispatcher(t, control, foreign)
+	d.controlNamespace = "control"
+	d.dispatch(context.Background(), Event{Action: "workload.error", Target: TargetRef{Namespace: "fixtures", Name: "api", Kind: "Deployment"}})
+	if len(sender.events) != 1 {
+		t.Fatalf("deliveries=%d want=1 from control namespace only", len(sender.events))
+	}
+	var gotForeign v1alpha1.PowerNotificationChannel
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(foreign), &gotForeign); err != nil {
+		t.Fatal(err)
+	}
+	if gotForeign.Status.TotalSent != 0 || gotForeign.Status.TotalErrors != 0 || gotForeign.Status.LastAttempt != nil {
+		t.Fatalf("foreign notification channel status was mutated: %+v", gotForeign.Status)
+	}
+}
+
 func TestDispatchRecordsSenderFailure(t *testing.T) {
 	channel := &v1alpha1.PowerNotificationChannel{
 		ObjectMeta: metav1.ObjectMeta{Name: "failing", Namespace: "aura-system"},

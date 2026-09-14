@@ -12,7 +12,8 @@ runtime health, and ownership of `spec.replicas` or `spec.suspend`.
 | Standard tracking label | Target ownership must be detected and require explicit opt-in | domain tests | partial |
 | Custom tracking label | Configured label must be consumed by discovery | no configurable implementation found | unsupported |
 | ApplicationSet-generated Application | Same field-authority rules apply to generated apps | generated Application, self-heal, unrelated Git revision and exact restore for Deployment, StatefulSet and CronJob in Kind | pass-real |
-| HPA/KEDA | Controller ownership and scale subresource must be explicit | discovery supports neither as a first-class target | unsupported/inconclusive |
+| HPA (`autoscaling/v2`) | Exact Deployment/StatefulSet `scaleTargetRef` produces persisted `OwnershipHPA`; an uncached mutation-boundary LIST plus UID-bound workload and Namespace GETs close HPA-creation and opt-in-removal races and fail closed on API errors; explicit opt-in permits snapshot/off/restore; standard HPA holds a zero target; a controlled external scale becomes stable `Contended` without a write loop | native Kind HPA journey plus discovery, guardrail, creation-race, opt-in-removal, LIST-failure and GET-failure tests | pass-real for standard HPA detection, zero hold and recovery; activation-from-zero autoscalers are not claimed |
+| KEDA | Autoscaler ownership and scale-to-zero behavior must be explicit | no first-class discovery or native journey | unsupported/inconclusive |
 | Flux | Ownership detection exists but no full reconciliation contract | unit signal only | pass-simulated only |
 
 `ignoreDifferences` affects comparison. Argo CD requires
@@ -45,3 +46,12 @@ removes every fixture, Argo namespace and cluster-scoped Argo resource.
 This matrix establishes the supported annotation-tracking contract on the
 pinned version. Other Argo CD versions and label/custom tracking modes remain
 separate compatibility claims.
+
+The HPA journey creates real `autoscaling/v2` resources for a Deployment and a
+StatefulSet, binds ownership by exact `scaleTargetRef`, and proves zero Aura
+mutations before opt-in. For the opted-in Deployment it proves snapshot capture,
+one audited scale-to-zero, the native HPA zero-replica hold, exact restoration,
+and native HPA conditions. A separately identified external scale write proves
+stable `Contended` handling without replay; it is not attributed to HPA. The
+journey does not claim KEDA, metrics-backed scaling behavior, activation from
+zero, or custom scale targets.

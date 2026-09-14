@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -28,6 +31,10 @@ const actionConvergenceGrace = 2 * time.Minute
 // TargetReconciler reconciles PowerTarget objects.
 type TargetReconciler struct {
 	client.Client
+	ControlNamespace string
+	// APIReader performs mutation-boundary ownership checks directly against
+	// the API server instead of relying on an eventually-consistent cache.
+	APIReader    client.Reader
 	Config       domain.GuardrailConfig
 	Executor     ports.WorkloadExecutor
 	Audit        ports.AuditRecorder
@@ -43,6 +50,9 @@ func (r *TargetReconciler) requeueAfter() time.Duration {
 }
 
 func (r *TargetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	if !namespaceIsManaged(r.ControlNamespace, req.Namespace) {
+		return ctrl.Result{}, nil
+	}
 	start := time.Now()
 	logger := log.FromContext(ctx).WithValues("target", req.NamespacedName)
 
@@ -118,6 +128,13 @@ func (r *TargetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 					r.recordAudit(ctx, domainTarget.Ref, ports.AuditExecutionError, "error", err.Error(), "")
 					return ctrl.Result{RequeueAfter: errorRequeueAfter}, nil
 				}
+			}
+			admitted, inspectionErr := r.admitLiveHPA(ctx, &target, domainTarget.Ref)
+			if !admitted {
+				if inspectionErr != nil {
+					logger.Error(inspectionErr, "power-down blocked because live HPA ownership could not be verified")
+				}
+				return ctrl.Result{RequeueAfter: errorRequeueAfter}, nil
 			}
 			if err := r.beginAction(ctx, &target, decision, domainTarget.Ref, ports.AuditWorkloadPoweredDown, ruleNameFromDecision(decision)); err != nil {
 				logger.Error(err, "failed to persist power-down intent")
@@ -216,7 +233,7 @@ func (r *TargetReconciler) reconcileExistingAction(ctx context.Context, target *
 	decisionKey := powerDecisionKey(decision)
 	action := target.Status.Action
 	if desired == domain.PowerStateOn && observed == desired && target.Status.Snapshot != nil &&
-		(action == nil || action.Phase == "Converged" ||
+		(action == nil || action.Phase == "Converged" || action.Phase == "Contended" ||
 			(action.DesiredState == string(desired) && action.Phase != "InProgress" && action.AuditPhase != "Pending")) {
 		// GitOps or an operator may already have restored the workload. Do not
 		// replay the stale replica snapshot over that legitimate live state.
@@ -388,9 +405,130 @@ func (r *TargetReconciler) failAction(target *v1alpha1.PowerTarget, err error) {
 	target.Status.Action.CompletedAt = nil
 }
 
+// admitLiveHPA closes the discovery-to-mutation race. A newly-created HPA must
+// be observed and explicitly opted in by discovery before power-down proceeds.
+// A direct LIST error is fail-closed because an empty cached ownership status
+// is not evidence that no autoscaler exists.
+func (r *TargetReconciler) admitLiveHPA(ctx context.Context, target *v1alpha1.PowerTarget, ref domain.WorkloadRef) (bool, error) {
+	// Tests that exercise reconciliation in isolation may omit APIReader.
+	// Production setup always supplies the uncached reader below.
+	if r.APIReader == nil {
+		return true, nil
+	}
+	var hpas autoscalingv2.HorizontalPodAutoscalerList
+	if err := r.APIReader.List(ctx, &hpas, client.InNamespace(ref.Namespace)); err != nil {
+		r.persistMutationBoundaryBlock(target, v1alpha1.BlockReasonSpec{
+			Type:     string(domain.BlockInsufficientInfo),
+			Message:  "Unable to verify HPA ownership at mutation time; power-down is blocked.",
+			Waivable: false,
+		})
+		target.Status.ConsecutiveFailures++
+		if statusErr := r.Status().Update(ctx, target); statusErr != nil {
+			return false, fmt.Errorf("list HorizontalPodAutoscalers: %w; persist fail-closed status: %v", err, statusErr)
+		}
+		return false, fmt.Errorf("list HorizontalPodAutoscalers: %w", err)
+	}
+
+	hpaFound := false
+	for i := range hpas.Items {
+		candidate := &hpas.Items[i]
+		targetRef := candidate.Spec.ScaleTargetRef
+		if targetRef.APIVersion == ref.APIVersion && targetRef.Kind == string(ref.Kind) && targetRef.Name == ref.Name {
+			hpaFound = true
+			break
+		}
+	}
+	if !hpaFound {
+		return true, nil
+	}
+	optedIn, err := r.liveHPAOptIn(ctx, ref)
+	if err != nil {
+		r.persistMutationBoundaryBlock(target, v1alpha1.BlockReasonSpec{
+			Type:     string(domain.BlockInsufficientInfo),
+			Message:  "Unable to verify current workload and namespace HPA opt-in; power-down is blocked.",
+			Waivable: false,
+		})
+		target.Status.ConsecutiveFailures++
+		if statusErr := r.Status().Update(ctx, target); statusErr != nil {
+			return false, fmt.Errorf("verify live HPA opt-in: %w; persist fail-closed status: %v", err, statusErr)
+		}
+		return false, fmt.Errorf("verify live HPA opt-in: %w", err)
+	}
+	if optedIn {
+		return true, nil
+	}
+
+	seen := false
+	for i := range target.Status.Ownership {
+		if target.Status.Ownership[i].Type == string(domain.OwnershipHPA) {
+			target.Status.Ownership[i].OptedIn = false
+			seen = true
+			break
+		}
+	}
+	if !seen {
+		target.Status.Ownership = append(target.Status.Ownership, v1alpha1.OwnershipSpec{Type: string(domain.OwnershipHPA)})
+	}
+	r.persistMutationBoundaryBlock(target, v1alpha1.BlockReasonSpec{
+		Type:     string(domain.BlockHPAControlled),
+		Message:  "A live HPA was detected at mutation time. Wait for discovery and add explicit opt-in before power-down.",
+		Waivable: true,
+	})
+	if err := r.Status().Update(ctx, target); err != nil {
+		return false, fmt.Errorf("persist live HPA block: %w", err)
+	}
+	return false, nil
+}
+
+func (r *TargetReconciler) liveHPAOptIn(ctx context.Context, ref domain.WorkloadRef) (bool, error) {
+	var annotations map[string]string
+	switch ref.Kind {
+	case domain.WorkloadKindDeployment:
+		var workload appsv1.Deployment
+		if err := r.APIReader.Get(ctx, client.ObjectKey{Namespace: ref.Namespace, Name: ref.Name}, &workload); err != nil {
+			return false, err
+		}
+		if ref.UID == "" || string(workload.UID) != ref.UID {
+			return false, fmt.Errorf("workload UID changed while verifying HPA opt-in")
+		}
+		annotations = workload.Annotations
+	case domain.WorkloadKindStatefulSet:
+		var workload appsv1.StatefulSet
+		if err := r.APIReader.Get(ctx, client.ObjectKey{Namespace: ref.Namespace, Name: ref.Name}, &workload); err != nil {
+			return false, err
+		}
+		if ref.UID == "" || string(workload.UID) != ref.UID {
+			return false, fmt.Errorf("workload UID changed while verifying HPA opt-in")
+		}
+		annotations = workload.Annotations
+	default:
+		return false, fmt.Errorf("HPA references unsupported workload kind %q", ref.Kind)
+	}
+
+	var namespace corev1.Namespace
+	if err := r.APIReader.Get(ctx, client.ObjectKey{Name: ref.Namespace}, &namespace); err != nil {
+		return false, err
+	}
+	return annotations[r.Config.OptInAnnotation] == "true" || namespace.Annotations[r.Config.OptInAnnotation] == "true", nil
+}
+
+func (r *TargetReconciler) persistMutationBoundaryBlock(target *v1alpha1.PowerTarget, reason v1alpha1.BlockReasonSpec) {
+	target.Status.Blocked = true
+	for _, existing := range target.Status.BlockReasons {
+		if existing.Type == reason.Type {
+			return
+		}
+	}
+	target.Status.BlockReasons = append(target.Status.BlockReasons, reason)
+}
+
 func (r *TargetReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if r.APIReader == nil {
+		r.APIReader = mgr.GetAPIReader()
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.PowerTarget{}).
+		WithEventFilter(namespacePredicate(r.ControlNamespace)).
 		Complete(r)
 }
 
@@ -445,7 +583,7 @@ func (r *TargetReconciler) executeRestore(ctx context.Context, target *v1alpha1.
 
 func (r *TargetReconciler) loadPolicies(ctx context.Context) ([]domain.PolicySpec, error) {
 	var list v1alpha1.PowerPolicyList
-	if err := r.List(ctx, &list); err != nil {
+	if err := r.List(ctx, &list, namespaceListOptions(r.ControlNamespace)...); err != nil {
 		return nil, err
 	}
 	policies := make([]domain.PolicySpec, 0, len(list.Items))
@@ -466,7 +604,7 @@ func (r *TargetReconciler) loadPolicies(ctx context.Context) ([]domain.PolicySpe
 
 func (r *TargetReconciler) loadOverrides(ctx context.Context) ([]domain.OverrideSpec, error) {
 	var list v1alpha1.PowerOverrideList
-	if err := r.List(ctx, &list); err != nil {
+	if err := r.List(ctx, &list, namespaceListOptions(r.ControlNamespace)...); err != nil {
 		return nil, err
 	}
 	overrides := make([]domain.OverrideSpec, 0, len(list.Items))

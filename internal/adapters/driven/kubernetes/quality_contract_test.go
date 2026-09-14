@@ -12,6 +12,7 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -34,6 +35,9 @@ func qualityScheme(t *testing.T) *runtime.Scheme {
 		t.Fatal(err)
 	}
 	if err := batchv1.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+	if err := autoscalingv2.AddToScheme(s); err != nil {
 		t.Fatal(err)
 	}
 	if err := corev1.AddToScheme(s); err != nil {
@@ -512,6 +516,58 @@ func TestQualityDiscovererKeepsKindAndNamespaceMetadata(t *testing.T) {
 	}
 }
 
+func TestQualityDiscovererDetectsExactHPAScaleTargets(t *testing.T) {
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "fixtures", Annotations: map[string]string{"aura.sh/power-eligible": "true"}}}
+	otherNS := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "other"}}
+	objects := []client.Object{
+		ns, otherNS,
+		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "same", Namespace: "fixtures"}},
+		&appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: "same", Namespace: "fixtures"}},
+		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "not-targeted", Namespace: "fixtures"}},
+		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "same", Namespace: "other"}},
+		&autoscalingv2.HorizontalPodAutoscaler{ObjectMeta: metav1.ObjectMeta{Name: "deployment-hpa", Namespace: "fixtures"}, Spec: autoscalingv2.HorizontalPodAutoscalerSpec{ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{APIVersion: "apps/v1", Kind: "Deployment", Name: "same"}}},
+		&autoscalingv2.HorizontalPodAutoscaler{ObjectMeta: metav1.ObjectMeta{Name: "statefulset-hpa", Namespace: "fixtures"}, Spec: autoscalingv2.HorizontalPodAutoscalerSpec{ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{APIVersion: "apps/v1", Kind: "StatefulSet", Name: "same"}}},
+		// A same-name custom resource must not be mistaken for the Deployment.
+		&autoscalingv2.HorizontalPodAutoscaler{ObjectMeta: metav1.ObjectMeta{Name: "custom-hpa", Namespace: "other"}, Spec: autoscalingv2.HorizontalPodAutoscalerSpec{ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{APIVersion: "example.io/v1", Kind: "Deployment", Name: "same"}}},
+	}
+	c := fake.NewClientBuilder().WithScheme(qualityScheme(t)).WithObjects(objects...).Build()
+
+	got, err := NewDiscoverer(c).DiscoverAll(context.Background(), []string{"fixtures"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("discovered %d selected workloads, want 3: %+v", len(got), got)
+	}
+	controlled := map[domain.WorkloadKind]bool{}
+	for _, workload := range got {
+		if workload.Ref.Name == "same" {
+			controlled[workload.Ref.Kind] = workload.HPAControlled
+		} else if workload.HPAControlled {
+			t.Fatalf("unrelated workload was marked HPA-controlled: %+v", workload.Ref)
+		}
+		if workload.NamespaceAnnotations["aura.sh/power-eligible"] != "true" {
+			t.Fatalf("namespace annotations were lost: %+v", workload)
+		}
+	}
+	if !controlled[domain.WorkloadKindDeployment] || !controlled[domain.WorkloadKindStatefulSet] {
+		t.Fatalf("exact HPA targets were not detected: %+v", controlled)
+	}
+
+	byNamespace, err := NewDiscoverer(c).DiscoverByNamespace(context.Background(), "fixtures")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(byNamespace) != 3 {
+		t.Fatalf("namespace discovery returned %d workloads, want 3", len(byNamespace))
+	}
+	for _, workload := range byNamespace {
+		if workload.Ref.Name == "same" && !workload.HPAControlled {
+			t.Fatalf("namespace discovery lost HPA ownership: %+v", workload.Ref)
+		}
+	}
+}
+
 type listCountingClient struct {
 	client.Client
 	lists int
@@ -542,8 +598,8 @@ func TestQualityDiscovererUsesConstantClusterListCount(t *testing.T) {
 	if len(got) != 40 {
 		t.Fatalf("discovered %d workloads, want 40", len(got))
 	}
-	if counting.lists != 4 {
-		t.Fatalf("issued %d LIST calls, want 4 regardless of namespace count", counting.lists)
+	if counting.lists != 5 {
+		t.Fatalf("issued %d LIST calls, want 5 regardless of namespace count", counting.lists)
 	}
 }
 

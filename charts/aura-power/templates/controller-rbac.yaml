@@ -21,34 +21,6 @@ metadata:
   labels:
     {{- include "aura-power.controller.labels" . | nindent 4 }}
 rules:
-  # User-authored decision inputs are observed, never changed by the controller.
-  - apiGroups: ["power.aura.sh"]
-    resources: ["poweroverrides", "powernamespacegroups"]
-    verbs: ["get", "list", "watch"]
-  # Discovery owns namespace-annotation policies and may create or refresh them.
-  - apiGroups: ["power.aura.sh"]
-    resources: ["powerpolicies"]
-    verbs: ["get", "list", "watch", "create", "update"]
-  # Built-in schedules are seeded once and existing resources are left untouched.
-  - apiGroups: ["power.aura.sh"]
-    resources: ["powerschedules"]
-    verbs: ["get", "list", "watch", "create"]
-  # Discovery owns target lifecycle.
-  - apiGroups: ["power.aura.sh"]
-    resources: ["powertargets"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  # Audit events are append-only except for retention cleanup.
-  - apiGroups: ["power.aura.sh"]
-    resources: ["powerauditevents"]
-    verbs: ["get", "list", "watch", "create", "delete"]
-  # Notification channel configuration is owned by the API; the dispatcher
-  # only reads it and writes delivery status.
-  - apiGroups: ["power.aura.sh"]
-    resources: ["powernotificationchannels"]
-    verbs: ["get", "list", "watch"]
-  - apiGroups: ["power.aura.sh"]
-    resources: ["powerpolicies/status", "poweroverrides/status", "powertargets/status", "powernotificationchannels/status"]
-    verbs: ["get", "update", "patch"]
   # Workload execution (power-down / restore)
   - apiGroups: ["apps"]
     resources: ["deployments", "statefulsets", "deployments/scale", "statefulsets/scale"]
@@ -67,10 +39,6 @@ rules:
   - apiGroups: [""]
     resources: ["events"]
     verbs: ["create", "patch"]
-  # Leader election
-  - apiGroups: ["coordination.k8s.io"]
-    resources: ["leases"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -82,6 +50,57 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: {{ include "aura-power.controller.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "aura-power.controller.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+---
+# Aura decision state and leader election are restricted to the release
+# namespace even though workload discovery and execution are cluster-wide.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "aura-power.controller.fullname" . }}-control
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aura-power.controller.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["power.aura.sh"]
+    resources: ["poweroverrides", "powernamespacegroups"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["power.aura.sh"]
+    resources: ["powerpolicies"]
+    verbs: ["get", "list", "watch", "create", "update"]
+  - apiGroups: ["power.aura.sh"]
+    resources: ["powerschedules"]
+    verbs: ["get", "list", "watch", "create"]
+  - apiGroups: ["power.aura.sh"]
+    resources: ["powertargets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["power.aura.sh"]
+    resources: ["powerauditevents"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: ["power.aura.sh"]
+    resources: ["powernotificationchannels"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["power.aura.sh"]
+    resources: ["powerpolicies/status", "poweroverrides/status", "powertargets/status", "powernotificationchannels/status"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "aura-power.controller.fullname" . }}-control
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aura-power.controller.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "aura-power.controller.fullname" . }}-control
 subjects:
   - kind: ServiceAccount
     name: {{ include "aura-power.controller.serviceAccountName" . }}

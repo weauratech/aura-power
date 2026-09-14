@@ -31,6 +31,11 @@ var panelAssets embed.FS
 
 var scheme = runtime.NewScheme()
 
+var (
+	version = "dev"
+	commit  = "unknown"
+)
+
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(v1alpha1.AddToScheme(scheme))
@@ -45,7 +50,7 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel}))
 	slog.SetDefault(logger)
 
-	slog.Info("starting aura-power-server", "version", "2.0.0")
+	slog.Info("starting aura-power-server", "version", version, "commit", commit)
 
 	// Context with graceful shutdown (must be created early for cache)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -92,8 +97,9 @@ func main() {
 
 	// Create cached client (informer-based reads, direct writes)
 	cachedClient, err := kubernetes.NewCachedClient(ctx, kubernetes.CachedClientConfig{
-		RestConfig: config,
-		Scheme:     scheme,
+		RestConfig:       config,
+		Scheme:           scheme,
+		ControlNamespace: controlNamespace,
 	})
 	if err != nil {
 		slog.Error("failed to create cached k8s client", "error", err)

@@ -14,7 +14,9 @@ outcome truthfully.
   They are release gates and must remain green; a reproduced bug is fixed rather
   than skipped, retried, or weakened.
 - Kind runs exercise native Kubernetes controllers, CRDs, status writes, workload
-  readiness, recovery, and Helm. `scripts/quality/kind-argocd-journey.sh` also
+  readiness, recovery, and Helm. `scripts/quality/kind-hpa-journey.sh` proves
+  exact HPA ownership discovery, default blocking, opted-in recovery, and stable
+  scale-field contention. `scripts/quality/kind-argocd-journey.sh` also
   installs integrity-pinned Argo CD v2.14.20 and validates the supported field
   ownership contract against real Application and ApplicationSet controllers.
 - `scripts/quality/kind-release-upgrade-journey.sh` creates its own disposable

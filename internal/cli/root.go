@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -14,9 +15,16 @@ var (
 
 // NewRootCmd creates the root command for the aura-power CLI.
 func NewRootCmd() *cobra.Command {
+	return NewRootCmdWithVersion("dev", "unknown")
+}
+
+// NewRootCmdWithVersion creates the root command with build identity exposed by
+// Cobra's standard --version flag.
+func NewRootCmdWithVersion(version, commit string) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "aura-power",
-		Short: "Aura Power — Kubernetes workload energy governance",
+		Use:     "aura-power",
+		Short:   "Aura Power — Kubernetes workload energy governance",
+		Version: fmt.Sprintf("%s (commit %s)", version, commit),
 		Long: `Aura Power CLI provides terminal-based operations for managing
 workload power policies, overrides, and monitoring savings.
 

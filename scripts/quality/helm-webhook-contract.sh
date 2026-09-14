@@ -22,6 +22,10 @@ if [[ "$(grep -c 'caBundle: ' "$scratch/self-signed.yaml")" -ne 2 ]]; then
   echo "both validation routes must trust the generated CA" >&2
   exit 1
 fi
+if [[ "$(grep -c 'kubernetes.io/metadata.name: "aura-system"' "$scratch/self-signed.yaml")" -ne 2 ]]; then
+  echo "both validation routes must be restricted to the release namespace" >&2
+  exit 1
+fi
 
 if helm template aura-power "$chart" --namespace aura-system \
   --set webhook.enabled=true \

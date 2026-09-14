@@ -12,10 +12,15 @@ Get Aura Power running and your first schedule active in under 10 minutes.
 
 ```bash
 helm install aura-power oci://ghcr.io/weauratech/charts/aura-power \
+  --version 2.2.0 \
   --namespace aura-system --create-namespace \
   --set server.auth.jwtSecret=$(openssl rand -base64 32) \
   --set server.auth.initialAdmin.password=changeme
 ```
+
+For production, pin both component images by their published `sha256` digest.
+See [Release integrity and verification](release-security.md) for signature,
+SBOM, provenance, and checksum verification.
 
 Wait for pods to be ready:
 
@@ -172,6 +177,7 @@ Check the **Savings** page to see accumulated savings:
 - [GitOps Guide](gitops.md) — running alongside ArgoCD or Flux
 - [Troubleshooting](troubleshooting.md) — common issues and solutions
 - [Upgrade Guide](upgrade-v2.md) — migrating from v1.x
+- [Release Integrity](release-security.md) — immutable installs and supply-chain verification
 
 ## Uninstall
 

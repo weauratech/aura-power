@@ -1,4 +1,4 @@
-# Aura Power v2.0 Helm Values
+# Aura Power v2.2 Helm Values
 # Architecture: Server (API+Panel) + Controller (Reconciler/Worker)
 
 # -- Global settings
@@ -12,6 +12,8 @@ server:
   image:
     repository: ghcr.io/weauratech/aura-power-server
     tag: ""  # defaults to Chart.appVersion
+    # Pin an immutable image in production. When set, tag must stay empty.
+    digest: ""  # sha256:<64 lowercase hexadecimal characters>
     pullPolicy: IfNotPresent
   replicas: 1
   port: 8080
@@ -78,6 +80,8 @@ controller:
   image:
     repository: ghcr.io/weauratech/aura-power-controller
     tag: ""  # defaults to Chart.appVersion
+    # Pin an immutable image in production. When set, tag must stay empty.
+    digest: ""  # sha256:<64 lowercase hexadecimal characters>
     pullPolicy: IfNotPresent
   replicas: 1  # singleton with leader election
   resources:

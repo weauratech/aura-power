@@ -17,10 +17,14 @@ import (
 // On policy create/update/delete, it enqueues affected targets for re-evaluation.
 type PolicyReconciler struct {
 	client.Client
-	Audit ports.AuditRecorder
+	Audit            ports.AuditRecorder
+	ControlNamespace string
 }
 
 func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	if !namespaceIsManaged(r.ControlNamespace, req.Namespace) {
+		return ctrl.Result{}, nil
+	}
 	logger := log.FromContext(ctx).WithValues("policy", req.NamespacedName)
 
 	var policy v1alpha1.PowerPolicy
@@ -50,12 +54,13 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 func (r *PolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.PowerPolicy{}).
+		WithEventFilter(namespacePredicate(r.ControlNamespace)).
 		Complete(r)
 }
 
 func (r *PolicyReconciler) countAffectedTargets(ctx context.Context, policy *v1alpha1.PowerPolicy) (int, error) {
 	var targets v1alpha1.PowerTargetList
-	if err := r.List(ctx, &targets); err != nil {
+	if err := r.List(ctx, &targets, namespaceListOptions(r.ControlNamespace)...); err != nil {
 		return 0, err
 	}
 

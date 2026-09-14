@@ -102,6 +102,10 @@ func (h *AuthHandlers) handleCreatePending(c *gin.Context) {
 	if req.ResourceNamespace == "" {
 		req.ResourceNamespace = h.controlNamespace
 	}
+	if req.ResourceNamespace != h.controlNamespace {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "resource namespace must match the configured control namespace"})
+		return
+	}
 	if err := validatePendingRequest(req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -312,13 +316,23 @@ func (h *AuthHandlers) handleListPending(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"items": changes, "count": len(changes)})
+	filtered := changes[:0]
+	for _, change := range changes {
+		if change.ResourceNamespace == h.controlNamespace {
+			filtered = append(filtered, change)
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"items": filtered, "count": len(filtered)})
 }
 
 func (h *AuthHandlers) handleGetPending(c *gin.Context) {
 	change, err := h.store.GetPendingChange(c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+	if change.ResourceNamespace != h.controlNamespace {
+		c.JSON(http.StatusNotFound, gin.H{"error": "pending change not found"})
 		return
 	}
 	c.JSON(http.StatusOK, change)
@@ -342,6 +356,10 @@ func (h *AuthHandlers) handleApprove(c *gin.Context) {
 	change, err := h.store.GetPendingChange(id)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+	if change.ResourceNamespace != h.controlNamespace {
+		c.JSON(http.StatusNotFound, gin.H{"error": "pending change not found"})
 		return
 	}
 	if change.UserID == reviewerID {
@@ -395,6 +413,10 @@ func (h *AuthHandlers) handleReject(c *gin.Context) {
 	change, err := h.store.GetPendingChange(id)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+	if change.ResourceNamespace != h.controlNamespace {
+		c.JSON(http.StatusNotFound, gin.H{"error": "pending change not found"})
 		return
 	}
 	change, err = h.store.BeginPendingDecision(id, reviewerID, "reject")
@@ -484,6 +506,9 @@ var errPendingMutationNotApplied = errors.New("approved mutation was not applied
 func (h *AuthHandlers) applyPendingChange(ctx context.Context, change *auth.PendingChange) error {
 	if h.client == nil {
 		return errors.New("Kubernetes client is unavailable")
+	}
+	if change.ResourceNamespace != h.controlNamespace {
+		return fmt.Errorf("%w: resource namespace is outside the configured control namespace", errPendingMutationNotApplied)
 	}
 	req := pendingChangeRequest{Action: change.Action, ResourceKind: change.ResourceKind,
 		ResourceNamespace: change.ResourceNamespace, ResourceName: change.ResourceName,

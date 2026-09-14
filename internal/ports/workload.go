@@ -22,6 +22,11 @@ type DiscoveredWorkload struct {
 	NamespaceLabels      map[string]string
 	NamespaceAnnotations map[string]string
 	Resources            domain.ResourceSummary
+	// HPAControlled is set when an autoscaling/v2 HorizontalPodAutoscaler in
+	// the workload namespace targets this exact API version, kind, and name.
+	// Discovery carries this separately from metadata-derived ownership because
+	// the signal lives on another Kubernetes object.
+	HPAControlled bool
 }
 
 // WorkloadDiscoverer discovers Kubernetes workloads in the cluster.

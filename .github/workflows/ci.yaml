@@ -186,6 +186,8 @@ jobs:
           ./scripts/quality/kind-helm-upgrade-admission.sh
           ./scripts/quality/kind-legacy-upgrade-journey.sh
           ./scripts/quality/kind-core-journey.sh
+          ./scripts/quality/kind-hpa-journey.sh
+          ./scripts/quality/kind-control-namespace-journey.sh
           ./scripts/quality/kind-approval-journey.sh
           ./scripts/quality/kind-notification-journey.sh
           ./scripts/quality/kind-argocd-journey.sh

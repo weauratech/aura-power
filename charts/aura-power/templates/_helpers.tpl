@@ -37,6 +37,24 @@ app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 
+{{/* Render a tag or immutable digest and reject ambiguous image identities. */}}
+{{- define "aura-power.image" -}}
+{{- $repository := required "image.repository is required" .image.repository -}}
+{{- $tag := default "" .image.tag -}}
+{{- $digest := default "" .image.digest -}}
+{{- if and $tag $digest -}}
+{{- fail "image.tag and image.digest are mutually exclusive" -}}
+{{- end -}}
+{{- if $digest -}}
+{{- if not (regexMatch "^sha256:[a-f0-9]{64}$" $digest) -}}
+{{- fail "image.digest must be sha256 followed by 64 lowercase hexadecimal characters" -}}
+{{- end -}}
+{{- printf "%s@%s" $repository $digest -}}
+{{- else -}}
+{{- printf "%s:%s" $repository ($tag | default .root.Chart.AppVersion) -}}
+{{- end -}}
+{{- end }}
+
 {{/*
 Server labels
 */}}
