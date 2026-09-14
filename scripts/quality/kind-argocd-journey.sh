@@ -26,12 +26,17 @@ readonly REPO_ROOT ARGO_MANIFEST BUILD_CONTEXT
 
 namespace_uid=""
 cleanup_resources_absent() {
-  ! kubectl get namespace "$FIXTURE_NAMESPACE" >/dev/null 2>&1 &&
-    ! kubectl get namespace "$ARGO_NAMESPACE" >/dev/null 2>&1 &&
-    ! kubectl get powerpolicy -n aura-system -l "aura-power-quality/run=${RUN_ID}" -o name 2>/dev/null | grep -q . &&
-    ! kubectl get powertarget -n aura-system -l "power.aura.sh/target-namespace=${FIXTURE_NAMESPACE}" -o name 2>/dev/null | grep -q . &&
-    ! kubectl get crd applications.argoproj.io >/dev/null 2>&1 &&
-    ! kubectl get clusterrole -l app.kubernetes.io/part-of=argocd -o name 2>/dev/null | grep -q .
+  local residual
+  residual="$(kubectl get namespace "$FIXTURE_NAMESPACE" "$ARGO_NAMESPACE" --ignore-not-found -o name 2>/dev/null)" || return 1
+  [[ -z "$residual" ]] || return 1
+  residual="$(kubectl get powerpolicy -n aura-system -l "aura-power-quality/run=${RUN_ID}" -o name 2>/dev/null)" || return 1
+  [[ -z "$residual" ]] || return 1
+  residual="$(kubectl get powertarget -n aura-system -l "power.aura.sh/target-namespace=${FIXTURE_NAMESPACE}" -o name 2>/dev/null)" || return 1
+  [[ -z "$residual" ]] || return 1
+  residual="$(kubectl get crd applications.argoproj.io --ignore-not-found -o name 2>/dev/null)" || return 1
+  [[ -z "$residual" ]] || return 1
+  residual="$(kubectl get clusterrole -l app.kubernetes.io/part-of=argocd -o name 2>/dev/null)" || return 1
+  [[ -z "$residual" ]]
 }
 
 report_cleanup_residuals() {
@@ -60,7 +65,10 @@ cleanup() {
     kubectl scale statefulset --all -n "$ARGO_NAMESPACE" --replicas=0 >/dev/null 2>&1 || true
     kubectl delete pod --all -n "$ARGO_NAMESPACE" --wait=true --timeout=90s >/dev/null 2>&1 || true
   fi
-  for resource in applications.argoproj.io applicationsets.argoproj.io; do
+  # Remove the owner before its generated Applications even though the
+  # ApplicationSet controller is stopped. This remains safe if shutdown was
+  # delayed and prevents a generated Application from being recreated.
+  for resource in applicationsets.argoproj.io applications.argoproj.io; do
     kubectl get "$resource" -n "$ARGO_NAMESPACE" -l "aura-power-quality/run=${RUN_ID}" -o name 2>/dev/null | while read -r item; do
       [[ -z "$item" ]] && continue
       kubectl patch "$item" -n "$ARGO_NAMESPACE" --type=merge -p '{"metadata":{"finalizers":[]}}' >/dev/null 2>&1 || true
