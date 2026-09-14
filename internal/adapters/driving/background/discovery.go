@@ -581,9 +581,7 @@ func (d *DiscoveryLoop) processNamespaceAnnotations(ctx context.Context) {
 		// Determine priority from annotation (default: 0)
 		priority := int32(0)
 		if p := ns.Annotations["aura.sh/power-priority"]; p != "" {
-			if parsed, err := strconv.Atoi(p); err == nil {
-				priority = int32(parsed)
-			}
+			priority = parseNamespacePriority(p)
 		}
 
 		// Create/update implicit policy
@@ -637,6 +635,14 @@ func (d *DiscoveryLoop) processNamespaceAnnotations(ctx context.Context) {
 			log.Info("created implicit policy from namespace annotation", "namespace", ns.Name, "policy", policyName, "schedule", scheduleName)
 		}
 	}
+}
+
+func parseNamespacePriority(value string) int32 {
+	parsed, err := strconv.ParseInt(value, 10, 32)
+	if err != nil || parsed < 0 || parsed > 1000 {
+		return 0
+	}
+	return int32(parsed)
 }
 
 var errImplicitPolicyOwnershipConflict = fmt.Errorf("implicit policy name collides with a policy not owned by namespace annotation reconciliation")

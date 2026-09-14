@@ -32,7 +32,7 @@ server:
     jwtSecret: ""  # generated once and retained when empty
     initialAdmin:
       username: "admin"
-      password: ""  # generated once and retained when empty
+      password: null  # generated once and retained when unset
     accessTokenTTL: "1h"
     refreshTokenTTL: "168h"
   # Persistence for SQLite

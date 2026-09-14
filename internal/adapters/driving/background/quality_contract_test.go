@@ -324,6 +324,24 @@ func TestQualityNamespacePolicyCollisionFailsClosed(t *testing.T) {
 	}
 }
 
+func TestQualityNamespacePriorityRejectsOverflowAndOutOfRangeValues(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  int32
+	}{
+		{value: "321", want: 321},
+		{value: "1000", want: 1000},
+		{value: "1001", want: 0},
+		{value: "-1", want: 0},
+		{value: "2147483648", want: 0},
+		{value: "invalid", want: 0},
+	} {
+		if got := parseNamespacePriority(tc.value); got != tc.want {
+			t.Fatalf("parseNamespacePriority(%q) = %d, want %d", tc.value, got, tc.want)
+		}
+	}
+}
+
 func TestQualityExemptionRestoresBeforeTargetDeletion(t *testing.T) {
 	replicas := int32(3)
 	ref := domain.WorkloadRef{APIVersion: "apps/v1", Namespace: "fixtures", Name: "api", Kind: domain.WorkloadKindDeployment, UID: "uid-api"}

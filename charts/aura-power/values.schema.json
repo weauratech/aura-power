@@ -25,6 +25,13 @@
           "properties": {
             "existingSecret": { "type": "string" },
             "jwtSecret": { "type": "string" },
+            "initialAdmin": {
+              "type": "object",
+              "properties": {
+                "username": { "type": "string", "minLength": 1 },
+                "password": { "type": ["string", "null"] }
+              }
+            },
             "accessTokenTTL": { "type": "string", "pattern": "^[1-9][0-9]*(ns|us|µs|ms|s|m|h)$" },
             "refreshTokenTTL": { "type": "string", "pattern": "^[1-9][0-9]*(ns|us|µs|ms|s|m|h)$" }
           }
