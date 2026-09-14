@@ -123,7 +123,7 @@ case "$mode" in
     if ! state="$(release_state "$tag")"; then exit 1; fi
     case "$state" in
       draft) ;;
-      absent) gh release create "$tag" --repo "$GITHUB_REPOSITORY" --verify-tag --draft --title "$tag" ;;
+      absent) gh release create "$tag" --repo "$GITHUB_REPOSITORY" --verify-tag --draft --title "$tag" --generate-notes ;;
       published) echo "refusing to replace published release $tag" >&2; exit 1 ;;
     esac
     if ! state="$(release_state "$tag")"; then exit 1; fi
