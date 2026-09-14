@@ -72,11 +72,25 @@ installed version, empty fixture name, verified notification-suppression
 capability and image digests, and the required permissions:
 
 ```bash
-KUBECONFIG=/absolute/path/eks-operations.kubeconfig \
-  AURA_POWER_AWS_PROFILE=hub-eks-aura-prd-operations \
+export KUBECONFIG=/absolute/path/eks-operations.kubeconfig
+controller_node="$(kubectl get pods -n aura-system \
+  -l app.kubernetes.io/instance=aura-power,app.kubernetes.io/component=controller \
+  -o jsonpath='{.items[0].spec.nodeName}')"
+controller_arch="$(kubectl get node "$controller_node" \
+  -o jsonpath='{.metadata.labels.kubernetes\.io/arch}')"
+case "$controller_arch" in
+  amd64) runtime_field=linuxAmd64 ;;
+  arm64) runtime_field=linuxArm64 ;;
+  *) echo "unsupported controller node architecture: $controller_arch" >&2; exit 2 ;;
+esac
+controller_index_digest="$(jq -er '.controllerDigests.index' release-manifest.json)"
+controller_runtime_digest="$(jq -er --arg field "$runtime_field" \
+  '.controllerDigests[$field]' release-manifest.json)"
+
+AURA_POWER_AWS_PROFILE=hub-eks-aura-prd-operations \
   AURA_POWER_EKS_MUTATION_ACK=eks-aura-prd \
-  AURA_POWER_EXPECTED_CONTROLLER_DIGEST=sha256:index-digest \
-  AURA_POWER_EXPECTED_CONTROLLER_RUNTIME_DIGEST=sha256:platform-digest \
+  AURA_POWER_EXPECTED_CONTROLLER_DIGEST="$controller_index_digest" \
+  AURA_POWER_EXPECTED_CONTROLLER_RUNTIME_DIGEST="$controller_runtime_digest" \
   scripts/quality/eks-core-journey.sh
 ```
 
@@ -102,8 +116,10 @@ the panel. The runner requires the named controller readiness capability and
 two independently verified digests before it creates a policy:
 `AURA_POWER_EXPECTED_CONTROLLER_DIGEST` is the release index digest pinned in
 the Deployment, while `AURA_POWER_EXPECTED_CONTROLLER_RUNTIME_DIGEST` is the
-resolved platform child digest expected in the controller container's CRI
-`imageID`. A sanitized watch of notification attempt audit references starts
+signed platform child digest selected from `controllerDigests` for the actual
+controller node architecture and expected in the controller container's CRI
+`imageID`. Verify the adjacent `release-manifest.json.bundle` as described in
+`docs/release-security.md` before trusting either value. A sanitized watch of notification attempt audit references starts
 before policy creation and remains active through a bounded quiescence period;
 it is complementary evidence, while the synchronous persisted-Spec gate is the
 delivery safety guarantee.

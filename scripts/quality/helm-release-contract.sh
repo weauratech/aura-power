@@ -67,6 +67,11 @@ grep -q 'version: v2.18.1' .github/workflows/release.yaml
 grep -q 'artifact-metadata: write' .github/workflows/release.yaml
 grep -q 'cosign sign-blob --yes --bundle' .github/workflows/release.yaml
 grep -q 'cosign verify-blob' .github/workflows/release.yaml
+for digest_field in serverDigest serverAMD64 serverARM64 controllerDigest controllerAMD64 controllerARM64; do
+  grep -Fq -- "--arg ${digest_field}" .github/workflows/release.yaml
+done
+grep -Fq 'serverDigests:{index:$serverDigest,linuxAmd64:$serverAMD64,linuxArm64:$serverARM64}' .github/workflows/release.yaml
+grep -Fq 'controllerDigests:{index:$controllerDigest,linuxAmd64:$controllerAMD64,linuxArm64:$controllerARM64}' .github/workflows/release.yaml
 for sbom in server-amd64 server-arm64 controller-amd64 controller-arm64; do
   [[ "$(grep -c "${sbom}.spdx.json" .github/workflows/release.yaml)" -ge 2 ]]
 done

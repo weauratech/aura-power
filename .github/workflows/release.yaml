@@ -419,8 +419,10 @@ jobs:
         run: |
           jq -n --arg version "${GITHUB_REF_NAME#v}" --arg tag "$GITHUB_REF_NAME" --arg commit "$GITHUB_SHA" \
             --arg server "${IMAGE_SERVER}@${SERVER_DIGEST}" --arg controller "${IMAGE_CONTROLLER}@${CONTROLLER_DIGEST}" \
+            --arg serverDigest "$SERVER_DIGEST" --arg serverAMD64 "$SERVER_AMD64" --arg serverARM64 "$SERVER_ARM64" \
+            --arg controllerDigest "$CONTROLLER_DIGEST" --arg controllerAMD64 "$CONTROLLER_AMD64" --arg controllerARM64 "$CONTROLLER_ARM64" \
             --arg chart "ghcr.io/weauratech/charts/aura-power@${CHART_DIGEST}" \
-            '{version:$version,tag:$tag,commit:$commit,serverImage:$server,controllerImage:$controller,helmChart:$chart}' > release-assets/release-manifest.json
+            '{version:$version,tag:$tag,commit:$commit,serverImage:$server,controllerImage:$controller,serverDigests:{index:$serverDigest,linuxAmd64:$serverAMD64,linuxArm64:$serverARM64},controllerDigests:{index:$controllerDigest,linuxAmd64:$controllerAMD64,linuxArm64:$controllerARM64},helmChart:$chart}' > release-assets/release-manifest.json
           cosign sign-blob --yes --bundle release-assets/checksums.txt.bundle release-assets/checksums.txt
           cosign sign-blob --yes --bundle release-assets/release-manifest.json.bundle release-assets/release-manifest.json
       - name: Attest exact release files

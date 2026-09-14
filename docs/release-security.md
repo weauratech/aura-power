@@ -36,13 +36,17 @@ After acceptance, the workflow:
   Release is made public only after registry promotion, release-file upload and
   diagnostic artifact upload succeed.
 
-The signed `release-manifest.json` asset records the exact commit and all three
-OCI digests. Install production releases by digest. `image.digest` and
-`image.tag` are mutually exclusive:
+The signed `release-manifest.json` asset records the exact commit, the server
+and controller index digests, both `linux/amd64` and `linux/arm64` child
+digests, and the chart digest. The existing `serverImage` and `controllerImage`
+references remain for compatibility; `serverDigests` and `controllerDigests`
+are the machine-readable source for deployment and runtime verification.
+Install production releases by index digest. `image.digest` and `image.tag` are
+mutually exclusive:
 
 ```bash
-export SERVER_DIGEST=sha256:...       # copy from release-manifest.json
-export CONTROLLER_DIGEST=sha256:...   # copy from release-manifest.json
+export SERVER_DIGEST="$(jq -er '.serverDigests.index' release-manifest.json)"
+export CONTROLLER_DIGEST="$(jq -er '.controllerDigests.index' release-manifest.json)"
 helm show crds oci://ghcr.io/weauratech/charts/aura-power --version 2.2.0 | kubectl apply -f -
 helm upgrade --install aura-power oci://ghcr.io/weauratech/charts/aura-power \
   --version 2.2.0 --namespace aura-system --create-namespace \
@@ -57,6 +61,15 @@ export RELEASE=v2.2.0
 export IMAGE=ghcr.io/weauratech/aura-power-controller
 export DIGEST=sha256:... # copy the controller digest from the release
 export IDENTITY="https://github.com/weauratech/aura-power/.github/workflows/release.yaml@refs/tags/${RELEASE}"
+
+gh release download "$RELEASE" \
+  --repo weauratech/aura-power \
+  --pattern release-manifest.json \
+  --pattern release-manifest.json.bundle
+cosign verify-blob \
+  --certificate-identity "$IDENTITY" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --bundle release-manifest.json.bundle release-manifest.json
 
 cosign verify \
   --certificate-identity "$IDENTITY" \

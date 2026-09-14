@@ -24,6 +24,7 @@ TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-300}"
 WATCHDOG="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/eks-fixture-watchdog.sh"
 CHANNEL_QUIESCENCE_SECONDS="${CHANNEL_QUIESCENCE_SECONDS:-10}"
 CHANNEL_WATCH_LOG=""
+CHANNEL_WATCH_ERROR_LOG=""
 
 [[ "$AURA_POWER_EKS_MUTATION_ACK" == "$EXPECTED_CLUSTER" ]] || { echo "refusing mutation: acknowledgement must equal ${EXPECTED_CLUSTER}" >&2; exit 2; }
 [[ "$AURA_POWER_EXPECTED_CONTROLLER_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "refusing mutation: invalid expected controller digest" >&2; exit 2; }
@@ -111,6 +112,9 @@ cleanup_on_exit() {
   fi
   if [[ -n "$CHANNEL_WATCH_LOG" && -f "$CHANNEL_WATCH_LOG" ]]; then
     rm -f "$CHANNEL_WATCH_LOG"
+  fi
+  if [[ -n "$CHANNEL_WATCH_ERROR_LOG" && -f "$CHANNEL_WATCH_ERROR_LOG" ]]; then
+    rm -f "$CHANNEL_WATCH_ERROR_LOG"
   fi
   local cleanup_status=0
   if [[ -n "$NAMESPACE_UID" && -n "$WORKLOAD_UID" ]]; then
@@ -205,12 +209,18 @@ live_target_json="$(kube get powertarget "$target" -n "$CONTROL_NAMESPACE" -o js
 [[ "$(jq -r '.metadata.uid' <<<"$live_namespace_json")" == "$NAMESPACE_UID" && "$(jq -r '.metadata.labels["power.aura.sh/notification-policy"]' <<<"$live_namespace_json")" == "disabled" ]] || { echo "FAIL: campaign namespace identity or suppression policy changed" >&2; exit 13; }
 [[ "$(jq -r '.spec.targetRef.uid' <<<"$live_target_json")" == "$WORKLOAD_UID" ]] || { echo "FAIL: exact target UID changed before policy creation" >&2; exit 13; }
 CHANNEL_WATCH_LOG="$(mktemp)"
+CHANNEL_WATCH_ERROR_LOG="$(mktemp)"
 chmod 600 "$CHANNEL_WATCH_LOG"
-kube get powernotificationchannel -n "$CONTROL_NAMESPACE" --watch -o json 2>/dev/null |
-  jq --unbuffered -r '.status.recentAttempts[]?.auditEventRefs[]? // empty' >>"$CHANNEL_WATCH_LOG" &
+chmod 600 "$CHANNEL_WATCH_ERROR_LOG"
+kube get powernotificationchannel -n "$CONTROL_NAMESPACE" --watch -o json 2>>"$CHANNEL_WATCH_ERROR_LOG" |
+  jq --unbuffered -r '.status.recentAttempts[]?.auditEventRefs[]? // empty' >>"$CHANNEL_WATCH_LOG" 2>>"$CHANNEL_WATCH_ERROR_LOG" &
 CHANNEL_WATCH_PID=$!
 sleep 2
-kill -0 "$CHANNEL_WATCH_PID" 2>/dev/null || { echo "FAIL: notification channel watch did not become ready" >&2; exit 15; }
+kill -0 "$CHANNEL_WATCH_PID" 2>/dev/null || {
+  echo "FAIL: notification channel watch did not become ready" >&2
+  tail -n 20 "$CHANNEL_WATCH_ERROR_LOG" >&2 || true
+  exit 15
+}
 kube create -f - <<YAML
 apiVersion: power.aura.sh/v1alpha1
 kind: PowerPolicy
@@ -277,6 +287,11 @@ jq -e --arg namespaceUID "$NAMESPACE_UID" '[.items[] | select(.spec.action == "w
   exit 15
 }
 sleep "$CHANNEL_QUIESCENCE_SECONDS"
+kill -0 "$CHANNEL_WATCH_PID" 2>/dev/null || {
+  echo "FAIL: notification channel watch ended before the evidence window closed" >&2
+  tail -n 20 "$CHANNEL_WATCH_ERROR_LOG" >&2 || true
+  exit 15
+}
 kill "$CHANNEL_WATCH_PID" >/dev/null 2>&1 || true
 wait "$CHANNEL_WATCH_PID" 2>/dev/null || true
 CHANNEL_WATCH_PID=""
