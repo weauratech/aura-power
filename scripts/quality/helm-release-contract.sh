@@ -90,6 +90,15 @@ perl -0ne 'exit(!/Verify staged signatures and attestations.*Verify exact releas
 grep -Fq 'cosign sign --yes "${IMAGE_SERVER}@${SERVER_DIGEST}"' .github/workflows/release.yaml
 grep -Fq 'cosign sign --yes "${IMAGE_CONTROLLER}@${CONTROLLER_DIGEST}"' .github/workflows/release.yaml
 
+# Production examples preserve environment-specific values, clear mutable tags,
+# and prove the rendered upgrade against the live API before mutation.
+grep -Fq -- '--reset-then-reuse-values' docs/release-security.md
+grep -Fq -- '--set-string server.image.tag=' docs/release-security.md
+grep -Fq -- '--set-string controller.image.tag=' docs/release-security.md
+grep -Fq -- '--dry-run=server' docs/release-security.md
+grep -Fq -- '--server-side --dry-run=server' docs/release-security.md
+grep -Fq -- '--expected-context "$(kubectl config current-context)"' docs/upgrade-v2.md
+
 # Runtime identity and build inputs are immutable and traceable to the tag.
 grep -Eq '^FROM node:22-alpine@sha256:[a-f0-9]{64} AS frontend$' Dockerfile.server
 grep -Eq '^FROM golang:1.26-alpine@sha256:[a-f0-9]{64} AS backend$' Dockerfile.server

@@ -47,12 +47,23 @@ mutually exclusive:
 ```bash
 export SERVER_DIGEST="$(jq -er '.serverDigests.index' release-manifest.json)"
 export CONTROLLER_DIGEST="$(jq -er '.controllerDigests.index' release-manifest.json)"
-helm show crds oci://ghcr.io/weauratech/charts/aura-power --version 2.2.1 | kubectl apply -f -
+helm show crds oci://ghcr.io/weauratech/charts/aura-power --version 2.2.1 > /tmp/aura-power-crds.yaml
+kubectl apply --server-side --dry-run=server --field-manager=aura-power-release -f /tmp/aura-power-crds.yaml
+kubectl apply --server-side --field-manager=aura-power-release -f /tmp/aura-power-crds.yaml
 helm upgrade --install aura-power oci://ghcr.io/weauratech/charts/aura-power \
   --version 2.2.1 --namespace aura-system --create-namespace \
+  --reset-then-reuse-values \
+  --set-string server.image.tag= \
+  --set-string controller.image.tag= \
   --set-string server.image.digest="$SERVER_DIGEST" \
-  --set-string controller.image.digest="$CONTROLLER_DIGEST"
+  --set-string controller.image.digest="$CONTROLLER_DIGEST" \
+  --dry-run=server
+# Repeat the same Helm command without --dry-run=server after reviewing the render.
 ```
+
+Do not use `--atomic` for a stateful v2.2 migration. If the rollout fails, first
+restore the managed workloads with the current controller and follow the safe
+downgrade procedure before changing the controller version.
 
 Verify an image signature and its GitHub-hosted provenance before deployment:
 

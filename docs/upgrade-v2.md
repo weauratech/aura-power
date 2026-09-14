@@ -157,7 +157,7 @@ mkdir -p ./aura-power-downgrade-backup
 chmod 700 ./aura-power-downgrade-backup
 
 ./scripts/release/prepare-safe-downgrade.sh \
-  --expected-context eks-aura-prd \
+  --expected-context "$(kubectl config current-context)" \
   --namespace aura-system \
   --release aura-power \
   --backup-dir ./aura-power-downgrade-backup
