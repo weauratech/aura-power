@@ -3,7 +3,6 @@ package api
 import (
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -646,18 +645,9 @@ func (s *Server) handleAuditList(c *gin.Context) {
 		listOpts = append(listOpts, client.MatchingLabels(labels))
 	}
 
-	// Apply limit (default 50)
-	limit := 50
-	if l := c.Query("limit"); l != "" {
-		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
-			limit = parsed
-		}
-	}
-	if limit > 500 {
-		limit = 500
-	}
+	limit := parseAuditLimit(c.Query("limit"))
 
-	items := make([]v1alpha1.PowerAuditEvent, 0, limit)
+	var items []v1alpha1.PowerAuditEvent
 	total, err := visitAuditPages(ctx, s.client, listOpts, func(page []v1alpha1.PowerAuditEvent) error {
 		items = retainNewest(items, page, limit)
 		return nil

@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"strconv"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -10,6 +11,25 @@ import (
 )
 
 const auditPageSize int64 = 200
+
+const (
+	defaultAuditLimit = 50
+	maxAuditLimit     = 500
+)
+
+func parseAuditLimit(value string) int {
+	if value == "" {
+		return defaultAuditLimit
+	}
+	parsed, err := strconv.ParseUint(value, 10, 16)
+	if err != nil || parsed == 0 {
+		return defaultAuditLimit
+	}
+	if parsed > maxAuditLimit {
+		return maxAuditLimit
+	}
+	return int(parsed)
+}
 
 // visitAuditPages bounds each API response and temporary allocation. Callers
 // can aggregate only the small result set they need or stream each page.

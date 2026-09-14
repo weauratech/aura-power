@@ -72,3 +72,22 @@ func TestAuditPaginationRetainsOnlyRequestedNewestEvents(t *testing.T) {
 		t.Fatalf("calls=%d maxPage=%d", c.calls, c.maxPage)
 	}
 }
+
+func TestParseAuditLimitBoundsUntrustedInput(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  int
+	}{
+		{value: "", want: defaultAuditLimit},
+		{value: "10", want: 10},
+		{value: "0", want: defaultAuditLimit},
+		{value: "-1", want: defaultAuditLimit},
+		{value: "501", want: maxAuditLimit},
+		{value: "18446744073709551615", want: defaultAuditLimit},
+		{value: "invalid", want: defaultAuditLimit},
+	} {
+		if got := parseAuditLimit(tc.value); got != tc.want {
+			t.Fatalf("parseAuditLimit(%q) = %d, want %d", tc.value, got, tc.want)
+		}
+	}
+}
