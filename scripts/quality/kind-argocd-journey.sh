@@ -33,10 +33,12 @@ cleanup_resources_absent() {
   [[ -z "$residual" ]] || return 1
   residual="$(kubectl get powertarget -n aura-system -l "power.aura.sh/target-namespace=${FIXTURE_NAMESPACE}" -o name 2>/dev/null)" || return 1
   [[ -z "$residual" ]] || return 1
-  residual="$(kubectl get crd applications.argoproj.io --ignore-not-found -o name 2>/dev/null)" || return 1
-  [[ -z "$residual" ]] || return 1
-  residual="$(kubectl get clusterrole -l app.kubernetes.io/part-of=argocd -o name 2>/dev/null)" || return 1
-  [[ -z "$residual" ]]
+  residual="$(kubectl get crd -o name 2>/dev/null)" || return 1
+  ! grep -q 'argoproj.io' <<<"$residual" || return 1
+  residual="$(kubectl get clusterrole,clusterrolebinding -o name 2>/dev/null)" || return 1
+  ! grep -q '/argocd-' <<<"$residual" || return 1
+  residual="$(kubectl get validatingwebhookconfiguration,mutatingwebhookconfiguration -o name 2>/dev/null)" || return 1
+  ! grep -q '/argocd-' <<<"$residual"
 }
 
 report_cleanup_residuals() {
@@ -47,8 +49,9 @@ report_cleanup_residuals() {
   kubectl get applications.argoproj.io,applicationsets.argoproj.io -A -l "aura-power-quality/run=${RUN_ID}" -o name 2>/dev/null >&2 || true
   kubectl get powerpolicy -n aura-system -l "aura-power-quality/run=${RUN_ID}" -o name 2>/dev/null >&2 || true
   kubectl get powertarget -n aura-system -l "power.aura.sh/target-namespace=${FIXTURE_NAMESPACE}" -o name 2>/dev/null >&2 || true
-  kubectl get crd applications.argoproj.io -o name 2>/dev/null >&2 || true
-  kubectl get clusterrole -l app.kubernetes.io/part-of=argocd -o name 2>/dev/null >&2 || true
+  kubectl get crd -o name 2>/dev/null | grep 'argoproj.io' >&2 || true
+  kubectl get clusterrole,clusterrolebinding -o name 2>/dev/null | grep '/argocd-' >&2 || true
+  kubectl get validatingwebhookconfiguration,mutatingwebhookconfiguration -o name 2>/dev/null | grep '/argocd-' >&2 || true
 }
 
 cleanup() {
