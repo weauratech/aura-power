@@ -69,7 +69,7 @@ func TestQualityBeginActionCapturesLiveNamespaceNotificationPolicy(t *testing.T)
 		t.Fatal(err)
 	}
 	action := persisted.Status.Action
-	if action == nil || !action.NotificationSuppressed || action.NotificationSuppressionSource != "namespace-label" || action.NotificationSuppressionNamespaceUID != "namespace-uid" {
+	if action == nil || action.NotificationSuppressed == nil || !*action.NotificationSuppressed || action.NotificationSuppressionSource != "namespace-label" || action.NotificationSuppressionNamespaceUID != "namespace-uid" {
 		t.Fatalf("live disposition was not captured before mutation: %+v", action)
 	}
 
@@ -77,7 +77,7 @@ func TestQualityBeginActionCapturesLiveNamespaceNotificationPolicy(t *testing.T)
 	if err := c.Update(context.Background(), namespace); err != nil {
 		t.Fatal(err)
 	}
-	if !persisted.Status.Action.NotificationSuppressed {
+	if persisted.Status.Action.NotificationSuppressed == nil || !*persisted.Status.Action.NotificationSuppressed {
 		t.Fatal("persisted action changed after the live Namespace label changed")
 	}
 	audit := &capturingAuditRecorder{}
@@ -96,7 +96,7 @@ func TestQualityBeginActionCapturesLiveNamespaceNotificationPolicy(t *testing.T)
 	if err := r.beginAction(context.Background(), &persisted, decision, ref, ports.AuditWorkloadPoweredDown, "quality-enabled"); err != nil {
 		t.Fatal(err)
 	}
-	if persisted.Status.Action.NotificationSuppressed {
+	if persisted.Status.Action.NotificationSuppressed == nil || *persisted.Status.Action.NotificationSuppressed {
 		t.Fatalf("enabled namespace captured suppression: %+v", persisted.Status.Action)
 	}
 	if err := c.Get(context.Background(), client.ObjectKeyFromObject(namespace), namespace); err != nil {
@@ -177,11 +177,13 @@ func TestQualityPreActionAuditIgnoresStaleActionAndFailsClosed(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(workload, namespace).Build()
 	audit := &capturingAuditRecorder{}
 	r := &TargetReconciler{APIReader: c, Audit: audit}
-	stale := &v1alpha1.PowerTarget{Status: v1alpha1.PowerTargetStatus{Action: &v1alpha1.PowerActionStatus{NotificationSuppressed: false}}}
+	stale := &v1alpha1.PowerTarget{Status: v1alpha1.PowerTargetStatus{Action: &v1alpha1.PowerActionStatus{NotificationSuppressed: boolPointer(false)}}}
 
 	// The pre-beginAction call site passes nil so an unrelated prior Action can
 	// never override the current live namespace disposition.
-	r.recordAudit(context.Background(), nil, ref, ports.AuditExecutionError, "error", "snapshot failed", "")
+	if err := r.recordAudit(context.Background(), nil, ref, ports.AuditExecutionError, "error", "snapshot failed", ""); err != nil {
+		t.Fatal(err)
+	}
 	if len(audit.events) != 1 || !audit.events[0].SuppressNotification || audit.events[0].NotificationSuppressionSource != "namespace-label" || audit.events[0].NotificationSuppressionNamespaceUID != "namespace-uid" {
 		t.Fatalf("pre-action audit reused stale or incomplete disposition: stale=%+v event=%+v", stale.Status.Action, audit.events)
 	}
@@ -189,9 +191,11 @@ func TestQualityPreActionAuditIgnoresStaleActionAndFailsClosed(t *testing.T) {
 	// Any uncertainty at this boundary is suppressed rather than defaulting to
 	// an external delivery that could escape the fixture.
 	r.APIReader = fake.NewClientBuilder().WithScheme(scheme).Build()
-	r.recordAudit(context.Background(), nil, ref, ports.AuditExecutionError, "error", "snapshot failed", "")
-	if len(audit.events) != 2 || !audit.events[1].SuppressNotification || audit.events[1].NotificationSuppressionSource != "resolution-error" {
-		t.Fatalf("resolution error did not fail closed: %+v", audit.events)
+	if err := r.recordAudit(context.Background(), nil, ref, ports.AuditExecutionError, "error", "snapshot failed", ""); err == nil {
+		t.Fatal("resolution error created an audit with an invented delivery decision")
+	}
+	if len(audit.events) != 1 {
+		t.Fatalf("resolution error emitted an audit before the policy could be resolved: %+v", audit.events)
 	}
 }
 
@@ -203,6 +207,86 @@ func TestQualityBeginActionFailsClosedWithoutLiveReader(t *testing.T) {
 	}, ports.AuditWorkloadPoweredDown, "quality")
 	if err == nil || target.Status.Action != nil {
 		t.Fatalf("missing live reader did not block intent before mutation: action=%+v err=%v", target.Status.Action, err)
+	}
+}
+
+type pruningTargetReader struct{ client.Reader }
+
+func (r pruningTargetReader) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if err := r.Reader.Get(ctx, key, obj, opts...); err != nil {
+		return err
+	}
+	if target, ok := obj.(*v1alpha1.PowerTarget); ok && target.Status.Action != nil {
+		target.Status.Action.NotificationSuppressed = nil
+		target.Status.Action.NotificationSuppressionSource = ""
+		target.Status.Action.NotificationSuppressionNamespaceUID = ""
+	}
+	return nil
+}
+
+func TestQualityBeginActionFailsClosedWhenAPIServerPrunesDisposition(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := v1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := appsv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	target := &v1alpha1.PowerTarget{ObjectMeta: metav1.ObjectMeta{Name: "target", Namespace: "aura-system"}}
+	workload := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "fixture", Namespace: "campaign", UID: "workload-uid"}}
+	namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "campaign", UID: "namespace-uid", Labels: map[string]string{ports.NotificationPolicyLabel: ports.NotificationPolicyDisabled}}}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&v1alpha1.PowerTarget{}).WithObjects(target, workload, namespace).Build()
+	r := &TargetReconciler{Client: c, APIReader: pruningTargetReader{Reader: c}}
+	err := r.beginAction(context.Background(), target, domain.Decision{DesiredState: domain.PowerStateOff}, domain.WorkloadRef{
+		APIVersion: "apps/v1", Namespace: "campaign", Name: "fixture", Kind: domain.WorkloadKindDeployment, UID: "workload-uid",
+	}, ports.AuditWorkloadPoweredDown, "quality")
+	if err == nil {
+		t.Fatal("pruned action disposition was accepted before mutation")
+	}
+}
+
+func TestQualityLegacyPendingActionResolvesAndPersistsDispositionBeforeAudit(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := v1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := appsv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	ref := domain.WorkloadRef{APIVersion: "apps/v1", Namespace: "campaign", Name: "fixture", Kind: domain.WorkloadKindDeployment, UID: "workload-uid"}
+	target := &v1alpha1.PowerTarget{ObjectMeta: metav1.ObjectMeta{Name: "target", Namespace: "aura-system"}, Status: v1alpha1.PowerTargetStatus{Action: &v1alpha1.PowerActionStatus{
+		DesiredState: "off", Phase: "Applied", AuditPhase: "Pending", AuditEventID: "legacy-audit", AuditAction: string(ports.AuditWorkloadPoweredDown),
+	}}}
+	workload := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: ref.Name, Namespace: ref.Namespace, UID: "workload-uid"}}
+	namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ref.Namespace, UID: "namespace-uid", Labels: map[string]string{ports.NotificationPolicyLabel: ports.NotificationPolicyDisabled}}}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&v1alpha1.PowerTarget{}).WithObjects(target, workload, namespace).Build()
+	audit := &capturingAuditRecorder{}
+	r := &TargetReconciler{Client: c, APIReader: c, Audit: audit, Metrics: contractNoopMetrics{}}
+
+	if handled, err := r.reconcilePendingAudit(context.Background(), target, ref, "campaign/fixture"); err != nil || !handled {
+		t.Fatalf("legacy disposition migration failed: handled=%v err=%v", handled, err)
+	}
+	if len(audit.events) != 0 {
+		t.Fatal("legacy action emitted audit before the migrated decision was durable")
+	}
+	var persisted v1alpha1.PowerTarget
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(target), &persisted); err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Status.Action.NotificationSuppressed == nil || !*persisted.Status.Action.NotificationSuppressed || persisted.Status.Action.NotificationSuppressionNamespaceUID != "namespace-uid" {
+		t.Fatalf("legacy action disposition was not persisted: %+v", persisted.Status.Action)
+	}
+	if handled, err := r.reconcilePendingAudit(context.Background(), &persisted, ref, "campaign/fixture"); err != nil || !handled {
+		t.Fatalf("migrated pending audit failed: handled=%v err=%v", handled, err)
+	}
+	if len(audit.events) != 1 || !audit.events[0].SuppressNotification {
+		t.Fatalf("migrated disposition was not used by audit: %+v", audit.events)
 	}
 }
 

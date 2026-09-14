@@ -128,7 +128,9 @@ func (r *TargetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 					r.Metrics.RecordAction(ports.ActionPowerDown, req.String(), false)
 					// Snapshot capture failed before beginAction created a fresh intent.
 					// Do not reuse a stale action's notification disposition.
-					r.recordAudit(ctx, nil, domainTarget.Ref, ports.AuditExecutionError, "error", err.Error(), "")
+					if auditErr := r.recordAudit(ctx, nil, domainTarget.Ref, ports.AuditExecutionError, "error", err.Error(), ""); auditErr != nil {
+						logger.Error(auditErr, "deferred execution-error audit until notification policy can be resolved")
+					}
 					return ctrl.Result{RequeueAfter: errorRequeueAfter}, nil
 				}
 			}
@@ -154,7 +156,9 @@ func (r *TargetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 					target.Status.Snapshot = nil
 				}
 				r.Metrics.RecordAction(ports.ActionPowerDown, req.String(), false)
-				r.recordAudit(ctx, &target, domainTarget.Ref, ports.AuditExecutionError, "error", err.Error(), "")
+				if auditErr := r.recordAudit(ctx, &target, domainTarget.Ref, ports.AuditExecutionError, "error", err.Error(), ""); auditErr != nil {
+					logger.Error(auditErr, "failed to record power-down error")
+				}
 				if statusErr := r.Status().Update(ctx, &target); statusErr != nil {
 					logger.Error(statusErr, "failed to persist power-down failure")
 				}
@@ -168,7 +172,9 @@ func (r *TargetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			if err := r.Status().Update(ctx, &target); err != nil {
 				logger.Error(err, "failed to update target status after power-down")
 				r.Metrics.RecordAction(ports.ActionPowerDown, req.String(), false)
-				r.recordAudit(ctx, &target, domainTarget.Ref, ports.AuditExecutionError, "error", "power-down was accepted but its completion checkpoint was not persisted: "+err.Error(), ruleNameFromDecision(decision))
+				if auditErr := r.recordAudit(ctx, &target, domainTarget.Ref, ports.AuditExecutionError, "error", "power-down was accepted but its completion checkpoint was not persisted: "+err.Error(), ruleNameFromDecision(decision)); auditErr != nil {
+					logger.Error(auditErr, "failed to record power-down checkpoint error")
+				}
 				return ctrl.Result{RequeueAfter: errorRequeueAfter}, nil
 			}
 			if _, err := r.reconcilePendingAudit(ctx, &target, domainTarget.Ref, req.String()); err != nil {
@@ -188,7 +194,9 @@ func (r *TargetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 				target.Status.ConsecutiveFailures++
 				r.failAction(&target, err)
 				r.Metrics.RecordAction(ports.ActionRestore, req.String(), false)
-				r.recordAudit(ctx, &target, domainTarget.Ref, ports.AuditExecutionError, "error", err.Error(), "")
+				if auditErr := r.recordAudit(ctx, &target, domainTarget.Ref, ports.AuditExecutionError, "error", err.Error(), ""); auditErr != nil {
+					logger.Error(auditErr, "failed to record restore error")
+				}
 				r.Status().Update(ctx, &target)
 				return ctrl.Result{RequeueAfter: errorRequeueAfter}, nil
 			}
@@ -200,7 +208,9 @@ func (r *TargetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			if err := r.Status().Update(ctx, &target); err != nil {
 				logger.Error(err, "failed to update target status after restore")
 				r.Metrics.RecordAction(ports.ActionRestore, req.String(), false)
-				r.recordAudit(ctx, &target, domainTarget.Ref, ports.AuditExecutionError, "error", "restore was accepted but its completion checkpoint was not persisted: "+err.Error(), ruleNameFromDecision(decision))
+				if auditErr := r.recordAudit(ctx, &target, domainTarget.Ref, ports.AuditExecutionError, "error", "restore was accepted but its completion checkpoint was not persisted: "+err.Error(), ruleNameFromDecision(decision)); auditErr != nil {
+					logger.Error(auditErr, "failed to record restore checkpoint error")
+				}
 				return ctrl.Result{RequeueAfter: errorRequeueAfter}, nil
 			}
 			if _, err := r.reconcilePendingAudit(ctx, &target, domainTarget.Ref, req.String()); err != nil {
@@ -320,12 +330,34 @@ func (r *TargetReconciler) beginAction(ctx context.Context, target *v1alpha1.Pow
 		Phase:                               "InProgress",
 		AttemptedAt:                         &now,
 		RetryToken:                          target.Annotations[retryActionAnnotation],
-		NotificationSuppressed:              disposition.Suppressed,
+		NotificationSuppressed:              boolPointer(disposition.Suppressed),
 		NotificationSuppressionSource:       disposition.Source,
 		NotificationSuppressionNamespaceUID: disposition.NamespaceUID,
 	}
 	r.initializeActionAudit(target, ref, auditAction, ruleName)
-	return r.Status().Update(ctx, target)
+	if err := r.Status().Update(ctx, target); err != nil {
+		return err
+	}
+	var persisted v1alpha1.PowerTarget
+	if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(target), &persisted); err != nil {
+		return fmt.Errorf("verify persisted action intent: %w", err)
+	}
+	if !actionIntentPersisted(persisted.Status.Action, target.Status.Action) {
+		return errors.New("persisted action intent differs from the notification-safe intent")
+	}
+	return nil
+}
+
+func actionIntentPersisted(persisted, intended *v1alpha1.PowerActionStatus) bool {
+	if persisted == nil || intended == nil || persisted.NotificationSuppressed == nil || intended.NotificationSuppressed == nil {
+		return false
+	}
+	return *persisted.NotificationSuppressed == *intended.NotificationSuppressed &&
+		persisted.NotificationSuppressionSource == intended.NotificationSuppressionSource &&
+		persisted.NotificationSuppressionNamespaceUID == intended.NotificationSuppressionNamespaceUID &&
+		persisted.AuditEventID == intended.AuditEventID && persisted.AuditAction == intended.AuditAction &&
+		persisted.AuditRuleName == intended.AuditRuleName && persisted.DesiredState == intended.DesiredState &&
+		persisted.DecisionKey == intended.DecisionKey && persisted.Phase == intended.Phase && persisted.RetryToken == intended.RetryToken
 }
 
 func powerDecisionKey(decision domain.Decision) string {
@@ -375,6 +407,19 @@ func (r *TargetReconciler) reconcilePendingAudit(ctx context.Context, target *v1
 	if r.Audit == nil {
 		return true, errors.New("audit recorder is unavailable")
 	}
+	if action.NotificationSuppressed == nil {
+		disposition, err := r.liveNotificationSuppression(ctx, target, ref)
+		if err != nil {
+			return true, fmt.Errorf("resolve notification policy for legacy pending action: %w", err)
+		}
+		action.NotificationSuppressed = boolPointer(disposition.Suppressed)
+		action.NotificationSuppressionSource = disposition.Source
+		action.NotificationSuppressionNamespaceUID = disposition.NamespaceUID
+		if err := r.Status().Update(ctx, target); err != nil {
+			return true, fmt.Errorf("persist notification policy for legacy pending action: %w", err)
+		}
+		return true, nil
+	}
 	var reason string
 	var metricAction ports.ActionType
 	switch action.AuditAction {
@@ -394,7 +439,7 @@ func (r *TargetReconciler) reconcilePendingAudit(ctx context.Context, target *v1
 	event := ports.AuditEvent{
 		ID: action.AuditEventID, Timestamp: timestamp, Action: ports.AuditAction(action.AuditAction),
 		Actor: "system/controller", Target: ref, Result: "success", Reason: reason, RuleName: action.AuditRuleName,
-		SuppressNotification:                action.NotificationSuppressed,
+		SuppressNotification:                *action.NotificationSuppressed,
 		NotificationSuppressionSource:       action.NotificationSuppressionSource,
 		NotificationSuppressionNamespaceUID: action.NotificationSuppressionNamespaceUID,
 	}
@@ -634,20 +679,22 @@ func (r *TargetReconciler) loadOverrides(ctx context.Context) ([]domain.Override
 	return overrides, nil
 }
 
-func (r *TargetReconciler) recordAudit(ctx context.Context, target *v1alpha1.PowerTarget, ref domain.WorkloadRef, action ports.AuditAction, result, reason, ruleName string) {
+func (r *TargetReconciler) recordAudit(ctx context.Context, target *v1alpha1.PowerTarget, ref domain.WorkloadRef, action ports.AuditAction, result, reason, ruleName string) error {
 	disposition := notificationDisposition{}
-	if target != nil && target.Status.Action != nil {
+	if target != nil && target.Status.Action != nil && target.Status.Action.NotificationSuppressed != nil {
 		disposition = notificationDisposition{
-			Suppressed:   target.Status.Action.NotificationSuppressed,
+			Suppressed:   *target.Status.Action.NotificationSuppressed,
 			Source:       target.Status.Action.NotificationSuppressionSource,
 			NamespaceUID: target.Status.Action.NotificationSuppressionNamespaceUID,
 		}
-	} else if liveDisposition, err := r.liveNotificationSuppression(ctx, target, ref); err == nil {
-		disposition = liveDisposition
 	} else {
-		disposition = notificationDisposition{Suppressed: true, Source: "resolution-error"}
+		liveDisposition, err := r.liveNotificationSuppression(ctx, target, ref)
+		if err != nil {
+			return fmt.Errorf("resolve notification policy before audit: %w", err)
+		}
+		disposition = liveDisposition
 	}
-	_ = r.Audit.Record(ctx, ports.AuditEvent{
+	return r.Audit.Record(ctx, ports.AuditEvent{
 		Timestamp:                           time.Now(),
 		Action:                              action,
 		Actor:                               "system/controller",
@@ -666,6 +713,8 @@ type notificationDisposition struct {
 	Source       string
 	NamespaceUID string
 }
+
+func boolPointer(value bool) *bool { return &value }
 
 // liveNotificationSuppression binds the namespace-owned policy to the exact
 // workload incarnation immediately before the action checkpoint.

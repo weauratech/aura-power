@@ -55,11 +55,14 @@ func TestNotificationSuppressionSchemaParity(t *testing.T) {
 					t.Fatalf("%s notificationSuppressed schema=%#v, want boolean", source, fields["notificationSuppressed"])
 				}
 				sourceField := fields["notificationSuppressionSource"]
-				if sourceField.Type != "string" || len(sourceField.Enum) != 2 || string(sourceField.Enum[0].Raw) != `"namespace-label"` || string(sourceField.Enum[1].Raw) != `"resolution-error"` {
+				if sourceField.Type != "string" || len(sourceField.Enum) != 1 || string(sourceField.Enum[0].Raw) != `"namespace-label"` {
 					t.Fatalf("%s notificationSuppressionSource schema=%#v", source, sourceField)
 				}
 				if fields["notificationSuppressionNamespaceUID"].Type != "string" {
 					t.Fatalf("%s notificationSuppressionNamespaceUID schema=%#v", source, fields["notificationSuppressionNamespaceUID"])
+				}
+				if len(tt.path(crd.Spec.Versions[0].Schema.OpenAPIV3Schema).XValidations) != 2 {
+					t.Fatalf("%s suppression schema lacks cross-field validation", source)
 				}
 			}
 		})

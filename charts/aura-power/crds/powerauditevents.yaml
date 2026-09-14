@@ -36,7 +36,6 @@ spec:
               notificationSuppressionSource:
                 enum:
                 - namespace-label
-                - resolution-error
                 type: string
               notificationSuppressionNamespaceUID:
                 type: string
@@ -59,6 +58,11 @@ spec:
                 format: date-time
                 type: string
             type: object
+            x-kubernetes-validations:
+            - message: suppressed notifications require a namespace-label source and namespace UID
+              rule: '!has(self.notificationSuppressed) || !self.notificationSuppressed || (has(self.notificationSuppressionSource) && self.notificationSuppressionSource == ''namespace-label'' && has(self.notificationSuppressionNamespaceUID) && self.notificationSuppressionNamespaceUID != '''')'
+            - message: notification suppression source requires a suppressed decision
+              rule: '!has(self.notificationSuppressionSource) || (has(self.notificationSuppressed) && self.notificationSuppressed)'
         type: object
     served: true
     storage: true

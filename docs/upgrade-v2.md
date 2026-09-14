@@ -88,6 +88,12 @@ Apply the new CRDs manually:
 kubectl apply -f charts/aura-power/crds/
 ```
 
+For v2.2.0 and later this ordering is a safety requirement: apply both
+`PowerTarget` and `PowerAuditEvent` CRDs before updating the controller. The
+controller readiness endpoint validates the installed suppression fields and
+stays unready when the API schema is incomplete. Do not bypass readiness or
+start a rollout with the older CRDs.
+
 ### 3. Prepare authentication values
 
 v2.0 requires auth configuration. Generate a JWT secret:

@@ -9,6 +9,7 @@ set -Eeuo pipefail
 : "${AURA_POWER_EKS_MUTATION_ACK:?set AURA_POWER_EKS_MUTATION_ACK=eks-aura-prd}"
 : "${AURA_POWER_AWS_PROFILE:?set AURA_POWER_AWS_PROFILE to the Aura Hub operations profile}"
 : "${AURA_POWER_EXPECTED_CONTROLLER_DIGEST:?set AURA_POWER_EXPECTED_CONTROLLER_DIGEST to the verified v2.2.0 sha256 digest}"
+: "${AURA_POWER_EXPECTED_CONTROLLER_RUNTIME_DIGEST:?set AURA_POWER_EXPECTED_CONTROLLER_RUNTIME_DIGEST to the resolved controller platform digest}"
 
 EXPECTED_CLUSTER="eks-aura-prd"
 EXPECTED_CONTEXT="aura-power-quality-eks-operations"
@@ -21,9 +22,13 @@ POLICY_NAME="quality-${RUN_ID}"
 WORKLOAD_NAME="restore-two"
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-300}"
 WATCHDOG="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/eks-fixture-watchdog.sh"
+CHANNEL_QUIESCENCE_SECONDS="${CHANNEL_QUIESCENCE_SECONDS:-10}"
+CHANNEL_WATCH_LOG=""
 
 [[ "$AURA_POWER_EKS_MUTATION_ACK" == "$EXPECTED_CLUSTER" ]] || { echo "refusing mutation: acknowledgement must equal ${EXPECTED_CLUSTER}" >&2; exit 2; }
 [[ "$AURA_POWER_EXPECTED_CONTROLLER_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "refusing mutation: invalid expected controller digest" >&2; exit 2; }
+[[ "$AURA_POWER_EXPECTED_CONTROLLER_RUNTIME_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "refusing mutation: invalid expected controller runtime digest" >&2; exit 2; }
+[[ "$CHANNEL_QUIESCENCE_SECONDS" =~ ^[0-9]+$ && "$CHANNEL_QUIESCENCE_SECONDS" -le 30 ]] || { echo "refusing mutation: CHANNEL_QUIESCENCE_SECONDS must be an integer <= 30" >&2; exit 2; }
 [[ "$TIMEOUT_SECONDS" =~ ^[0-9]+$ && "$TIMEOUT_SECONDS" -le 300 ]] || { echo "refusing mutation: TIMEOUT_SECONDS must be an integer <= 300" >&2; exit 2; }
 [[ "$(kubectl config current-context)" == "$EXPECTED_CONTEXT" ]] || { echo "refusing mutation: unexpected kube context" >&2; exit 2; }
 
@@ -73,10 +78,15 @@ controller_json="$(kube get deployment aura-power-controller -n "$CONTROL_NAMESP
 [[ "$(jq -r '.spec.template.spec.containers[] | select(.name == "controller") | .readinessProbe.httpGet.path' <<<"$controller_json")" == "/readyz/notification-suppression-v1" ]] || { echo "refusing mutation: controller suppression capability probe is absent" >&2; exit 3; }
 controller_pods="$(kube get pod -n "$CONTROL_NAMESPACE" -l 'app.kubernetes.io/instance=aura-power,app.kubernetes.io/component=controller' -o json)"
 [[ "$(jq '.items | length' <<<"$controller_pods")" -ge 1 ]] || { echo "refusing mutation: no controller pod found" >&2; exit 3; }
-jq -e --arg digest "$AURA_POWER_EXPECTED_CONTROLLER_DIGEST" 'all(.items[]; all(.status.containerStatuses[]; .ready == true and (.imageID | endswith("@" + $digest))))' <<<"$controller_pods" >/dev/null || { echo "refusing mutation: a controller container is unready or has an unexpected imageID" >&2; exit 3; }
+jq -e --arg digest "$AURA_POWER_EXPECTED_CONTROLLER_RUNTIME_DIGEST" 'all(.items[]; ([.status.containerStatuses[] | select(.name == "controller")] | length == 1 and all(.[]; .ready == true and (.imageID | endswith("@" + $digest)))))' <<<"$controller_pods" >/dev/null || { echo "refusing mutation: a controller container is unready or has an unexpected platform imageID" >&2; exit 3; }
 kube get crd powerauditevents.power.aura.sh powertargets.power.aura.sh -o json | jq -e '
-  (.items[] | select(.metadata.name == "powerauditevents.power.aura.sh") | .spec.versions[] | select(.storage) | .schema.openAPIV3Schema.properties.spec.properties.notificationSuppressed.type) == "boolean" and
-  (.items[] | select(.metadata.name == "powertargets.power.aura.sh") | .spec.versions[] | select(.storage) | .schema.openAPIV3Schema.properties.status.properties.action.properties.notificationSuppressed.type) == "boolean"
+  def valid($p):
+    $p.notificationSuppressed.type == "boolean" and
+    $p.notificationSuppressionNamespaceUID.type == "string" and
+    $p.notificationSuppressionSource.type == "string" and
+    $p.notificationSuppressionSource.enum == ["namespace-label"];
+  valid(.items[] | select(.metadata.name == "powerauditevents.power.aura.sh") | .spec.versions[] | select(.storage) | .schema.openAPIV3Schema.properties.spec.properties) and
+  valid(.items[] | select(.metadata.name == "powertargets.power.aura.sh") | .spec.versions[] | select(.storage) | .schema.openAPIV3Schema.properties.status.properties.action.properties)
 ' >/dev/null || { echo "refusing mutation: suppression capability CRD schema is absent" >&2; exit 3; }
 
 if kube get namespace "$FIXTURE_NAMESPACE" >/dev/null 2>&1 || kube get powerpolicy "$POLICY_NAME" -n "$CONTROL_NAMESPACE" >/dev/null 2>&1; then
@@ -85,6 +95,7 @@ if kube get namespace "$FIXTURE_NAMESPACE" >/dev/null 2>&1 || kube get powerpoli
 fi
 
 WATCHDOG_PID=""
+CHANNEL_WATCH_PID=""
 NAMESPACE_UID=""
 WORKLOAD_UID=""
 cleanup_on_exit() {
@@ -93,6 +104,13 @@ cleanup_on_exit() {
   if [[ -n "$WATCHDOG_PID" ]]; then
     kill "$WATCHDOG_PID" >/dev/null 2>&1 || true
     wait "$WATCHDOG_PID" 2>/dev/null || true
+  fi
+  if [[ -n "$CHANNEL_WATCH_PID" ]]; then
+    kill "$CHANNEL_WATCH_PID" >/dev/null 2>&1 || true
+    wait "$CHANNEL_WATCH_PID" 2>/dev/null || true
+  fi
+  if [[ -n "$CHANNEL_WATCH_LOG" && -f "$CHANNEL_WATCH_LOG" ]]; then
+    rm -f "$CHANNEL_WATCH_LOG"
   fi
   local cleanup_status=0
   if [[ -n "$NAMESPACE_UID" && -n "$WORKLOAD_UID" ]]; then
@@ -186,6 +204,13 @@ live_namespace_json="$(kube get namespace "$FIXTURE_NAMESPACE" -o json)"
 live_target_json="$(kube get powertarget "$target" -n "$CONTROL_NAMESPACE" -o json)"
 [[ "$(jq -r '.metadata.uid' <<<"$live_namespace_json")" == "$NAMESPACE_UID" && "$(jq -r '.metadata.labels["power.aura.sh/notification-policy"]' <<<"$live_namespace_json")" == "disabled" ]] || { echo "FAIL: campaign namespace identity or suppression policy changed" >&2; exit 13; }
 [[ "$(jq -r '.spec.targetRef.uid' <<<"$live_target_json")" == "$WORKLOAD_UID" ]] || { echo "FAIL: exact target UID changed before policy creation" >&2; exit 13; }
+CHANNEL_WATCH_LOG="$(mktemp)"
+chmod 600 "$CHANNEL_WATCH_LOG"
+kube get powernotificationchannel -n "$CONTROL_NAMESPACE" --watch -o json 2>/dev/null |
+  jq --unbuffered -r '.status.recentAttempts[]?.auditEventRefs[]? // empty' >>"$CHANNEL_WATCH_LOG" &
+CHANNEL_WATCH_PID=$!
+sleep 2
+kill -0 "$CHANNEL_WATCH_PID" 2>/dev/null || { echo "FAIL: notification channel watch did not become ready" >&2; exit 15; }
 kube create -f - <<YAML
 apiVersion: power.aura.sh/v1alpha1
 kind: PowerPolicy
@@ -228,6 +253,8 @@ while (( SECONDS < deadline )); do
 done
 [[ "$replicas" == "2" ]] || { echo "FAIL: restore expected replicas=2 observed=${replicas:-unknown}" >&2; exit 11; }
 echo "restore=passed replicas=2"
+restore_action="$(kube get powertarget "$target" -n "$CONTROL_NAMESPACE" -o json)"
+jq -e --arg namespaceUID "$NAMESPACE_UID" '.status.action.desiredState == "on" and .status.action.notificationSuppressed == true and .status.action.notificationSuppressionSource == "namespace-label" and .status.action.notificationSuppressionNamespaceUID == $namespaceUID' <<<"$restore_action" >/dev/null || { echo "FAIL: restore action did not persist the suppression decision" >&2; exit 15; }
 
 # Both transitions remain auditable, but the campaign label must keep their
 # references out of every external channel attempt.
@@ -235,13 +262,13 @@ deadline=$((SECONDS + TIMEOUT_SECONDS))
 audit_json=""
 while (( SECONDS < deadline )); do
   audit_json="$(kube get powerauditevent -n "$CONTROL_NAMESPACE" -l "power.aura.sh/target-namespace=${FIXTURE_NAMESPACE},power.aura.sh/target-name=${WORKLOAD_NAME},power.aura.sh/target-kind=Deployment,power.aura.sh/target-uid=${WORKLOAD_UID}" -o json)"
-  if jq -e '[.items[] | select(.spec.action == "workload.powered_down" or .spec.action == "workload.restored")] | length >= 2' <<<"$audit_json" >/dev/null; then
+  if jq -e 'any(.items[]; .spec.action == "workload.powered_down") and any(.items[]; .spec.action == "workload.restored")' <<<"$audit_json" >/dev/null; then
     break
   fi
   sleep 5
 done
 [[ -n "$audit_json" ]] || { echo "FAIL: fixture audit evidence was not readable" >&2; exit 14; }
-jq -e '[.items[] | select(.spec.action == "workload.powered_down" or .spec.action == "workload.restored")] | length >= 2' <<<"$audit_json" >/dev/null || {
+jq -e 'any(.items[]; .spec.action == "workload.powered_down") and any(.items[]; .spec.action == "workload.restored")' <<<"$audit_json" >/dev/null || {
   echo "FAIL: both fixture transition audits were not persisted" >&2
   exit 14
 }
@@ -249,4 +276,15 @@ jq -e --arg namespaceUID "$NAMESPACE_UID" '[.items[] | select(.spec.action == "w
   echo "FAIL: a notifiable fixture audit lacks suppression evidence" >&2
   exit 15
 }
+sleep "$CHANNEL_QUIESCENCE_SECONDS"
+kill "$CHANNEL_WATCH_PID" >/dev/null 2>&1 || true
+wait "$CHANNEL_WATCH_PID" 2>/dev/null || true
+CHANNEL_WATCH_PID=""
+while IFS= read -r audit_name; do
+  audit_ref="${CONTROL_NAMESPACE}/${audit_name}"
+  if grep -Fxq "$audit_ref" "$CHANNEL_WATCH_LOG"; then
+    echo "FAIL: channel watch observed externally queued fixture audit ${audit_ref}" >&2
+    exit 15
+  fi
+done < <(jq -r '.items[] | select(.spec.action == "workload.powered_down" or .spec.action == "workload.restored" or .spec.action == "execution.error") | .metadata.name' <<<"$audit_json")
 echo "notification_suppression=passed audit_events=$(jq '.items | length' <<<"$audit_json") decision_source=namespace-label"

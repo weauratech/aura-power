@@ -16,6 +16,8 @@ type AuditResourceReference struct {
 }
 
 // PowerAuditEventSpec defines a structured audit record.
+// +kubebuilder:validation:XValidation:rule="!has(self.notificationSuppressed) || !self.notificationSuppressed || (has(self.notificationSuppressionSource) && self.notificationSuppressionSource == 'namespace-label' && has(self.notificationSuppressionNamespaceUID) && self.notificationSuppressionNamespaceUID != '')",message="suppressed notifications require a namespace-label source and namespace UID"
+// +kubebuilder:validation:XValidation:rule="!has(self.notificationSuppressionSource) || (has(self.notificationSuppressed) && self.notificationSuppressed)",message="notification suppression source requires a suppressed decision"
 type PowerAuditEventSpec struct {
 	// Timestamp of the event.
 	Timestamp metav1.Time `json:"timestamp"`
@@ -50,7 +52,7 @@ type PowerAuditEventSpec struct {
 	// NotificationSuppressionSource identifies the authority used for a true
 	// decision. Empty means normal delivery.
 	// +optional
-	// +kubebuilder:validation:Enum=namespace-label;resolution-error
+	// +kubebuilder:validation:Enum=namespace-label
 	NotificationSuppressionSource string `json:"notificationSuppressionSource,omitempty"`
 
 	// NotificationSuppressionNamespaceUID binds the decision to the live

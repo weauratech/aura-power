@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Durable two-phase approval decisions with resource-version preconditions and
   audit correlation from request through execution.
 - Runtime version and commit identity in binaries, containers, and health data.
+- Namespace-owned notification suppression for controlled fixtures, with the
+  immutable decision exposed in action status, audit API, CSV, and the panel.
 - Signed multi-architecture images, reproducible Helm packages, per-platform
   SPDX SBOMs, provenance attestations, and an immutable release manifest.
 

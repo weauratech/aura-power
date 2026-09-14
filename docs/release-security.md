@@ -43,6 +43,7 @@ OCI digests. Install production releases by digest. `image.digest` and
 ```bash
 export SERVER_DIGEST=sha256:...       # copy from release-manifest.json
 export CONTROLLER_DIGEST=sha256:...   # copy from release-manifest.json
+helm show crds oci://ghcr.io/weauratech/charts/aura-power --version 2.2.0 | kubectl apply -f -
 helm upgrade --install aura-power oci://ghcr.io/weauratech/charts/aura-power \
   --version 2.2.0 --namespace aura-system --create-namespace \
   --set-string server.image.digest="$SERVER_DIGEST" \

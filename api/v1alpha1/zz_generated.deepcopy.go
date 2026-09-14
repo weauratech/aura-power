@@ -290,6 +290,11 @@ func (in *PowerActionStatus) DeepCopyInto(out *PowerActionStatus) {
 		in, out := &in.CompletedAt, &out.CompletedAt
 		*out = (*in).DeepCopy()
 	}
+	if in.NotificationSuppressed != nil {
+		in, out := &in.NotificationSuppressed, &out.NotificationSuppressed
+		*out = new(bool)
+		**out = **in
+	}
 }
 
 func (in *PowerActionStatus) DeepCopy() *PowerActionStatus {

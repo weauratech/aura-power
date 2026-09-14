@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	extensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -37,6 +38,7 @@ var (
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(extensionsv1.AddToScheme(scheme))
 	utilruntime.Must(v1alpha1.AddToScheme(scheme))
 }
 
@@ -153,7 +155,7 @@ func main() {
 		log.Error(err, "unable to set up ready check")
 		os.Exit(1)
 	}
-	if err := mgr.AddReadyzCheck("notification-suppression-v1", healthz.Ping); err != nil {
+	if err := mgr.AddReadyzCheck("notification-suppression-v1", notificationSuppressionSchemaCheck(mgr.GetAPIReader())); err != nil {
 		log.Error(err, "unable to register notification suppression capability")
 		os.Exit(1)
 	}

@@ -119,6 +119,9 @@ grep -q 'name: CONTROL_NAMESPACE' "$default_render"
 grep -q 'name: LEADER_ELECTION_ENABLED' "$default_render"
 grep -q 'name: SYSTEM_NAMESPACES' "$default_render"
 grep -q 'path: /readyz/notification-suppression-v1' "$default_render"
+grep -Fq '.status.recentAttempts[]?.auditEventRefs[]? // empty' scripts/quality/eks-core-journey.sh
+grep -Fq 'kill -0 "$CHANNEL_WATCH_PID"' scripts/quality/eks-core-journey.sh
+grep -Fq 'any(.items[]; .spec.action == "workload.powered_down") and any(.items[]; .spec.action == "workload.restored")' scripts/quality/eks-core-journey.sh
 perl -0ne 'exit(!/name: data\n\s+emptyDir:/s)' "$ephemeral_render"
 if grep -q '# Source: aura-power/templates/server-secret.yaml' "$external_secret_render"; then
   echo "server.auth.existingSecret unexpectedly rendered a managed Secret" >&2

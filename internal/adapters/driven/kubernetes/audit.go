@@ -2,6 +2,7 @@ package kubernetes
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -46,6 +47,9 @@ func (a *AuditRecorder) SetNotifier(n notificationEnqueuer) {
 }
 
 func (a *AuditRecorder) Record(ctx context.Context, event ports.AuditEvent) error {
+	if err := validateNotificationDisposition(event); err != nil {
+		return err
+	}
 	// Create PowerAuditEvent CRD
 	auditEvent := &v1alpha1.PowerAuditEvent{
 		ObjectMeta: metav1.ObjectMeta{
@@ -86,6 +90,7 @@ func (a *AuditRecorder) Record(ctx context.Context, event ports.AuditEvent) erro
 	if event.SuppressNotification {
 		auditEvent.Labels["power.aura.sh/notification-suppressed"] = "true"
 	}
+	intendedSpec := auditEvent.Spec
 
 	if err := a.client.Create(ctx, auditEvent); err != nil {
 		if event.ID != "" && apierrors.IsAlreadyExists(err) {
@@ -93,7 +98,7 @@ func (a *AuditRecorder) Record(ctx context.Context, event ports.AuditEvent) erro
 			if getErr := a.reader.Get(ctx, client.ObjectKey{Namespace: a.namespace, Name: event.ID}, &existing); getErr != nil {
 				return fmt.Errorf("failed to verify existing audit event: %w", getErr)
 			}
-			if !equality.Semantic.DeepEqual(existing.Spec, auditEvent.Spec) {
+			if !auditSpecsEqual(existing.Spec, auditEvent.Spec) {
 				return fmt.Errorf("audit event %s/%s already exists with different semantics", a.namespace, event.ID)
 			}
 			auditEvent = &existing
@@ -101,6 +106,14 @@ func (a *AuditRecorder) Record(ctx context.Context, event ports.AuditEvent) erro
 			return fmt.Errorf("failed to create audit event: %w", err)
 		}
 	}
+	var persisted v1alpha1.PowerAuditEvent
+	if err := a.reader.Get(ctx, client.ObjectKey{Namespace: auditEvent.Namespace, Name: auditEvent.Name}, &persisted); err != nil {
+		return fmt.Errorf("verify persisted audit event: %w", err)
+	}
+	if !auditSpecsEqual(persisted.Spec, intendedSpec) {
+		return fmt.Errorf("audit event %s/%s persisted with a different notification disposition or semantics: intended=%#v persisted=%#v", auditEvent.Namespace, auditEvent.Name, intendedSpec, persisted.Spec)
+	}
+	auditEvent = &persisted
 
 	// Dispatch notification only for real state transitions (not routine reconciliation).
 	if a.notifier != nil && !auditEvent.Spec.NotificationSuppressed && isNotifiableAction(string(event.Action)) {
@@ -117,6 +130,25 @@ func (a *AuditRecorder) Record(ctx context.Context, event ports.AuditEvent) erro
 		}
 	}
 
+	return nil
+}
+
+func auditSpecsEqual(left, right v1alpha1.PowerAuditEventSpec) bool {
+	left.Timestamp = metav1.NewTime(left.Timestamp.UTC().Truncate(time.Second))
+	right.Timestamp = metav1.NewTime(right.Timestamp.UTC().Truncate(time.Second))
+	return equality.Semantic.DeepEqual(left, right)
+}
+
+func validateNotificationDisposition(event ports.AuditEvent) error {
+	if event.SuppressNotification {
+		if event.NotificationSuppressionSource != "namespace-label" || event.NotificationSuppressionNamespaceUID == "" {
+			return errors.New("suppressed notification requires a live namespace-label decision bound to a namespace UID")
+		}
+		return nil
+	}
+	if event.NotificationSuppressionSource != "" {
+		return errors.New("notification suppression source is set for a deliverable event")
+	}
 	return nil
 }
 

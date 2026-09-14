@@ -109,6 +109,8 @@ type PowerTargetStatus struct {
 }
 
 // PowerActionStatus records one desired-state transition.
+// +kubebuilder:validation:XValidation:rule="!has(self.notificationSuppressed) || !self.notificationSuppressed || (has(self.notificationSuppressionSource) && self.notificationSuppressionSource == 'namespace-label' && has(self.notificationSuppressionNamespaceUID) && self.notificationSuppressionNamespaceUID != '')",message="suppressed notifications require a namespace-label source and namespace UID"
+// +kubebuilder:validation:XValidation:rule="!has(self.notificationSuppressionSource) || (has(self.notificationSuppressed) && self.notificationSuppressed)",message="notification suppression source requires a suppressed decision"
 type PowerActionStatus struct {
 	// DesiredState is the state this operation is trying to establish.
 	// +kubebuilder:validation:Enum=on;off
@@ -159,12 +161,12 @@ type PowerActionStatus struct {
 	// NotificationSuppressed is captured from the live namespace before the
 	// workload mutation and remains fixed for every retry of this action.
 	// +optional
-	NotificationSuppressed bool `json:"notificationSuppressed"`
+	NotificationSuppressed *bool `json:"notificationSuppressed,omitempty"`
 
 	// NotificationSuppressionSource identifies the authority used for a true
 	// decision. The only supported authority is the live Namespace label.
 	// +optional
-	// +kubebuilder:validation:Enum=namespace-label;resolution-error
+	// +kubebuilder:validation:Enum=namespace-label
 	NotificationSuppressionSource string `json:"notificationSuppressionSource,omitempty"`
 
 	// NotificationSuppressionNamespaceUID binds the decision to the Namespace

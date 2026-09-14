@@ -55,7 +55,7 @@ export interface PowerActionStatus {
   auditEventID?: string;
   auditPhase?: string;
   notificationSuppressed?: boolean;
-  notificationSuppressionSource?: 'namespace-label' | 'resolution-error';
+  notificationSuppressionSource?: 'namespace-label';
   notificationSuppressionNamespaceUID?: string;
 }
 
@@ -120,7 +120,7 @@ export interface AuditEvent {
     reason: string;
     ruleName?: string;
     notificationSuppressed?: boolean;
-    notificationSuppressionSource?: 'namespace-label' | 'resolution-error';
+    notificationSuppressionSource?: 'namespace-label';
     notificationSuppressionNamespaceUID?: string;
   };
 }

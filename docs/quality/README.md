@@ -68,13 +68,15 @@ KUBECONFIG=/absolute/path/kind.kubeconfig \
 ```
 
 Run the admitted EKS journey only after read-only inventory confirms the
-installed version, empty fixture name, no real notification channel affected,
-and the required permissions:
+installed version, empty fixture name, verified notification-suppression
+capability and image digests, and the required permissions:
 
 ```bash
 KUBECONFIG=/absolute/path/eks-operations.kubeconfig \
   AURA_POWER_AWS_PROFILE=hub-eks-aura-prd-operations \
   AURA_POWER_EKS_MUTATION_ACK=eks-aura-prd \
+  AURA_POWER_EXPECTED_CONTROLLER_DIGEST=sha256:index-digest \
+  AURA_POWER_EXPECTED_CONTROLLER_RUNTIME_DIGEST=sha256:platform-digest \
   scripts/quality/eks-core-journey.sh
 ```
 
@@ -97,4 +99,11 @@ UIDs, and persists the decision in `PowerTarget.status.action`. Transition
 audits remain durable and expose the same immutable decision through
 `PowerAuditEvent.spec.notificationSuppressed`, the HTTP API, CSV export, and
 the panel. The runner requires the named controller readiness capability and
-the independently verified image digest before it creates a policy.
+two independently verified digests before it creates a policy:
+`AURA_POWER_EXPECTED_CONTROLLER_DIGEST` is the release index digest pinned in
+the Deployment, while `AURA_POWER_EXPECTED_CONTROLLER_RUNTIME_DIGEST` is the
+resolved platform child digest expected in the controller container's CRI
+`imageID`. A sanitized watch of notification attempt audit references starts
+before policy creation and remains active through a bounded quiescence period;
+it is complementary evidence, while the synchronous persisted-Spec gate is the
+delivery safety guarantee.
