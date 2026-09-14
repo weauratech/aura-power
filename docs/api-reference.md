@@ -322,6 +322,6 @@ List pending approval changes. Requires `approver` or `admin` role.
 
 | Role | Permissions |
 |------|-------------|
-| `viewer` | Read-only access to all GET endpoints |
-| `approver` | Create/update policies and overrides |
+| `member` | Read and preview resources; submit changes for approval |
+| `approver` | Member access plus approve/reject requests and create/update resources |
 | `admin` | Full access including user management and deletions |
