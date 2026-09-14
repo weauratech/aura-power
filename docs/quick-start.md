@@ -12,7 +12,7 @@ Get Aura Power running and your first schedule active in under 10 minutes.
 
 ```bash
 helm install aura-power oci://ghcr.io/weauratech/charts/aura-power \
-  --version 2.2.0 \
+  --version 2.2.1 \
   --namespace aura-system --create-namespace \
   --set server.auth.jwtSecret=$(openssl rand -base64 32) \
   --set server.auth.initialAdmin.password=changeme

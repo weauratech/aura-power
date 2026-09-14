@@ -3,7 +3,7 @@
 Aura Power releases use one version across the Git tag, Helm `version`, Helm
 `appVersion`, image tags, and CLI archives. The release workflow accepts only a
 canonical `vMAJOR.MINOR.PATCH` SemVer tag whose commit is reachable from
-`origin/main`. The current release identity is `v2.2.0` / `2.2.0`.
+`origin/main`. The current release identity is `v2.2.1` / `2.2.1`.
 
 The amd64 server and controller images are built once and staged in GHCR by
 digest without a mutable candidate tag. Kind pulls each candidate by that exact
@@ -47,9 +47,9 @@ mutually exclusive:
 ```bash
 export SERVER_DIGEST="$(jq -er '.serverDigests.index' release-manifest.json)"
 export CONTROLLER_DIGEST="$(jq -er '.controllerDigests.index' release-manifest.json)"
-helm show crds oci://ghcr.io/weauratech/charts/aura-power --version 2.2.0 | kubectl apply -f -
+helm show crds oci://ghcr.io/weauratech/charts/aura-power --version 2.2.1 | kubectl apply -f -
 helm upgrade --install aura-power oci://ghcr.io/weauratech/charts/aura-power \
-  --version 2.2.0 --namespace aura-system --create-namespace \
+  --version 2.2.1 --namespace aura-system --create-namespace \
   --set-string server.image.digest="$SERVER_DIGEST" \
   --set-string controller.image.digest="$CONTROLLER_DIGEST"
 ```
@@ -57,7 +57,7 @@ helm upgrade --install aura-power oci://ghcr.io/weauratech/charts/aura-power \
 Verify an image signature and its GitHub-hosted provenance before deployment:
 
 ```bash
-export RELEASE=v2.2.0
+export RELEASE=v2.2.1
 export IMAGE=ghcr.io/weauratech/aura-power-controller
 export DIGEST=sha256:... # copy the controller digest from the release
 export IDENTITY="https://github.com/weauratech/aura-power/.github/workflows/release.yaml@refs/tags/${RELEASE}"
@@ -91,7 +91,7 @@ cosign verify-blob \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --bundle checksums.txt.bundle checksums.txt
 sha256sum --check checksums.txt --ignore-missing
-gh attestation verify ./aura-power_2.2.0_linux_amd64.tar.gz \
+gh attestation verify ./aura-power_2.2.1_linux_amd64.tar.gz \
   --repo weauratech/aura-power
 ```
 
