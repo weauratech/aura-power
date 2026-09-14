@@ -13,8 +13,8 @@ for crd in powerpolicies poweroverrides; do
 done
 
 # A release has one SemVer identity and validates it before expensive work.
-grep -q '^version: 2.2.0$' charts/aura-power/Chart.yaml
-grep -q '^appVersion: "2.2.0"$' charts/aura-power/Chart.yaml
+grep -q '^version: 2.2.1$' charts/aura-power/Chart.yaml
+grep -q '^appVersion: "2.2.1"$' charts/aura-power/Chart.yaml
 grep -Fq 'group: aura-power-release-promotion' .github/workflows/release.yaml
 perl -0ne 'exit(!/validate:.*Validate release identity.*scripts\/release\/preflight\.sh/s)' .github/workflows/release.yaml
 grep -Fq 'scripts/release/github-release-guard.sh assert-releasable "$GITHUB_REF_NAME"' .github/workflows/release.yaml
@@ -23,12 +23,12 @@ if grep -Eq 'gh release view .*\|\| true' .github/workflows/release.yaml; then
   echo "GitHub release state checks must fail closed" >&2
   exit 1
 fi
-RELEASE_TAG=v2.2.0 REQUIRE_TAG_REF=false REQUIRE_MAIN_ANCESTRY=false scripts/release/preflight.sh >/dev/null
-if RELEASE_TAG=2.2.0 REQUIRE_TAG_REF=false REQUIRE_MAIN_ANCESTRY=false scripts/release/preflight.sh >/dev/null 2>&1; then
+RELEASE_TAG=v2.2.1 REQUIRE_TAG_REF=false REQUIRE_MAIN_ANCESTRY=false scripts/release/preflight.sh >/dev/null
+if RELEASE_TAG=2.2.1 REQUIRE_TAG_REF=false REQUIRE_MAIN_ANCESTRY=false scripts/release/preflight.sh >/dev/null 2>&1; then
   echo "release preflight accepted a tag without the v prefix" >&2
   exit 1
 fi
-if RELEASE_TAG=v2.2.1 REQUIRE_TAG_REF=false REQUIRE_MAIN_ANCESTRY=false scripts/release/preflight.sh >/dev/null 2>&1; then
+if RELEASE_TAG=v2.2.2 REQUIRE_TAG_REF=false REQUIRE_MAIN_ANCESTRY=false scripts/release/preflight.sh >/dev/null 2>&1; then
   echo "release preflight accepted a tag that differs from the chart" >&2
   exit 1
 fi
@@ -38,6 +38,7 @@ grep -q './scripts/quality/kind-control-namespace-journey.sh' .github/workflows/
 perl -0ne 'exit(!/authorize-release:.*needs: validate.*environment: release/s)' .github/workflows/release.yaml
 perl -0ne 'exit(!/build-amd64:.*needs: authorize-release/s)' .github/workflows/release.yaml
 perl -0ne 'exit(!/kind-acceptance:.*needs: build-amd64/s)' .github/workflows/release.yaml
+perl -0ne 'exit(!/kind-acceptance:.*Export and verify disposable Kind kubeconfig.*test -f "\$kubeconfig".*current-context\)" = kind-aura-power-quality.*KUBECONFIG=\$kubeconfig.*GITHUB_ENV/s)' .github/workflows/release.yaml
 if grep -q '^  publish-amd64:' .github/workflows/release.yaml; then
   echo "single-platform aliases must not be wrapped into a new OCI index" >&2
   exit 1
@@ -104,10 +105,10 @@ grep -Fq 'Version: fmt.Sprintf("%s (commit %s)", version, commit)' internal/cli/
 scripts/release/github-release-guard-test.sh
 
 chart_repro_dir="$(mktemp -d)"
-scripts/release/package-chart-reproducibly.sh charts/aura-power "$chart_repro_dir/one" 2.2.0 2.2.0
+scripts/release/package-chart-reproducibly.sh charts/aura-power "$chart_repro_dir/one" 2.2.1 2.2.1
 sleep 1
-scripts/release/package-chart-reproducibly.sh charts/aura-power "$chart_repro_dir/two" 2.2.0 2.2.0
-cmp "$chart_repro_dir/one/aura-power-2.2.0.tgz" "$chart_repro_dir/two/aura-power-2.2.0.tgz"
+scripts/release/package-chart-reproducibly.sh charts/aura-power "$chart_repro_dir/two" 2.2.1 2.2.1
+cmp "$chart_repro_dir/one/aura-power-2.2.1.tgz" "$chart_repro_dir/two/aura-power-2.2.1.tgz"
 
 default_render="$(mktemp)"
 ephemeral_render="$(mktemp)"
@@ -135,14 +136,14 @@ fi
 perl -0ne 'exit(!/name: managed-auth\n\s+key: jwt-secret/s)' "$external_secret_render"
 perl -0ne 'exit(!/name: managed-auth\n\s+key: admin-password/s)' "$external_secret_render"
 
-grep -q 'image: "ghcr.io/weauratech/aura-power-server:2.2.0"' "$default_render"
-grep -q 'image: "ghcr.io/weauratech/aura-power-controller:2.2.0"' "$default_render"
+grep -q 'image: "ghcr.io/weauratech/aura-power-server:2.2.1"' "$default_render"
+grep -q 'image: "ghcr.io/weauratech/aura-power-controller:2.2.1"' "$default_render"
 server_digest="sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 controller_digest="sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 digest_render="$(helm template aura-power charts/aura-power --set server.image.digest="$server_digest" --set controller.image.digest="$controller_digest")"
 grep -q "image: \"ghcr.io/weauratech/aura-power-server@${server_digest}\"" <<<"$digest_render"
 grep -q "image: \"ghcr.io/weauratech/aura-power-controller@${controller_digest}\"" <<<"$digest_render"
-if helm template aura-power charts/aura-power --set server.image.tag=v2.2.0 --set server.image.digest="$server_digest" >/dev/null 2>&1; then
+if helm template aura-power charts/aura-power --set server.image.tag=v2.2.1 --set server.image.digest="$server_digest" >/dev/null 2>&1; then
   echo "server image tag and digest must be mutually exclusive" >&2
   exit 1
 fi

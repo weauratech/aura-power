@@ -108,6 +108,12 @@ jobs:
         with: {node-version: 22, cache: npm, cache-dependency-path: tests/e2e/playwright/package-lock.json}
       - uses: helm/kind-action@0b5c88445f37b7e12a2ce1ecca7805b9046a74db # v1
         with: {cluster_name: aura-power-quality, node_image: kindest/node:v1.35.0, version: v0.32.0}
+      - name: Export and verify disposable Kind kubeconfig
+        run: |
+          kubeconfig="${KUBECONFIG:-$HOME/.kube/config}"
+          test -f "$kubeconfig"
+          test "$(KUBECONFIG="$kubeconfig" kubectl config current-context)" = kind-aura-power-quality
+          echo "KUBECONFIG=$kubeconfig" >> "$GITHUB_ENV"
       - uses: azure/setup-helm@bf6a7d304bc2fdb57e0331155b7ebf2c504acf0a # v4
       - name: Load the exact published digests under test
         run: |
