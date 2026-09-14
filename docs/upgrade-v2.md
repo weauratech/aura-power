@@ -155,13 +155,19 @@ must be reused if the command is repeated:
 ```bash
 mkdir -p ./aura-power-downgrade-backup
 chmod 700 ./aura-power-downgrade-backup
+EXPECTED_CONTEXT=aura-power-quality-eks-operations
+test "$(kubectl config current-context)" = "$EXPECTED_CONTEXT"
 
 ./scripts/release/prepare-safe-downgrade.sh \
-  --expected-context "$(kubectl config current-context)" \
+  --expected-context "$EXPECTED_CONTEXT" \
   --namespace aura-system \
   --release aura-power \
   --backup-dir ./aura-power-downgrade-backup
 ```
+
+Set `EXPECTED_CONTEXT` to the independently known context for the intended
+cluster. Do not derive it from `kubectl config current-context`; that would make
+the wrong-cluster guard compare the active context with itself.
 
 The preparation first stops the Aura Power server so API clients cannot change
 rules through the product. It captures the complete rule set and each

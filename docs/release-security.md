@@ -44,7 +44,11 @@ are the machine-readable source for deployment and runtime verification.
 Install production releases by index digest. `image.digest` and `image.tag` are
 mutually exclusive:
 
+Existing-release upgrades in this example require Helm 3.14 or later for
+`--reset-then-reuse-values`. Check `helm version --short` before continuing.
+
 ```bash
+helm version --short
 export SERVER_DIGEST="$(jq -er '.serverDigests.index' release-manifest.json)"
 export CONTROLLER_DIGEST="$(jq -er '.controllerDigests.index' release-manifest.json)"
 helm show crds oci://ghcr.io/weauratech/charts/aura-power --version 2.2.1 > /tmp/aura-power-crds.yaml
